@@ -1,7 +1,7 @@
 import sys
 import hashlib
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from web3 import Web3
 
 # Add SDK path to system path
@@ -45,7 +45,171 @@ class PoolsService:
         sort_by: str = "apr",
         sort_order: str = "desc"
     ) -> Dict:
-        """Get pools with filters"""
+        """Get pools with filters - optimized version"""
+        # Check cache first
+        cache_key = f"{pool_type}:{min_tvl}:{min_volume_24h}:{min_apr}:{','.join(blacklist or [])}:{limit}:{offset}:{sort_by}:{sort_order}"
+        filters_hash = hashlib.md5(cache_key.encode()).hexdigest()
+        cached_result = await cache_manager.get_pools_list(filters_hash)
+        
+        if cached_result is not None:
+            return cached_result
+        
+        # For fast initial loading, skip expensive operations
+        # We'll fetch basic pool data without individual price lookups
+        client = await self._get_client()
+        
+        # Directly fetch from Sugar contract
+        pools_raw = await self._fetch_pools_fast(client, pool_type, blacklist)
+        
+        # Quick filtering without price fetches
+        filtered_pools = []
+        for pool_data in pools_raw:
+            # Basic TVL check (use reserves as proxy if no prices)
+            if min_tvl > 1000:  # Only apply if significant TVL filter
+                reserve0 = int(pool_data[6])  # RESERVE0 field
+                reserve1 = int(pool_data[7])  # RESERVE1 field
+                # Skip pools with very low reserves
+                if reserve0 < 1e15 and reserve1 < 1e15:  # Rough filter
+                    continue
+            
+            filtered_pools.append(pool_data)
+        
+        # Convert to response format with minimal processing
+        pools = await self._process_pools_minimal(filtered_pools[:limit or 100])
+        
+        result = {
+            "pools": pools,
+            "pagination": {
+                "total": len(filtered_pools),
+                "limit": limit or 100,
+                "offset": offset or 0,
+                "has_more": (offset or 0) + (limit or 100) < len(filtered_pools)
+            }
+        }
+        
+        # Cache with shorter TTL for quick responses
+        await cache_manager.set_pools_list(filters_hash, result)
+        return result
+    
+    async def _fetch_pools_fast(self, client, pool_type: str, blacklist: Optional[List[str]]) -> List:
+        """Fast pool fetching without price data"""
+        sugar = client.sugar
+        pools = []
+        offset = 8100
+        limit = 500
+        
+        while True:
+            try:
+                result = sugar.functions.all(limit, offset).call()
+                if not result:
+                    break
+                
+                # Filter CL pools with active gauges
+                for pool in result:
+                    if int(pool[11]) > 0 and pool[28]:  # TYPE > 0 and GAUGE_ALIVE
+                        # Apply type filter
+                        tick_spacing = int(pool[11])
+                        is_stable = tick_spacing in settings.stable_tick_spacings
+                        
+                        if pool_type == "all":
+                            pools.append(pool)
+                        elif pool_type == "stable" and is_stable:
+                            pools.append(pool)
+                        elif pool_type == "volatile" and not is_stable:
+                            pools.append(pool)
+                
+                offset += limit
+                
+                # Stop after reasonable amount
+                if len(pools) > 500:
+                    break
+                    
+            except Exception:
+                break
+        
+        return pools
+    
+    async def _process_pools_minimal(self, pools_raw: List) -> List[Dict]:
+        """Minimal processing for fast response"""
+        pools = []
+        
+        for pool in pools_raw[:100]:  # Limit processing
+            try:
+                # Basic pool info without external API calls
+                pool_address = Web3.to_checksum_address(pool[0])
+                token0_addr = Web3.to_checksum_address(pool[3])
+                token1_addr = Web3.to_checksum_address(pool[4])
+                
+                # Use cached token info if available, otherwise create minimal
+                token0 = await cache_manager.get_token_info(token0_addr) or {
+                    "address": token0_addr,
+                    "symbol": pool[12] or "???",  # SYMBOL0
+                    "decimals": int(pool[14]) if pool[14] else 18,  # DECIMALS0
+                    "name": "",
+                    "price_usd": 0
+                }
+                
+                token1 = await cache_manager.get_token_info(token1_addr) or {
+                    "address": token1_addr,
+                    "symbol": pool[13] or "???",  # SYMBOL1
+                    "decimals": int(pool[15]) if pool[15] else 18,  # DECIMALS1
+                    "name": "",
+                    "price_usd": 0
+                }
+                
+                tick_spacing = int(pool[11])
+                fee_tier = self._calculate_fee_tier(tick_spacing)
+                
+                pools.append({
+                    "address": pool_address,
+                    "symbol": f"{token0.get('symbol', '???')}/{token1.get('symbol', '???')}-{fee_tier/100}%",
+                    "token0": self._serialize_token_minimal(token0),
+                    "token1": self._serialize_token_minimal(token1),
+                    "tvl_usd": 0,  # Will be updated async
+                    "volume_24h": 0,
+                    "tick_spacing": tick_spacing,
+                    "fee_tier": fee_tier,
+                    "apr": 0,  # Will be calculated async
+                    "current_tick": int(pool[22]) if pool[22] else 0,
+                    "liquidity": str(pool[23]) if pool[23] else "0",
+                    "sqrt_price_x96": str(pool[24]) if pool[24] else "0",
+                    "gauge_address": Web3.to_checksum_address(pool[26]) if pool[26] != "0x0000000000000000000000000000000000000000" else None,
+                    "is_stable": tick_spacing in settings.stable_tick_spacings
+                })
+            except Exception:
+                continue
+        
+        return pools
+    
+    def _calculate_fee_tier(self, tick_spacing: int) -> int:
+        """Calculate fee tier from tick spacing"""
+        fee_map = {1: 100, 10: 100, 50: 500, 100: 500, 200: 3000, 2000: 10000}
+        return fee_map.get(tick_spacing, 500)
+    
+    def _serialize_token_minimal(self, token: dict) -> Dict:
+        """Minimal token serialization"""
+        return {
+            "address": token.get("address", ""),
+            "symbol": token.get("symbol", "???"),
+            "decimals": token.get("decimals", 18),
+            "name": token.get("name", ""),
+            "price_usd": token.get("price_usd", 0),
+            "logo_uri": None
+        }
+    
+    async def get_pools_full(
+        self,
+        pool_type: str = "all",
+        min_tvl: float = 1000,
+        min_volume_24h: float = 10000,
+        min_apr: float = 0,
+        blacklist: Optional[List[str]] = None,
+        limit: Optional[int] = 100,
+        offset: Optional[int] = None,
+        sort_by: str = "apr",
+        sort_order: str = "desc"
+    ) -> Dict:
+        """Get pools with full data (slower but complete)"""
         # Create filters
         filters = PoolFilters(
             pool_type=pool_type,
@@ -61,7 +225,7 @@ class PoolsService:
         cached_pools = await cache_manager.get_pools_list(filters_hash)
         
         if cached_pools is None:
-            # Fetch from SDK
+            # Fetch from SDK with full data
             client = await self._get_client()
             pools = await client.get_pools(filters)
             

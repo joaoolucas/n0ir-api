@@ -29,7 +29,8 @@ async def get_pools(
     limit: int = Query(100, ge=1, le=500, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
     sort_by: str = Query("apr", pattern="^(apr|tvl|volume)$", description="Sort field"),
-    sort_order: str = Query("desc", pattern="^(desc|asc)$", description="Sort order")
+    sort_order: str = Query("desc", pattern="^(desc|asc)$", description="Sort order"),
+    full_data: bool = Query(False, description="Fetch full data including prices and APR (slower)")
 ):
     """
     Get pools with filters and pagination.
@@ -42,18 +43,31 @@ async def get_pools(
         if blacklist:
             blacklist_tokens = [addr.strip() for addr in blacklist.split(",")]
         
-        # Get pools from service
-        result = await pools_service.get_pools(
-            pool_type=type,
-            min_tvl=min_tvl,
-            min_volume_24h=min_volume_24h,
-            min_apr=min_apr,
-            blacklist=blacklist_tokens,
-            limit=limit,
-            offset=offset,
-            sort_by=sort_by,
-            sort_order=sort_order
-        )
+        # Get pools from service - use fast or full method
+        if full_data:
+            result = await pools_service.get_pools_full(
+                pool_type=type,
+                min_tvl=min_tvl,
+                min_volume_24h=min_volume_24h,
+                min_apr=min_apr,
+                blacklist=blacklist_tokens,
+                limit=limit,
+                offset=offset,
+                sort_by=sort_by,
+                sort_order=sort_order
+            )
+        else:
+            result = await pools_service.get_pools(
+                pool_type=type,
+                min_tvl=min_tvl,
+                min_volume_24h=min_volume_24h,
+                min_apr=min_apr,
+                blacklist=blacklist_tokens,
+                limit=limit,
+                offset=offset,
+                sort_by=sort_by,
+                sort_order=sort_order
+            )
         
         return result
         
