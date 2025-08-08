@@ -66,8 +66,8 @@ class PoolsService:
         for pool_data in pools_raw:
             # Basic TVL check (use reserves as proxy if no prices)
             if min_tvl > 1000:  # Only apply if significant TVL filter
-                reserve0 = int(pool_data[6])  # RESERVE0 field
-                reserve1 = int(pool_data[7])  # RESERVE1 field
+                reserve0 = int(pool_data[8])  # RESERVE0 field (index 8)
+                reserve1 = int(pool_data[11])  # RESERVE1 field (index 11)
                 # Skip pools with very low reserves
                 if reserve0 < 1e15 and reserve1 < 1e15:  # Rough filter
                     continue
@@ -98,17 +98,34 @@ class PoolsService:
         offset = 8100
         limit = 500
         
+        # Sugar field indices based on the actual ABI structure
+        LP = 0
+        TYPE = 4  # tick_spacing for CL pools
+        TICK = 5
+        SQRT_RATIO = 6
+        TOKEN0 = 7
+        RESERVE0 = 8
+        STAKED0 = 9
+        TOKEN1 = 10
+        RESERVE1 = 11
+        STAKED1 = 12
+        GAUGE = 13
+        GAUGE_ALIVE = 15
+        EMISSIONS = 19
+        
         while True:
             try:
                 result = sugar.functions.all(limit, offset).call()
+                
                 if not result:
                     break
                 
                 # Filter CL pools with active gauges
                 for pool in result:
-                    if int(pool[11]) > 0 and pool[28]:  # TYPE > 0 and GAUGE_ALIVE
+                    # Check if it's a CL pool (TYPE > 0) and has active gauge
+                    if int(pool[TYPE]) > 0 and pool[GAUGE_ALIVE]:
                         # Apply type filter
-                        tick_spacing = int(pool[11])
+                        tick_spacing = int(pool[TYPE])
                         is_stable = tick_spacing in settings.stable_tick_spacings
                         
                         if pool_type == "all":
@@ -121,10 +138,12 @@ class PoolsService:
                 offset += limit
                 
                 # Stop after reasonable amount
-                if len(pools) > 500:
+                if len(pools) > 500 or offset > 10000:
                     break
                     
-            except Exception:
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
                 break
         
         return pools
@@ -133,31 +152,49 @@ class PoolsService:
         """Minimal processing for fast response"""
         pools = []
         
+        # Field indices matching the Sugar ABI
+        LP = 0
+        SYMBOL = 1
+        TYPE = 4
+        TICK = 5
+        SQRT_RATIO = 6
+        TOKEN0 = 7
+        RESERVE0 = 8
+        TOKEN1 = 10
+        RESERVE1 = 11
+        GAUGE = 13
+        
         for pool in pools_raw[:100]:  # Limit processing
             try:
                 # Basic pool info without external API calls
-                pool_address = Web3.to_checksum_address(pool[0])
-                token0_addr = Web3.to_checksum_address(pool[3])
-                token1_addr = Web3.to_checksum_address(pool[4])
+                pool_address = Web3.to_checksum_address(pool[LP])
+                token0_addr = Web3.to_checksum_address(pool[TOKEN0])
+                token1_addr = Web3.to_checksum_address(pool[TOKEN1])
+                
+                # Extract symbol parts (format: "sAMM-TOKEN0/TOKEN1")
+                symbol = pool[SYMBOL] if pool[SYMBOL] else ""
+                token_symbols = symbol.split("-")[-1].split("/") if "-" in symbol else ["???", "???"]
+                token0_symbol = token_symbols[0] if len(token_symbols) > 0 else "???"
+                token1_symbol = token_symbols[1] if len(token_symbols) > 1 else "???"
                 
                 # Use cached token info if available, otherwise create minimal
                 token0 = await cache_manager.get_token_info(token0_addr) or {
                     "address": token0_addr,
-                    "symbol": pool[12] or "???",  # SYMBOL0
-                    "decimals": int(pool[14]) if pool[14] else 18,  # DECIMALS0
+                    "symbol": token0_symbol,
+                    "decimals": 18,  # Default, will be updated when fetched
                     "name": "",
                     "price_usd": 0
                 }
                 
                 token1 = await cache_manager.get_token_info(token1_addr) or {
                     "address": token1_addr,
-                    "symbol": pool[13] or "???",  # SYMBOL1
-                    "decimals": int(pool[15]) if pool[15] else 18,  # DECIMALS1
+                    "symbol": token1_symbol,
+                    "decimals": 18,  # Default, will be updated when fetched
                     "name": "",
                     "price_usd": 0
                 }
                 
-                tick_spacing = int(pool[11])
+                tick_spacing = int(pool[TYPE])
                 fee_tier = self._calculate_fee_tier(tick_spacing)
                 
                 pools.append({
@@ -170,13 +207,13 @@ class PoolsService:
                     "tick_spacing": tick_spacing,
                     "fee_tier": fee_tier,
                     "apr": 0,  # Will be calculated async
-                    "current_tick": int(pool[22]) if pool[22] else 0,
-                    "liquidity": str(pool[23]) if pool[23] else "0",
-                    "sqrt_price_x96": str(pool[24]) if pool[24] else "0",
-                    "gauge_address": Web3.to_checksum_address(pool[26]) if pool[26] != "0x0000000000000000000000000000000000000000" else None,
+                    "current_tick": int(pool[TICK]) if pool[TICK] else 0,
+                    "liquidity": str(pool[3]) if pool[3] else "0",  # LIQUIDITY field
+                    "sqrt_price_x96": str(pool[SQRT_RATIO]) if pool[SQRT_RATIO] else "0",
+                    "gauge_address": Web3.to_checksum_address(pool[GAUGE]) if pool[GAUGE] != "0x0000000000000000000000000000000000000000" else None,
                     "is_stable": tick_spacing in settings.stable_tick_spacings
                 })
-            except Exception:
+            except Exception as e:
                 continue
         
         return pools
