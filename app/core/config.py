@@ -26,7 +26,11 @@ class Settings(BaseSettings):
     host: str = Field(default="0.0.0.0", env="HOST")
     port: int = Field(default=8000, env="PORT")
     reload: bool = Field(default=False, env="RELOAD")
-    log_level: str = Field(default="info", env="LOG_LEVEL")
+    
+    # Logging Configuration
+    log_level: str = Field(default="INFO", env="LOG_LEVEL")
+    enable_file_logging: bool = Field(default=True, env="ENABLE_FILE_LOGGING")
+    log_dir: str = Field(default="logs", env="LOG_DIR")
     
     # CORS Configuration
     cors_origins: List[str] = Field(default=["*"], env="CORS_ORIGINS")

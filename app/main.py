@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.core.config import settings
 from app.api.v1.api import api_router
+from app.core.logger import logger
 
 # Create FastAPI application
 app = FastAPI(
@@ -26,6 +27,7 @@ app.add_middleware(
 # Add custom exception handler for better error formatting
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
     return JSONResponse(
         status_code=500,
         content={
@@ -53,12 +55,13 @@ async def root():
 # Startup event
 @app.on_event("startup")
 async def startup_event():
-    print(f"🚀 {settings.api_title} v{settings.api_version} starting up...")
-    print(f"📍 API available at {settings.api_prefix}")
-    print(f"📚 Documentation available at /docs")
-    print(f"🔗 Connected to RPC: {settings.rpc_url[:30]}...")
+    logger.info(f"🚀 {settings.api_title} v{settings.api_version} starting up...")
+    logger.info(f"📍 API available at {settings.api_prefix}")
+    logger.info(f"📚 Documentation available at /docs")
+    logger.info(f"🔗 Connected to RPC: {settings.rpc_url[:30]}...")
+    logger.info(f"📁 Logging to: {settings.log_dir}/" if settings.enable_file_logging else "📝 File logging disabled")
 
 # Shutdown event
 @app.on_event("shutdown")
 async def shutdown_event():
-    print(f"👋 {settings.api_title} shutting down...")
+    logger.info(f"👋 {settings.api_title} shutting down...")

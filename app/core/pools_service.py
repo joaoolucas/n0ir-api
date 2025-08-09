@@ -14,6 +14,7 @@ from n0ir_sdk.pools.utils import fetch_token_prices
 
 from app.core.config import settings
 from app.core.cache import cache_manager
+from app.core.logger import logger
 
 
 class PoolsService:
@@ -24,6 +25,7 @@ class PoolsService:
     async def _get_client(self) -> PoolsClient:
         """Get or create PoolsClient instance"""
         if self._client is None:
+            logger.debug("Initializing PoolsClient")
             self._client = PoolsClient(rpc_url=settings.rpc_url)
             self._w3 = self._client.w3
         return self._client
@@ -52,14 +54,19 @@ class PoolsService:
         cached_result = await cache_manager.get_pools_list(filters_hash)
         
         if cached_result is not None:
+            logger.debug(f"Cache hit for pools list with hash {filters_hash}")
             return cached_result
+        
+        logger.debug(f"Cache miss for pools list, fetching from blockchain")
         
         # For fast initial loading, skip expensive operations
         # We'll fetch basic pool data without individual price lookups
         client = await self._get_client()
         
         # Directly fetch from Sugar contract
+        logger.info(f"Fetching pools: type={pool_type}, filters applied")
         pools_raw = await self._fetch_pools_fast(client, pool_type, blacklist)
+        logger.debug(f"Fetched {len(pools_raw)} raw pools from Sugar contract")
         
         # Quick filtering without price fetches
         filtered_pools = []
@@ -81,6 +88,7 @@ class PoolsService:
         
         # Convert to response format with minimal processing
         pools = await self._process_pools_minimal(paginated_pools)
+        logger.info(f"Processed {len(pools)} pools for response")
         
         result = {
             "pools": pools,
@@ -94,6 +102,7 @@ class PoolsService:
         
         # Cache with shorter TTL for quick responses
         await cache_manager.set_pools_list(filters_hash, result)
+        logger.debug(f"Cached pools list with hash {filters_hash}")
         return result
     
     async def _fetch_pools_fast(self, client, pool_type: str, blacklist: Optional[List[str]]) -> List:
@@ -147,8 +156,7 @@ class PoolsService:
                     break
                     
             except Exception as e:
-                import traceback
-                traceback.print_exc()
+                logger.error(f"Error fetching pools from Sugar: {str(e)}", exc_info=True)
                 break
         
         return pools
@@ -427,10 +435,12 @@ class PoolsService:
         # Check cache first
         cached = await cache_manager.get_token_info(address)
         if cached:
+            logger.debug(f"Cache hit for token info: {address}")
             return cached
         
         # Try to get from chain
         try:
+            logger.debug(f"Fetching token info from chain: {address}")
             info = await client.get_token_info(address)
             token_dict = {
                 "address": info.address,
@@ -439,6 +449,7 @@ class PoolsService:
                 "name": info.name
             }
             await cache_manager.set_token_info(address, token_dict)
+            logger.debug(f"Cached token info for {address}")
             return token_dict
         except:
             # Fallback: extract from pool symbol
@@ -610,6 +621,7 @@ class PoolsService:
     async def get_health(self) -> Dict:
         """Get service health status"""
         try:
+            logger.debug("Checking service health")
             client = await self._get_client()
             block = client.w3.eth.get_block("latest")
             
