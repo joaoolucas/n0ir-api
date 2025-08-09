@@ -37,7 +37,7 @@ class PoolsService:
         self,
         pool_type: str = "all",
         min_tvl: float = 1000,
-        min_volume_24h: float = 10000,
+        min_volume_24h: float = 1000,
         min_apr: float = 0,
         blacklist: Optional[List[str]] = None,
         limit: Optional[int] = 100,
@@ -74,8 +74,13 @@ class PoolsService:
             
             filtered_pools.append(pool_data)
         
+        # Apply pagination on filtered pools
+        start = offset or 0
+        end = start + (limit or 100)
+        paginated_pools = filtered_pools[start:end]
+        
         # Convert to response format with minimal processing
-        pools = await self._process_pools_minimal(filtered_pools[:limit or 100])
+        pools = await self._process_pools_minimal(paginated_pools)
         
         result = {
             "pools": pools,
@@ -83,7 +88,7 @@ class PoolsService:
                 "total": len(filtered_pools),
                 "limit": limit or 100,
                 "offset": offset or 0,
-                "has_more": (offset or 0) + (limit or 100) < len(filtered_pools)
+                "has_more": end < len(filtered_pools)
             }
         }
         
@@ -164,7 +169,7 @@ class PoolsService:
         RESERVE1 = 11
         GAUGE = 13
         
-        for pool in pools_raw[:100]:  # Limit processing
+        for pool in pools_raw:  # Process all pools passed in
             try:
                 # Basic pool info without external API calls
                 pool_address = Web3.to_checksum_address(pool[LP])
@@ -238,7 +243,7 @@ class PoolsService:
         self,
         pool_type: str = "all",
         min_tvl: float = 1000,
-        min_volume_24h: float = 10000,
+        min_volume_24h: float = 1000,
         min_apr: float = 0,
         blacklist: Optional[List[str]] = None,
         limit: Optional[int] = 100,
@@ -246,46 +251,89 @@ class PoolsService:
         sort_by: str = "apr",
         sort_order: str = "desc"
     ) -> Dict:
-        """Get pools with full data (slower but complete)"""
-        # Create filters
-        filters = PoolFilters(
-            pool_type=pool_type,
-            min_tvl_usd=min_tvl,
-            min_volume_24h=min_volume_24h,
-            min_apr=min_apr,
-            blacklisted_tokens=blacklist or [],
-            limit=None  # We'll handle limit and offset manually
-        )
+        """Get pools with full data - optimized version"""
+        # Check cache first
+        cache_key = f"full:{pool_type}:{min_tvl}:{min_volume_24h}:{min_apr}:{','.join(blacklist or [])}:{limit}:{offset}:{sort_by}:{sort_order}"
+        filters_hash = hashlib.md5(cache_key.encode()).hexdigest()
+        cached_result = await cache_manager.get_pools_list(filters_hash)
         
-        # Check cache
-        filters_hash = self._get_filters_hash(filters)
-        cached_pools = await cache_manager.get_pools_list(filters_hash)
+        if cached_result is not None:
+            return cached_result
         
-        if cached_pools is None:
-            # Fetch from SDK with full data
-            client = await self._get_client()
-            pools = await client.get_pools(filters)
-            
-            # Cache the full list
-            await cache_manager.set_pools_list(filters_hash, pools)
-            cached_pools = pools
+        # Fetch pools using fast method first
+        client = await self._get_client()
+        pools_raw = await self._fetch_pools_fast(client, pool_type, blacklist)
+        
+        # Collect all unique token addresses
+        token_addresses = set()
+        for pool in pools_raw:
+            token_addresses.add(pool[7].lower())  # TOKEN0
+            token_addresses.add(pool[10].lower())  # TOKEN1
+        
+        # Batch fetch all token prices at once
+        prices = {}
+        if token_addresses:
+            # Import the SDK's price fetching utility
+            prices = await fetch_token_prices(list(token_addresses))
+        
+        # Get AERO price for APR calculation
+        aero_price = prices.get(settings.aero_token_address.lower(), 0)
+        if aero_price == 0:
+            # Fetch AERO price separately if not in batch
+            aero_prices = await fetch_token_prices([settings.aero_token_address])
+            aero_price = aero_prices.get(settings.aero_token_address.lower(), 50)  # Default to $50 if failed
+        
+        # Batch fetch volume data for all pools
+        pool_volumes = {}
+        pool_addresses = [Web3.to_checksum_address(pool[0]) for pool in pools_raw]
+        if pool_addresses:
+            pool_volumes = await self._batch_fetch_pool_volumes(pool_addresses)
+        
+        # Process pools with full data
+        pools_with_data = []
+        
+        for pool in pools_raw:
+            try:
+                pool_address = Web3.to_checksum_address(pool[0])
+                volume_24h = pool_volumes.get(pool_address.lower(), 0)
+                pool_data = await self._process_pool_full(pool, prices, aero_price, client, volume_24h)
+                
+                # Apply filters
+                if pool_data["tvl_usd"] < min_tvl:
+                    continue
+                if pool_data["apr"] < min_apr:
+                    continue
+                if min_volume_24h > 0 and pool_data["volume_24h"] < min_volume_24h:
+                    continue
+                
+                # Check blacklist
+                if blacklist:
+                    token0_addr = pool_data["token0"]["address"].lower()
+                    token1_addr = pool_data["token1"]["address"].lower()
+                    if token0_addr in [b.lower() for b in blacklist] or token1_addr in [b.lower() for b in blacklist]:
+                        continue
+                
+                pools_with_data.append(pool_data)
+                
+            except Exception:
+                continue
         
         # Apply sorting
         if sort_by == "tvl":
-            cached_pools.sort(key=lambda p: p.tvl_usd, reverse=(sort_order == "desc"))
+            pools_with_data.sort(key=lambda p: p["tvl_usd"], reverse=(sort_order == "desc"))
         elif sort_by == "volume":
-            cached_pools.sort(key=lambda p: p.volume_24h, reverse=(sort_order == "desc"))
+            pools_with_data.sort(key=lambda p: p["volume_24h"], reverse=(sort_order == "desc"))
         else:  # Default to APR
-            cached_pools.sort(key=lambda p: p.apr, reverse=(sort_order == "desc"))
+            pools_with_data.sort(key=lambda p: p["apr"], reverse=(sort_order == "desc"))
         
         # Apply pagination
-        total = len(cached_pools)
+        total = len(pools_with_data)
         start = offset or 0
         end = start + (limit or 100)
-        paginated_pools = cached_pools[start:end]
+        paginated_pools = pools_with_data[start:end]
         
-        return {
-            "pools": [self._serialize_pool(p) for p in paginated_pools],
+        result = {
+            "pools": paginated_pools,
             "pagination": {
                 "total": total,
                 "limit": limit or 100,
@@ -293,6 +341,175 @@ class PoolsService:
                 "has_more": end < total
             }
         }
+        
+        # Cache with longer TTL for full data
+        await cache_manager.set_pools_list(filters_hash, result)
+        return result
+    
+    async def _process_pool_full(self, pool: List, prices: Dict[str, float], aero_price: float, client, volume_24h: float = 0) -> Dict:
+        """Process a single pool with full data including prices, APR, and volume"""
+        # Field indices
+        LP = 0
+        SYMBOL = 1
+        TYPE = 4
+        TICK = 5
+        SQRT_RATIO = 6
+        TOKEN0 = 7
+        RESERVE0 = 8
+        STAKED0 = 9
+        TOKEN1 = 10
+        RESERVE1 = 11
+        STAKED1 = 12
+        GAUGE = 13
+        EMISSIONS = 19
+        
+        pool_address = Web3.to_checksum_address(pool[LP])
+        token0_addr = Web3.to_checksum_address(pool[TOKEN0])
+        token1_addr = Web3.to_checksum_address(pool[TOKEN1])
+        
+        # Get token info (from cache or fetch)
+        token0 = await self._get_or_fetch_token_info(client, token0_addr, pool[SYMBOL])
+        token1 = await self._get_or_fetch_token_info(client, token1_addr, pool[SYMBOL])
+        
+        # Get prices
+        token0_price = prices.get(token0_addr.lower(), 0)
+        token1_price = prices.get(token1_addr.lower(), 0)
+        
+        # Calculate TVL
+        reserve0 = int(pool[RESERVE0]) / (10 ** token0["decimals"])
+        reserve1 = int(pool[RESERVE1]) / (10 ** token1["decimals"])
+        tvl_usd = (reserve0 * token0_price) + (reserve1 * token1_price)
+        
+        # Calculate APR
+        emissions_per_second = int(pool[EMISSIONS]) / 1e18
+        staked0 = int(pool[STAKED0]) / (10 ** token0["decimals"])
+        staked1 = int(pool[STAKED1]) / (10 ** token1["decimals"])
+        staked_tvl = (staked0 * token0_price) + (staked1 * token1_price)
+        
+        tick_spacing = int(pool[TYPE])
+        apr = self._calculate_apr(emissions_per_second, staked_tvl, aero_price, tick_spacing)
+        
+        fee_tier = self._calculate_fee_tier(tick_spacing)
+        
+        return {
+            "address": pool_address,
+            "symbol": f"{token0['symbol']}/{token1['symbol']}-{fee_tier/100}%",
+            "token0": {
+                "address": token0_addr,
+                "symbol": token0["symbol"],
+                "decimals": token0["decimals"],
+                "name": token0.get("name", ""),
+                "price_usd": token0_price,
+                "logo_uri": None
+            },
+            "token1": {
+                "address": token1_addr,
+                "symbol": token1["symbol"],
+                "decimals": token1["decimals"],
+                "name": token1.get("name", ""),
+                "price_usd": token1_price,
+                "logo_uri": None
+            },
+            "tvl_usd": tvl_usd,
+            "volume_24h": volume_24h,
+            "tick_spacing": tick_spacing,
+            "fee_tier": fee_tier,
+            "apr": apr,
+            "current_tick": int(pool[TICK]) if pool[TICK] else 0,
+            "liquidity": str(pool[3]),
+            "sqrt_price_x96": str(pool[SQRT_RATIO]),
+            "gauge_address": Web3.to_checksum_address(pool[GAUGE]) if pool[GAUGE] != "0x0000000000000000000000000000000000000000" else None,
+            "is_stable": tick_spacing in settings.stable_tick_spacings
+        }
+    
+    async def _get_or_fetch_token_info(self, client, address: str, pool_symbol: str) -> Dict:
+        """Get token info from cache or fetch from chain"""
+        # Check cache first
+        cached = await cache_manager.get_token_info(address)
+        if cached:
+            return cached
+        
+        # Try to get from chain
+        try:
+            info = await client.get_token_info(address)
+            token_dict = {
+                "address": info.address,
+                "symbol": info.symbol,
+                "decimals": info.decimals,
+                "name": info.name
+            }
+            await cache_manager.set_token_info(address, token_dict)
+            return token_dict
+        except:
+            # Fallback: extract from pool symbol
+            symbol_parts = pool_symbol.split("-")[-1].split("/") if "-" in pool_symbol else ["???", "???"]
+            return {
+                "address": address,
+                "symbol": symbol_parts[0] if address == address else symbol_parts[1],
+                "decimals": 18,
+                "name": ""
+            }
+    
+    async def _batch_fetch_pool_volumes(self, pool_addresses: List[str]) -> Dict[str, float]:
+        """Batch fetch 24h volume data for multiple pools from DexScreener"""
+        import aiohttp
+        import asyncio
+        
+        volumes = {}
+        batch_size = 30  # DexScreener rate limit friendly
+        
+        async def fetch_pool_volume(session: aiohttp.ClientSession, pool_address: str) -> tuple[str, float]:
+            """Fetch volume for a single pool"""
+            try:
+                url = f"https://api.dexscreener.com/latest/dex/pairs/base/{pool_address}"
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        if data.get("pairs") and len(data["pairs"]) > 0:
+                            pair = data["pairs"][0]
+                            volume = float(pair.get("volume", {}).get("h24", 0))
+                            return pool_address.lower(), volume
+            except Exception:
+                pass
+            return pool_address.lower(), 0
+        
+        async with aiohttp.ClientSession() as session:
+            # Process in batches to avoid rate limits
+            for i in range(0, len(pool_addresses), batch_size):
+                batch = pool_addresses[i:i + batch_size]
+                tasks = [fetch_pool_volume(session, addr) for addr in batch]
+                results = await asyncio.gather(*tasks)
+                
+                for addr, volume in results:
+                    volumes[addr] = volume
+                
+                # Small delay between batches to respect rate limits
+                if i + batch_size < len(pool_addresses):
+                    await asyncio.sleep(0.1)
+        
+        return volumes
+    
+    def _calculate_apr(self, emissions_per_second: float, staked_tvl: float, aero_price: float, tick_spacing: int) -> float:
+        """Calculate APR based on emissions and TVL"""
+        if staked_tvl <= 0:
+            return 0
+        
+        # Get efficiency rate based on tick spacing
+        efficiency_rates = {
+            1: 3, 10: 3, 50: 3,  # Stable pools
+            100: 6, 200: 4, 2000: 1  # Volatile pools
+        }
+        efficiency_rate = efficiency_rates.get(tick_spacing, 1)
+        
+        # Calculate annual emissions value
+        annual_emissions = emissions_per_second * 365 * 24 * 60 * 60
+        annual_emissions_value = annual_emissions * aero_price
+        
+        # Apply efficiency rate and calculate APR
+        effective_emissions_value = annual_emissions_value * efficiency_rate
+        apr = (effective_emissions_value / staked_tvl) * 100
+        
+        return min(apr, 9999)  # Cap at 9999% to avoid display issues
     
     async def get_pool(self, address: str) -> Dict:
         """Get single pool by address"""

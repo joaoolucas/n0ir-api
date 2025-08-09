@@ -23,7 +23,7 @@ router = APIRouter()
 async def get_pools(
     type: str = Query("all", pattern="^(stable|volatile|all)$", description="Pool type filter"),
     min_tvl: float = Query(1000, ge=0, description="Minimum TVL in USD"),
-    min_volume_24h: float = Query(10000, ge=0, description="Minimum 24h volume in USD"),
+    min_volume_24h: float = Query(1000, ge=0, description="Minimum 24h volume in USD"),
     min_apr: float = Query(0, ge=0, description="Minimum APR percentage"),
     blacklist: Optional[str] = Query(None, description="Comma-separated token addresses to exclude"),
     limit: int = Query(100, ge=1, le=500, description="Maximum results"),
