@@ -108,6 +108,14 @@ class CacheManager:
     
     async def clear_all(self) -> None:
         await self.cache.clear()
+    
+    async def get_custom(self, key: str, ttl: Optional[int] = None) -> Optional[Any]:
+        """Get a custom cache entry."""
+        return await self.cache.get(key)
+    
+    async def set_custom(self, key: str, data: Any, ttl: int = 300) -> None:
+        """Set a custom cache entry with specified TTL."""
+        await self.cache.set(key, data, ttl)
 
 
 # Create singleton instance

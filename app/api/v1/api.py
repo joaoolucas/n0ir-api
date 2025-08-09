@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import pools, tokens, health
+from app.api.v1.endpoints import pools, tokens, health, positions
 
 api_router = APIRouter()
 
@@ -17,4 +17,9 @@ api_router.include_router(
 api_router.include_router(
     tokens.router,
     tags=["Tokens"]
+)
+
+api_router.include_router(
+    positions.router,
+    tags=["Positions"]
 )
