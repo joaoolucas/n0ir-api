@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Path
+from fastapi import APIRouter, HTTPException, Path, Request
 from app.schemas.tokens import (
     TokenInfoResponse,
     TokenPricesRequest,
@@ -6,6 +6,7 @@ from app.schemas.tokens import (
 )
 from app.schemas.common import ErrorResponse
 from app.core.pools_service import pools_service
+from app.core.logger import logger
 
 router = APIRouter()
 
@@ -19,6 +20,7 @@ router = APIRouter()
     }
 )
 async def get_token_info(
+    request: Request,
     address: str = Path(..., description="Token contract address", pattern="^0x[a-fA-F0-9]{40}$")
 ):
     """
@@ -26,12 +28,15 @@ async def get_token_info(
     
     Returns token metadata including symbol, decimals, name, and current price.
     """
+    logger.info(f"GET /tokens/{address} - IP: {request.client.host}")
     try:
         token_info = await pools_service.get_token_info(address)
+        logger.info(f"Successfully fetched token info for {address}")
         return token_info
         
     except Exception as e:
         if "not found" in str(e).lower():
+            logger.warning(f"Token not found: {address}")
             raise HTTPException(
                 status_code=404,
                 detail={
@@ -42,6 +47,7 @@ async def get_token_info(
                     }
                 }
             )
+        logger.error(f"Error fetching token info for {address}: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail={
@@ -62,18 +68,21 @@ async def get_token_info(
         500: {"model": ErrorResponse, "description": "Internal Server Error"}
     }
 )
-async def get_token_prices(request: TokenPricesRequest):
+async def get_token_prices(request: Request, price_request: TokenPricesRequest):
     """
     Get current USD prices for multiple tokens.
     
     Returns a map of token addresses to their current USD prices.
     Tokens without available price data will have a price of 0.
     """
+    logger.info(f"POST /tokens/prices - IP: {request.client.host} - Count: {len(price_request.addresses)}")
     try:
-        prices = await pools_service.get_token_prices(request.addresses)
+        prices = await pools_service.get_token_prices(price_request.addresses)
+        logger.info(f"Successfully fetched prices for {len(prices.prices)} tokens")
         return prices
         
     except Exception as e:
+        logger.error(f"Error fetching token prices: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail={

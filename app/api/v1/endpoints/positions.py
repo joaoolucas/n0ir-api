@@ -1,7 +1,7 @@
 """Positions API endpoints."""
 
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, Path, Query
+from fastapi import APIRouter, HTTPException, Path, Query, Request
 from app.schemas.positions import (
     PositionInfo,
     PositionListResponse,
@@ -9,6 +9,7 @@ from app.schemas.positions import (
 )
 from app.schemas.common import ErrorResponse
 from app.core.positions_service import positions_service
+from app.core.logger import logger
 
 router = APIRouter()
 
@@ -22,6 +23,7 @@ router = APIRouter()
     }
 )
 async def get_position(
+    request: Request,
     position_id: int = Path(..., description="NFT token ID of the position", ge=1)
 ):
     """
@@ -36,11 +38,14 @@ async def get_position(
     - Whether the position is in range
     - Staking status
     """
+    logger.info(f"GET /positions/{position_id} - IP: {request.client.host}")
     try:
         position = await positions_service.get_position_by_id(position_id)
+        logger.info(f"Successfully fetched position {position_id}")
         return PositionDetailResponse(position=position)
         
     except ValueError as e:
+        logger.warning(f"Position not found: {position_id}")
         raise HTTPException(
             status_code=404,
             detail={
@@ -52,6 +57,7 @@ async def get_position(
             }
         )
     except Exception as e:
+        logger.error(f"Error fetching position {position_id}: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail={
@@ -73,6 +79,7 @@ async def get_position(
     }
 )
 async def get_positions(
+    request: Request,
     owner: Optional[str] = Query(None, description="Filter by owner wallet address", pattern="^0x[a-fA-F0-9]{40}$"),
     pool: Optional[str] = Query(None, description="Filter by pool address", pattern="^0x[a-fA-F0-9]{40}$"),
     in_range: Optional[bool] = Query(None, description="Filter by in-range status")
@@ -89,8 +96,11 @@ async def get_positions(
     
     At least one filter must be provided.
     """
+    logger.info(f"GET /positions - IP: {request.client.host} - Filters: owner={owner}, pool={pool}, in_range={in_range}")
+    
     # Require at least one filter
     if not any([owner, pool, in_range is not None]):
+        logger.warning("Missing filter parameters for /positions")
         raise HTTPException(
             status_code=400,
             detail={
@@ -106,6 +116,7 @@ async def get_positions(
         # Currently only owner filter is implemented
         if owner:
             positions = await positions_service.get_positions_by_owner(owner)
+            logger.info(f"Successfully fetched {len(positions)} positions for owner {owner}")
             
             # Apply additional filters if provided (future enhancement)
             # if pool:
@@ -119,6 +130,7 @@ async def get_positions(
             )
         else:
             # Future: implement pool-based or in_range filters
+            logger.warning(f"Unsupported filter combination requested")
             raise HTTPException(
                 status_code=501,
                 detail={
@@ -133,6 +145,7 @@ async def get_positions(
     except HTTPException:
         raise
     except ValueError as e:
+        logger.warning(f"Invalid parameters for /positions: {str(e)}")
         raise HTTPException(
             status_code=400,
             detail={
@@ -144,6 +157,7 @@ async def get_positions(
             }
         )
     except Exception as e:
+        logger.error(f"Error fetching positions: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail={

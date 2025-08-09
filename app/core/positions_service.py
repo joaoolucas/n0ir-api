@@ -8,6 +8,7 @@ from web3.contract import Contract
 from app.core.config import settings
 from app.core.cache import cache_manager
 from app.schemas.positions import PositionInfo
+from app.core.logger import logger
 
 
 class PositionsService:
@@ -285,7 +286,7 @@ class PositionsService:
             
             return None
         except Exception as e:
-            print(f"Failed to fetch position from Sugar: {str(e)}")
+            logger.error(f"Failed to fetch position from Sugar: {str(e)}")
             return None
     
     async def get_position_by_id(self, token_id: int) -> PositionInfo:
@@ -424,17 +425,17 @@ class PositionsService:
                         token_id = position_manager.functions.tokenOfOwnerByIndex(owner_address, index).call()
                         all_position_ids.append(token_id)
                     except Exception as e:
-                        print(f"Failed to get unstaked position at index {index}: {str(e)}")
+                        logger.error(f"Failed to get unstaked position at index {index}: {str(e)}")
                         continue
             except Exception as e:
-                print(f"Failed to get unstaked positions: {str(e)}")
+                logger.error(f"Failed to get unstaked positions: {str(e)}")
             
             # 2. Get staked positions from LiquidityManager
             try:
                 staked_position_ids = liquidity_manager.functions.getStakedPositions(owner_address).call()
                 all_position_ids.extend(staked_position_ids)
             except Exception as e:
-                print(f"Failed to get staked positions: {str(e)}")
+                logger.error(f"Failed to get staked positions: {str(e)}")
             
             # Remove duplicates (shouldn't happen, but just in case)
             all_position_ids = list(set(all_position_ids))
@@ -450,7 +451,7 @@ class PositionsService:
                     position_info = await self.get_position_by_id(token_id)
                     positions.append(position_info)
                 except Exception as e:
-                    print(f"Failed to load position {token_id}: {str(e)}")
+                    logger.error(f"Failed to load position {token_id}: {str(e)}")
                     continue
             
             # Cache the result
