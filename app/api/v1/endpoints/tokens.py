@@ -78,8 +78,8 @@ async def get_token_prices(request: Request, price_request: TokenPricesRequest):
     logger.info(f"POST /tokens/prices - IP: {request.client.host} - Count: {len(price_request.addresses)}")
     try:
         prices = await pools_service.get_token_prices(price_request.addresses)
-        logger.info(f"Successfully fetched prices for {len(prices.prices)} tokens")
-        return prices
+        logger.info(f"Successfully fetched prices for {len(prices)} tokens")
+        return TokenPricesResponse(prices=prices)
         
     except Exception as e:
         logger.error(f"Error fetching token prices: {str(e)}", exc_info=True)

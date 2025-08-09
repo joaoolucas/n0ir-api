@@ -27,7 +27,7 @@ app.add_middleware(
 # Add custom exception handler for better error formatting
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
-    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    logger.error(f"Unhandled exception: {exc!r}", exc_info=True)
     return JSONResponse(
         status_code=500,
         content={

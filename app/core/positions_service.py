@@ -159,13 +159,34 @@ class PositionsService:
         return [
             {
                 "inputs": [
-                    {"internalType": "uint256", "name": "_limit", "type": "uint256"},
-                    {"internalType": "uint256", "name": "_offset", "type": "uint256"},
-                    {"internalType": "address", "name": "_account", "type": "address"}
+                    {"name": "_limit", "type": "uint256"},
+                    {"name": "_offset", "type": "uint256"},
+                    {"name": "_account", "type": "address"}
                 ],
                 "name": "positions",
                 "outputs": [
-                    {"internalType": "tuple[]", "name": "", "type": "tuple[]"}
+                    {
+                        "components": [
+                            {"name": "id", "type": "uint256"},
+                            {"name": "lp", "type": "address"},
+                            {"name": "liquidity", "type": "uint256"},
+                            {"name": "staked", "type": "uint256"},
+                            {"name": "amount0", "type": "uint256"},
+                            {"name": "amount1", "type": "uint256"},
+                            {"name": "staked0", "type": "uint256"},
+                            {"name": "staked1", "type": "uint256"},
+                            {"name": "unstaked_earned0", "type": "uint256"},
+                            {"name": "unstaked_earned1", "type": "uint256"},
+                            {"name": "emissions_earned", "type": "uint256"},
+                            {"name": "tick_lower", "type": "int24"},
+                            {"name": "tick_upper", "type": "int24"},
+                            {"name": "sqrt_ratio_lower", "type": "uint160"},
+                            {"name": "sqrt_ratio_upper", "type": "uint160"},
+                            {"name": "alm", "type": "address"}
+                        ],
+                        "name": "",
+                        "type": "tuple[]"
+                    }
                 ],
                 "stateMutability": "view",
                 "type": "function"
@@ -242,30 +263,61 @@ class PositionsService:
         return self._sugar
     
     async def _get_token_price_usd(self, token_address: str) -> float:
-        """Get token price in USD. Simple implementation - should be replaced with proper oracle."""
-        # Cache key for token price
-        cache_key = f"token_price:{token_address.lower()}"
-        cached_price = await cache_manager.get_custom(cache_key, ttl=60)
-        if cached_price is not None:
-            return cached_price
+        """Get token price in USD using pools_service."""
+        from app.core.pools_service import pools_service
         
-        # Hardcoded prices for common tokens (replace with oracle/API in production)
-        prices = {
-            self.USDC_ADDRESS.lower(): 1.0,
-            self.WETH_ADDRESS.lower(): 3500.0,  # Example ETH price
-            self.AERO_ADDRESS.lower(): 2.0,     # Example AERO price
-        }
-        
+        # Use pools_service to get the price (it has DexScreener integration)
+        prices = await pools_service.get_token_prices([token_address])
         price = prices.get(token_address.lower(), 0.0)
         
-        # Cache the price
-        await cache_manager.set_custom(cache_key, price, ttl=60)
+        if price == 0.0:
+            logger.warning(f"Could not determine price for token {token_address}")
+        else:
+            logger.info(f"Got price for {token_address}: ${price}")
+        
         return price
+    
+    async def _get_token_decimals(self, token_address: str) -> int:
+        """Get token decimals from contract."""
+        # Cache key for token decimals
+        cache_key = f"token_decimals:{token_address.lower()}"
+        cached_decimals = await cache_manager.get_custom(cache_key, ttl=3600)  # 1 hour cache
+        if cached_decimals is not None:
+            return cached_decimals
+        
+        # Common token decimals
+        known_decimals = {
+            self.USDC_ADDRESS.lower(): 6,
+            "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": 6,  # USDC on Base
+            "0x50c5725949a6f0c72e6c4a641f24049a917db0cb": 18,  # DAI on Base
+            self.WETH_ADDRESS.lower(): 18,
+            self.AERO_ADDRESS.lower(): 18,
+        }
+        
+        if token_address.lower() in known_decimals:
+            decimals = known_decimals[token_address.lower()]
+            await cache_manager.set_custom(cache_key, decimals, ttl=3600)
+            return decimals
+        
+        try:
+            # Try to get decimals from contract
+            token_contract = self.web3.eth.contract(
+                address=Web3.to_checksum_address(token_address),
+                abi=[{"constant": True, "inputs": [], "name": "decimals", "outputs": [{"name": "", "type": "uint8"}], "type": "function"}]
+            )
+            decimals = token_contract.functions.decimals().call()
+            await cache_manager.set_custom(cache_key, decimals, ttl=3600)
+            return decimals
+        except Exception as e:
+            logger.warning(f"Failed to get decimals for {token_address}, defaulting to 18: {str(e)}")
+            return 18  # Default to 18 decimals
     
     async def _fetch_position_from_sugar(self, position_id: int) -> Optional[Dict]:
         """Fetch position details from Sugar contract."""
         try:
             sugar = await self._get_sugar()
+            
+            logger.info(f"Fetching position {position_id} from Sugar contract...")
             
             # Fetch positions with high limit to ensure we get the position
             positions_data = sugar.functions.positions(
@@ -274,19 +326,23 @@ class PositionsService:
                 Web3.to_checksum_address(self.LIQUIDITY_MANAGER_ADDRESS)  # account (LiquidityManager)
             ).call()
             
+            logger.info(f"Sugar returned {len(positions_data)} positions")
+            
             # Find the position with matching ID
             for position in positions_data:
                 if position[0] == position_id:  # First element is position ID
+                    logger.info(f"Found position {position_id} in Sugar data")
                     return {
                         'id': position[0],
-                        'staked0': position[7] if len(position) > 7 else 0,  # staked0
-                        'staked1': position[8] if len(position) > 8 else 0,  # staked1
-                        'emissions_earned': position[9] if len(position) > 9 else 0,  # emissions_earned
+                        'staked0': position[6] if len(position) > 6 else 0,  # staked0 (index 6)
+                        'staked1': position[7] if len(position) > 7 else 0,  # staked1 (index 7)
+                        'emissions_earned': position[10] if len(position) > 10 else 0,  # emissions_earned (index 10)
                     }
             
+            logger.warning(f"Position {position_id} not found in Sugar data")
             return None
         except Exception as e:
-            logger.error(f"Failed to fetch position from Sugar: {str(e)}")
+            logger.error(f"Failed to fetch position from Sugar: {e!r}", exc_info=True)
             return None
     
     async def get_position_by_id(self, token_id: int) -> PositionInfo:
@@ -354,20 +410,38 @@ class PositionsService:
             unclaimed_fees_usd = None
             
             sugar_position = await self._fetch_position_from_sugar(token_id)
+            logger.info(f"Position {token_id} - Sugar data: {sugar_position}")
+            
             if sugar_position:
                 # Get token prices
                 token0_price = await self._get_token_price_usd(token0)
                 token1_price = await self._get_token_price_usd(token1)
                 aero_price = await self._get_token_price_usd(self.AERO_ADDRESS)
                 
-                # Calculate unclaimed fees USD (staked0 * token0_price + staked1 * token1_price)
-                staked0_amount = sugar_position['staked0'] / 1e18  # Assuming 18 decimals
-                staked1_amount = sugar_position['staked1'] / 1e18  # Assuming 18 decimals
-                unclaimed_fees_usd = (staked0_amount * token0_price) + (staked1_amount * token1_price)
+                logger.info(f"Position {token_id} - Prices: token0={token0_price}, token1={token1_price}, aero={aero_price}")
+                logger.info(f"Position {token_id} - Tokens: token0={token0}, token1={token1}")
                 
-                # Calculate current value USD (emissions_earned * aero_price)
+                # Get token decimals
+                token0_decimals = await self._get_token_decimals(token0)
+                token1_decimals = await self._get_token_decimals(token1)
+                
+                logger.info(f"Position {token_id} - Decimals: token0={token0_decimals}, token1={token1_decimals}")
+                
+                # Calculate current value USD (staked0 * token0_price + staked1 * token1_price)
+                staked0_amount = sugar_position['staked0'] / (10 ** token0_decimals)
+                staked1_amount = sugar_position['staked1'] / (10 ** token1_decimals)
+                current_value_usd = (staked0_amount * token0_price) + (staked1_amount * token1_price)
+                
+                logger.info(f"Position {token_id} - Staked amounts: token0={staked0_amount}, token1={staked1_amount}")
+                logger.info(f"Position {token_id} - Current value USD: {current_value_usd}")
+                
+                # Calculate unclaimed fees USD (emissions_earned * aero_price)
                 emissions_amount = sugar_position['emissions_earned'] / 1e18  # Assuming 18 decimals
-                current_value_usd = emissions_amount * aero_price
+                unclaimed_fees_usd = emissions_amount * aero_price
+                
+                logger.info(f"Position {token_id} - Emissions: {emissions_amount} AERO = ${unclaimed_fees_usd}")
+            else:
+                logger.warning(f"Position {token_id} - No Sugar data found")
             
             position_info = PositionInfo(
                 id=token_id,
@@ -392,7 +466,7 @@ class PositionsService:
             return position_info
             
         except Exception as e:
-            raise Exception(f"Failed to fetch position {token_id}: {str(e)}")
+            raise Exception(f"Failed to fetch position {token_id}: {e!r}")
     
     async def get_positions_by_owner(self, owner_address: str) -> List[PositionInfo]:
         """
