@@ -1,7 +1,7 @@
 """Service for handling position-related operations."""
 
 import json
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from web3 import Web3
 from web3.contract import Contract
 
@@ -17,6 +17,12 @@ class PositionsService:
     POSITION_MANAGER_ADDRESS = "0x827922686190790b37229fd06084350E74485b72"
     POOL_FACTORY_ADDRESS = "0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A"
     LIQUIDITY_MANAGER_ADDRESS = "0xC3958B5DA451Beee3D7C04E37981d6F596454999"
+    SUGAR_ADDRESS = "0x27fc745390d1f4BaF8D184FBd97748340f786634"
+    
+    # Token addresses
+    AERO_ADDRESS = "0x940181a94A35A4569E4529A3CDfB74e38FD98631"
+    USDC_ADDRESS = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+    WETH_ADDRESS = "0x4200000000000000000000000000000000000006"
     
     def __init__(self):
         """Initialize the PositionsService."""
@@ -24,7 +30,9 @@ class PositionsService:
         self._position_manager: Optional[Contract] = None
         self._pool_factory: Optional[Contract] = None
         self._liquidity_manager: Optional[Contract] = None
+        self._sugar: Optional[Contract] = None
         self._pool_contracts: Dict[str, Contract] = {}
+        self._token_contracts: Dict[str, Contract] = {}
         
     def _get_w3(self) -> Web3:
         """Get or create Web3 instance."""
@@ -135,6 +143,50 @@ class PositionsService:
                 "outputs": [{"internalType": "uint256[]", "name": "positionIds", "type": "uint256[]"}],
                 "stateMutability": "view",
                 "type": "function"
+            },
+            {
+                "inputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+                "name": "stakedPositionOwners",
+                "outputs": [{"internalType": "address", "name": "", "type": "address"}],
+                "stateMutability": "view",
+                "type": "function"
+            }
+        ]
+    
+    def _get_sugar_abi(self) -> List[Dict]:
+        """Get Sugar contract ABI for fetching position details."""
+        return [
+            {
+                "inputs": [
+                    {"internalType": "uint256", "name": "_limit", "type": "uint256"},
+                    {"internalType": "uint256", "name": "_offset", "type": "uint256"},
+                    {"internalType": "address", "name": "_account", "type": "address"}
+                ],
+                "name": "positions",
+                "outputs": [
+                    {"internalType": "tuple[]", "name": "", "type": "tuple[]"}
+                ],
+                "stateMutability": "view",
+                "type": "function"
+            }
+        ]
+    
+    def _get_token_abi(self) -> List[Dict]:
+        """Get minimal ERC20 ABI for token price queries."""
+        return [
+            {
+                "inputs": [],
+                "name": "decimals",
+                "outputs": [{"internalType": "uint8", "name": "", "type": "uint8"}],
+                "stateMutability": "view",
+                "type": "function"
+            },
+            {
+                "inputs": [],
+                "name": "symbol",
+                "outputs": [{"internalType": "string", "name": "", "type": "string"}],
+                "stateMutability": "view",
+                "type": "function"
             }
         ]
     
@@ -178,6 +230,64 @@ class PositionsService:
             )
         return self._liquidity_manager
     
+    async def _get_sugar(self) -> Contract:
+        """Get or create Sugar contract instance."""
+        if self._sugar is None:
+            w3 = self._get_w3()
+            self._sugar = w3.eth.contract(
+                address=Web3.to_checksum_address(self.SUGAR_ADDRESS),
+                abi=self._get_sugar_abi()
+            )
+        return self._sugar
+    
+    async def _get_token_price_usd(self, token_address: str) -> float:
+        """Get token price in USD. Simple implementation - should be replaced with proper oracle."""
+        # Cache key for token price
+        cache_key = f"token_price:{token_address.lower()}"
+        cached_price = await cache_manager.get_custom(cache_key, ttl=60)
+        if cached_price is not None:
+            return cached_price
+        
+        # Hardcoded prices for common tokens (replace with oracle/API in production)
+        prices = {
+            self.USDC_ADDRESS.lower(): 1.0,
+            self.WETH_ADDRESS.lower(): 3500.0,  # Example ETH price
+            self.AERO_ADDRESS.lower(): 2.0,     # Example AERO price
+        }
+        
+        price = prices.get(token_address.lower(), 0.0)
+        
+        # Cache the price
+        await cache_manager.set_custom(cache_key, price, ttl=60)
+        return price
+    
+    async def _fetch_position_from_sugar(self, position_id: int) -> Optional[Dict]:
+        """Fetch position details from Sugar contract."""
+        try:
+            sugar = await self._get_sugar()
+            
+            # Fetch positions with high limit to ensure we get the position
+            positions_data = sugar.functions.positions(
+                100000,  # limit
+                0,       # offset
+                Web3.to_checksum_address(self.LIQUIDITY_MANAGER_ADDRESS)  # account (LiquidityManager)
+            ).call()
+            
+            # Find the position with matching ID
+            for position in positions_data:
+                if position[0] == position_id:  # First element is position ID
+                    return {
+                        'id': position[0],
+                        'staked0': position[7] if len(position) > 7 else 0,  # staked0
+                        'staked1': position[8] if len(position) > 8 else 0,  # staked1
+                        'emissions_earned': position[9] if len(position) > 9 else 0,  # emissions_earned
+                    }
+            
+            return None
+        except Exception as e:
+            print(f"Failed to fetch position from Sugar: {str(e)}")
+            return None
+    
     async def get_position_by_id(self, token_id: int) -> PositionInfo:
         """
         Get position information by token ID.
@@ -197,16 +307,18 @@ class PositionsService:
         try:
             position_manager = await self._get_position_manager()
             pool_factory = await self._get_pool_factory()
+            liquidity_manager = await self._get_liquidity_manager()
             
             # Get position data from position manager
             position_data = position_manager.functions.positions(token_id).call()
             
-            # Get owner
-            try:
-                owner = position_manager.functions.ownerOf(token_id).call()
-            except:
-                # Position might be burned or not exist
-                raise ValueError(f"Position {token_id} not found or burned")
+            # Get owner from LiquidityManager's stakedPositionOwners
+            # This works for all positions tracked by LiquidityManager
+            owner = liquidity_manager.functions.stakedPositionOwners(token_id).call()
+            
+            # If owner is zero address, the position doesn't exist or isn't tracked
+            if not owner or owner == "0x0000000000000000000000000000000000000000":
+                raise ValueError(f"Position {token_id} not found or not tracked by LiquidityManager")
             
             # Extract position data
             token0 = position_data[2]
@@ -236,8 +348,25 @@ class PositionsService:
             except:
                 gauge_address = None
             
-            # TODO: Calculate USD values (requires token prices)
+            # Calculate USD values from Sugar contract
             current_value_usd = None
+            unclaimed_fees_usd = None
+            
+            sugar_position = await self._fetch_position_from_sugar(token_id)
+            if sugar_position:
+                # Get token prices
+                token0_price = await self._get_token_price_usd(token0)
+                token1_price = await self._get_token_price_usd(token1)
+                aero_price = await self._get_token_price_usd(self.AERO_ADDRESS)
+                
+                # Calculate unclaimed fees USD (staked0 * token0_price + staked1 * token1_price)
+                staked0_amount = sugar_position['staked0'] / 1e18  # Assuming 18 decimals
+                staked1_amount = sugar_position['staked1'] / 1e18  # Assuming 18 decimals
+                unclaimed_fees_usd = (staked0_amount * token0_price) + (staked1_amount * token1_price)
+                
+                # Calculate current value USD (emissions_earned * aero_price)
+                emissions_amount = sugar_position['emissions_earned'] / 1e18  # Assuming 18 decimals
+                current_value_usd = emissions_amount * aero_price
             
             position_info = PositionInfo(
                 id=token_id,
@@ -249,6 +378,7 @@ class PositionsService:
                 liquidity=str(liquidity),
                 in_range=in_range,
                 current_value_usd=current_value_usd,
+                unclaimed_fees_usd=unclaimed_fees_usd,
                 gauge_address=gauge_address,
                 token0=token0,
                 token1=token1,

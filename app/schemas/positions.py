@@ -15,7 +15,8 @@ class PositionInfo(BaseModel):
     current_tick: int = Field(..., description="Current tick of the pool")
     liquidity: str = Field(..., description="Position liquidity")
     in_range: bool = Field(..., description="Whether position is in range")
-    current_value_usd: Optional[float] = Field(None, description="Current position value in USD")
+    current_value_usd: Optional[float] = Field(None, description="Current emissions earned value in USD")
+    unclaimed_fees_usd: Optional[float] = Field(None, description="Unclaimed staked fees value in USD")
     gauge_address: Optional[str] = Field(None, description="Gauge address if staked")
     
     # Additional fields from position manager

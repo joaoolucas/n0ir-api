@@ -176,3 +176,7 @@ cache/
 *.pem
 *.crt
 secrets/
+
+# Local stuff
+CLAUDE.md 
+specs
