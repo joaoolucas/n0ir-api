@@ -57,7 +57,7 @@ async def get_position(
             }
         )
     except Exception as e:
-        logger.error(f"Error fetching position {position_id}: {str(e)}", exc_info=True)
+        logger.error(f"Error fetching position {position_id}: {e!r}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail={

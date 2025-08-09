@@ -579,6 +579,53 @@ class PoolsService:
         
         return self._serialize_token(cached_info)
     
+    async def _fetch_token_prices_from_dexscreener(self, addresses: List[str]) -> Dict[str, float]:
+        """Fetch token prices from DexScreener API"""
+        import aiohttp
+        import asyncio
+        
+        prices = {}
+        
+        # Known stablecoins
+        stablecoins = {
+            "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": 1.0,  # USDC on Base
+            "0x50c5725949a6f0c72e6c4a641f24049a917db0cb": 1.0,  # DAI on Base
+        }
+        
+        async def fetch_single_token_price(session: aiohttp.ClientSession, address: str) -> tuple[str, float]:
+            """Fetch price for a single token"""
+            # Check if it's a stablecoin
+            if address.lower() in stablecoins:
+                return (address.lower(), stablecoins[address.lower()])
+            
+            try:
+                url = f"https://api.dexscreener.com/latest/dex/tokens/{address}"
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        if data and 'pairs' in data and len(data['pairs']) > 0:
+                            # Get price from the most liquid Base network pair
+                            base_pairs = [p for p in data['pairs'] if p.get('chainId') == 'base']
+                            if base_pairs:
+                                # Sort by liquidity and get the highest
+                                base_pairs.sort(key=lambda x: float(x.get('liquidity', {}).get('usd', 0)), reverse=True)
+                                price = float(base_pairs[0].get('priceUsd', 0))
+                                return (address.lower(), price)
+            except Exception as e:
+                logger.warning(f"Failed to fetch price for {address}: {str(e)}")
+            
+            return (address.lower(), 0.0)
+        
+        # Fetch prices concurrently
+        async with aiohttp.ClientSession() as session:
+            tasks = [fetch_single_token_price(session, addr) for addr in addresses]
+            results = await asyncio.gather(*tasks)
+            
+            for addr, price in results:
+                prices[addr] = price
+        
+        return prices
+    
     async def get_token_prices(self, addresses: List[str]) -> Dict[str, float]:
         """Get token prices"""
         prices = {}
@@ -594,13 +641,13 @@ class PoolsService:
         
         # Fetch missing prices
         if addresses_to_fetch:
-            fetched_prices = await fetch_token_prices(addresses_to_fetch)
+            fetched_prices = await self._fetch_token_prices_from_dexscreener(addresses_to_fetch)
             prices.update(fetched_prices)
             
             # Cache the fetched prices
             await cache_manager.set_token_prices(fetched_prices)
         
-        return {"prices": prices}
+        return prices
     
     async def get_pool_stats(self, address: str, period: str = "24h") -> Dict:
         """Get pool statistics"""
