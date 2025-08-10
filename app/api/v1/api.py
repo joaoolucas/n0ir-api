@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import pools, tokens, health, positions
+from app.api.v1.endpoints import pools, tokens, health, positions, wallets
 
 api_router = APIRouter()
 
@@ -22,4 +22,9 @@ api_router.include_router(
 api_router.include_router(
     positions.router,
     tags=["Positions"]
+)
+
+api_router.include_router(
+    wallets.router,
+    tags=["Wallet Registry"]
 )

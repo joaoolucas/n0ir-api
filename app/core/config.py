@@ -84,6 +84,26 @@ class Settings(BaseSettings):
     stable_tick_spacings: List[int] = [1, 10, 50]
     volatile_tick_spacings: List[int] = [100, 200, 2000]
     
+    # Wallet Registry Configuration
+    wallet_registry_contract_address: str = Field(
+        default="0xB693920F2ea642020491420dc8Fb03cFbA2f412C",
+        env="WALLET_REGISTRY_CONTRACT_ADDRESS"
+    )
+    wallet_registry_operator_address: str = Field(
+        default="0x27f4f543c35ee533A7566663C0207Eb179FbA656",
+        env="WALLET_REGISTRY_OPERATOR_ADDRESS"
+    )
+    wallet_registry_operator_private_key: str = Field(
+        default="",
+        env="WALLET_REGISTRY_OPERATOR_PRIVATE_KEY"
+    )
+    
+    # Transaction Configuration
+    max_gas_price_gwei: int = Field(default=50, env="MAX_GAS_PRICE_GWEI")
+    gas_multiplier: float = Field(default=1.2, env="GAS_MULTIPLIER")
+    transaction_timeout: int = Field(default=300, env="TRANSACTION_TIMEOUT")
+    max_retry_attempts: int = Field(default=3, env="MAX_RETRY_ATTEMPTS")
+    
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
