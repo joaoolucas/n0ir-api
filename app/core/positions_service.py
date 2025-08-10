@@ -412,6 +412,22 @@ class PositionsService:
             except:
                 gauge_address = None
             
+            # Check if position is staked by checking NFT owner
+            # If the NFT is owned by the gauge contract, it's staked
+            # Otherwise it's unstaked (owned by the user directly)
+            staked = False
+            try:
+                nft_owner = position_manager.functions.ownerOf(token_id).call()
+                if gauge_address and nft_owner.lower() == gauge_address.lower():
+                    staked = True
+                    logger.info(f"Position {token_id} is staked (NFT owner: {nft_owner}, gauge: {gauge_address})")
+                else:
+                    staked = False
+                    logger.info(f"Position {token_id} is unstaked (NFT owner: {nft_owner}, gauge: {gauge_address})")
+            except Exception as e:
+                logger.warning(f"Failed to check staking status for position {token_id}: {e}")
+                staked = False
+            
             # Calculate USD values from Sugar contract
             current_value_usd = None
             unclaimed_fees_usd = None
@@ -459,6 +475,7 @@ class PositionsService:
                 current_tick=current_tick,
                 liquidity=str(liquidity),
                 in_range=in_range,
+                staked=staked,
                 current_value_usd=current_value_usd,
                 unclaimed_fees_usd=unclaimed_fees_usd,
                 gauge_address=gauge_address,
