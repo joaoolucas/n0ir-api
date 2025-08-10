@@ -17,7 +17,7 @@ class PositionsService:
     # Contract addresses
     POSITION_MANAGER_ADDRESS = "0x827922686190790b37229fd06084350E74485b72"
     POOL_FACTORY_ADDRESS = "0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A"
-    LIQUIDITY_MANAGER_ADDRESS = "0x9EeE6D7AAda598F04f1ff57f4793AE5F203Cf8E7"
+    LIQUIDITY_MANAGER_ADDRESS = "0x4805612bE968Ca98Cc89100b96Ae912173b4da75"
     SUGAR_ADDRESS = "0x27fc745390d1f4BaF8D184FBd97748340f786634"
     
     # Token addresses
@@ -139,15 +139,22 @@ class PositionsService:
         """Get liquidity manager ABI for fetching staked positions."""
         return [
             {
-                "inputs": [{"internalType": "address", "name": "owner", "type": "address"}],
-                "name": "getStakedPositions",
-                "outputs": [{"internalType": "uint256[]", "name": "positionIds", "type": "uint256[]"}],
+                "inputs": [{"internalType": "address", "name": "user", "type": "address"}],
+                "name": "getUserPositions",
+                "outputs": [{"internalType": "uint256[]", "name": "", "type": "uint256[]"}],
                 "stateMutability": "view",
                 "type": "function"
             },
             {
                 "inputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
-                "name": "stakedPositionOwners",
+                "name": "positionOwners",
+                "outputs": [{"internalType": "address", "name": "", "type": "address"}],
+                "stateMutability": "view",
+                "type": "function"
+            },
+            {
+                "inputs": [{"internalType": "uint256", "name": "tokenId", "type": "uint256"}],
+                "name": "getPositionOwner",
                 "outputs": [{"internalType": "address", "name": "", "type": "address"}],
                 "stateMutability": "view",
                 "type": "function"
@@ -369,9 +376,9 @@ class PositionsService:
             # Get position data from position manager
             position_data = position_manager.functions.positions(token_id).call()
             
-            # Get owner from LiquidityManager's stakedPositionOwners
+            # Get owner from LiquidityManager's getPositionOwner
             # This works for all positions tracked by LiquidityManager
-            owner = liquidity_manager.functions.stakedPositionOwners(token_id).call()
+            owner = liquidity_manager.functions.getPositionOwner(token_id).call()
             
             # If owner is zero address, the position doesn't exist or isn't tracked
             if not owner or owner == "0x0000000000000000000000000000000000000000":
@@ -506,7 +513,7 @@ class PositionsService:
             
             # 2. Get staked positions from LiquidityManager
             try:
-                staked_position_ids = liquidity_manager.functions.getStakedPositions(owner_address).call()
+                staked_position_ids = liquidity_manager.functions.getUserPositions(owner_address).call()
                 all_position_ids.extend(staked_position_ids)
             except Exception as e:
                 logger.error(f"Failed to get staked positions: {str(e)}")
