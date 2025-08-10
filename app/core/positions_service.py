@@ -319,21 +319,21 @@ class PositionsService:
             logger.warning(f"Failed to get decimals for {token_address}, defaulting to 18: {str(e)}")
             return 18  # Default to 18 decimals
     
-    async def _fetch_position_from_sugar(self, position_id: int) -> Optional[Dict]:
+    async def _fetch_position_from_sugar(self, position_id: int, owner_address: str) -> Optional[Dict]:
         """Fetch position details from Sugar contract."""
         try:
             sugar = await self._get_sugar()
             
-            logger.info(f"Fetching position {position_id} from Sugar contract...")
+            logger.info(f"Fetching position {position_id} from Sugar contract for owner {owner_address}...")
             
-            # Fetch positions with high limit to ensure we get the position
+            # Fetch positions for the owner address
             positions_data = sugar.functions.positions(
                 100000,  # limit
                 0,       # offset
-                Web3.to_checksum_address(self.LIQUIDITY_MANAGER_ADDRESS)  # account (LiquidityManager)
+                Web3.to_checksum_address(owner_address)  # account (owner address)
             ).call()
             
-            logger.info(f"Sugar returned {len(positions_data)} positions")
+            logger.info(f"Sugar returned {len(positions_data)} positions for owner {owner_address}")
             
             # Find the position with matching ID
             for position in positions_data:
@@ -346,7 +346,7 @@ class PositionsService:
                         'emissions_earned': position[10] if len(position) > 10 else 0,  # emissions_earned (index 10)
                     }
             
-            logger.warning(f"Position {position_id} not found in Sugar data")
+            logger.warning(f"Position {position_id} not found in Sugar data for owner {owner_address}")
             return None
         except Exception as e:
             logger.error(f"Failed to fetch position from Sugar: {e!r}", exc_info=True)
@@ -432,7 +432,7 @@ class PositionsService:
             current_value_usd = None
             unclaimed_fees_usd = None
             
-            sugar_position = await self._fetch_position_from_sugar(token_id)
+            sugar_position = await self._fetch_position_from_sugar(token_id, owner)
             logger.info(f"Position {token_id} - Sugar data: {sugar_position}")
             
             if sugar_position:
