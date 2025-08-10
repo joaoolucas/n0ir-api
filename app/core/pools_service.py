@@ -520,7 +520,7 @@ class PoolsService:
         effective_emissions_value = annual_emissions_value * efficiency_rate
         apr = (effective_emissions_value / staked_tvl) * 100
         
-        return min(apr, 9999)  # Cap at 9999% to avoid display issues
+        return apr  # Return actual APR without cap for accurate agent decision-making
     
     async def get_pool(self, address: str) -> Dict:
         """Get single pool by address"""

@@ -15,6 +15,7 @@ class PositionInfo(BaseModel):
     current_tick: int = Field(..., description="Current tick of the pool")
     liquidity: str = Field(..., description="Position liquidity")
     in_range: bool = Field(..., description="Whether position is in range")
+    staked: bool = Field(..., description="Whether position is staked in gauge")
     current_value_usd: Optional[float] = Field(None, description="Current staked position value in USD")
     unclaimed_fees_usd: Optional[float] = Field(None, description="Unclaimed emissions (AERO rewards) in USD")
     gauge_address: Optional[str] = Field(None, description="Gauge address if staked")
@@ -35,6 +36,7 @@ class PositionInfo(BaseModel):
                 "current_tick": -100,
                 "liquidity": "1000000000000000000",
                 "in_range": True,
+                "staked": True,
                 "current_value_usd": 1500.50,
                 "gauge_address": "0x456..."
             }
@@ -73,6 +75,7 @@ class PositionDetailResponse(BaseModel):
                     "current_tick": -100,
                     "liquidity": "1000000000000000000",
                     "in_range": True,
+                    "staked": True,
                     "current_value_usd": 1500.50,
                     "gauge_address": "0x456..."
                 }

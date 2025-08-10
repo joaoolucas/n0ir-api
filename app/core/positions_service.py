@@ -17,7 +17,7 @@ class PositionsService:
     # Contract addresses
     POSITION_MANAGER_ADDRESS = "0x827922686190790b37229fd06084350E74485b72"
     POOL_FACTORY_ADDRESS = "0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A"
-    LIQUIDITY_MANAGER_ADDRESS = "0x9EeE6D7AAda598F04f1ff57f4793AE5F203Cf8E7"
+    LIQUIDITY_MANAGER_ADDRESS = "0x4805612bE968Ca98Cc89100b96Ae912173b4da75"
     SUGAR_ADDRESS = "0x27fc745390d1f4BaF8D184FBd97748340f786634"
     
     # Token addresses
@@ -139,15 +139,22 @@ class PositionsService:
         """Get liquidity manager ABI for fetching staked positions."""
         return [
             {
-                "inputs": [{"internalType": "address", "name": "owner", "type": "address"}],
-                "name": "getStakedPositions",
-                "outputs": [{"internalType": "uint256[]", "name": "positionIds", "type": "uint256[]"}],
+                "inputs": [{"internalType": "address", "name": "user", "type": "address"}],
+                "name": "getUserPositions",
+                "outputs": [{"internalType": "uint256[]", "name": "", "type": "uint256[]"}],
                 "stateMutability": "view",
                 "type": "function"
             },
             {
                 "inputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
-                "name": "stakedPositionOwners",
+                "name": "positionOwners",
+                "outputs": [{"internalType": "address", "name": "", "type": "address"}],
+                "stateMutability": "view",
+                "type": "function"
+            },
+            {
+                "inputs": [{"internalType": "uint256", "name": "tokenId", "type": "uint256"}],
+                "name": "getPositionOwner",
                 "outputs": [{"internalType": "address", "name": "", "type": "address"}],
                 "stateMutability": "view",
                 "type": "function"
@@ -312,21 +319,21 @@ class PositionsService:
             logger.warning(f"Failed to get decimals for {token_address}, defaulting to 18: {str(e)}")
             return 18  # Default to 18 decimals
     
-    async def _fetch_position_from_sugar(self, position_id: int) -> Optional[Dict]:
+    async def _fetch_position_from_sugar(self, position_id: int, owner_address: str) -> Optional[Dict]:
         """Fetch position details from Sugar contract."""
         try:
             sugar = await self._get_sugar()
             
-            logger.info(f"Fetching position {position_id} from Sugar contract...")
+            logger.info(f"Fetching position {position_id} from Sugar contract for owner {owner_address}...")
             
-            # Fetch positions with high limit to ensure we get the position
+            # Fetch positions for the owner address
             positions_data = sugar.functions.positions(
                 100000,  # limit
                 0,       # offset
-                Web3.to_checksum_address(self.LIQUIDITY_MANAGER_ADDRESS)  # account (LiquidityManager)
+                Web3.to_checksum_address(owner_address)  # account (owner address)
             ).call()
             
-            logger.info(f"Sugar returned {len(positions_data)} positions")
+            logger.info(f"Sugar returned {len(positions_data)} positions for owner {owner_address}")
             
             # Find the position with matching ID
             for position in positions_data:
@@ -339,7 +346,7 @@ class PositionsService:
                         'emissions_earned': position[10] if len(position) > 10 else 0,  # emissions_earned (index 10)
                     }
             
-            logger.warning(f"Position {position_id} not found in Sugar data")
+            logger.warning(f"Position {position_id} not found in Sugar data for owner {owner_address}")
             return None
         except Exception as e:
             logger.error(f"Failed to fetch position from Sugar: {e!r}", exc_info=True)
@@ -369,9 +376,9 @@ class PositionsService:
             # Get position data from position manager
             position_data = position_manager.functions.positions(token_id).call()
             
-            # Get owner from LiquidityManager's stakedPositionOwners
+            # Get owner from LiquidityManager's getPositionOwner
             # This works for all positions tracked by LiquidityManager
-            owner = liquidity_manager.functions.stakedPositionOwners(token_id).call()
+            owner = liquidity_manager.functions.getPositionOwner(token_id).call()
             
             # If owner is zero address, the position doesn't exist or isn't tracked
             if not owner or owner == "0x0000000000000000000000000000000000000000":
@@ -405,11 +412,27 @@ class PositionsService:
             except:
                 gauge_address = None
             
+            # Check if position is staked by checking NFT owner
+            # If the NFT is owned by the gauge contract, it's staked
+            # Otherwise it's unstaked (owned by the user directly)
+            staked = False
+            try:
+                nft_owner = position_manager.functions.ownerOf(token_id).call()
+                if gauge_address and nft_owner.lower() == gauge_address.lower():
+                    staked = True
+                    logger.info(f"Position {token_id} is staked (NFT owner: {nft_owner}, gauge: {gauge_address})")
+                else:
+                    staked = False
+                    logger.info(f"Position {token_id} is unstaked (NFT owner: {nft_owner}, gauge: {gauge_address})")
+            except Exception as e:
+                logger.warning(f"Failed to check staking status for position {token_id}: {e}")
+                staked = False
+            
             # Calculate USD values from Sugar contract
             current_value_usd = None
             unclaimed_fees_usd = None
             
-            sugar_position = await self._fetch_position_from_sugar(token_id)
+            sugar_position = await self._fetch_position_from_sugar(token_id, owner)
             logger.info(f"Position {token_id} - Sugar data: {sugar_position}")
             
             if sugar_position:
@@ -452,6 +475,7 @@ class PositionsService:
                 current_tick=current_tick,
                 liquidity=str(liquidity),
                 in_range=in_range,
+                staked=staked,
                 current_value_usd=current_value_usd,
                 unclaimed_fees_usd=unclaimed_fees_usd,
                 gauge_address=gauge_address,
@@ -506,7 +530,7 @@ class PositionsService:
             
             # 2. Get staked positions from LiquidityManager
             try:
-                staked_position_ids = liquidity_manager.functions.getStakedPositions(owner_address).call()
+                staked_position_ids = liquidity_manager.functions.getUserPositions(owner_address).call()
                 all_position_ids.extend(staked_position_ids)
             except Exception as e:
                 logger.error(f"Failed to get staked positions: {str(e)}")
