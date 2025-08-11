@@ -261,7 +261,7 @@ class StrategyService:
         """Check if entry conditions are met."""
         return (
             score >= 60 and
-            pool.get('tvl', 0) >= 500_000 and
+            pool.get('tvl_usd', 0) >= 500_000 and
             pool.get('volume_24h', 0) >= 100_000 and
             pool.get('apr', 0) >= 80
         )
