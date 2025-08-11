@@ -44,16 +44,14 @@ class OpportunitiesRequest(BaseModel):
     """Request for finding pool opportunities."""
     executor_address: str
     available_capital: float = Field(..., gt=0)
-    max_positions: int = Field(default=5, ge=1, le=20)
-    exclude_addresses: List[str] = Field(default_factory=list)
-    risk_profile: Literal["conservative", "balanced", "aggressive"] = "balanced"
+    max_capital: float = Field(..., gt=0, description="Maximum capital that can be deployed")
+    exclude_addresses: List[str] = Field(default_factory=list, description="Pools to exclude (already invested)")
 
 
 class AnalyzeEntryRequest(BaseModel):
     """Request for analyzing position entry."""
     pool_address: str
     amount_usdc: float = Field(..., gt=0)
-    proposed_range: Optional[RangeParameters] = None
 
 
 class PositionInfo(BaseModel):
@@ -68,7 +66,7 @@ class PositionInfo(BaseModel):
 
 class MonitorPositionsRequest(BaseModel):
     """Request for monitoring active positions."""
-    positions: List[PositionInfo]
+    user_address: str = Field(..., description="User wallet address to monitor positions for")
 
 
 class RangeBreakPosition(BaseModel):

@@ -115,7 +115,9 @@ async def analyze_position_entry(request: AnalyzeEntryRequest) -> AnalyzeEntryRe
 )
 async def monitor_active_positions(request: MonitorPositionsRequest) -> MonitorPositionsResponse:
     """
-    Monitor active positions and return recommended actions.
+    Monitor active positions for a user and return recommended actions.
+    
+    Takes only a user address and fetches all position data from the positions service.
     
     Monitors:
     - Range status (in/out of range)
