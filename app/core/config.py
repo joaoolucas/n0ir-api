@@ -84,25 +84,18 @@ class Settings(BaseSettings):
     stable_tick_spacings: List[int] = [1, 10, 50]
     volatile_tick_spacings: List[int] = [100, 200, 2000]
     
-    # Wallet Registry Configuration
-    wallet_registry_contract_address: str = Field(
-        default="0xB693920F2ea642020491420dc8Fb03cFbA2f412C",
-        env="WALLET_REGISTRY_CONTRACT_ADDRESS"
-    )
-    wallet_registry_operator_address: str = Field(
-        default="0x27f4f543c35ee533A7566663C0207Eb179FbA656",
-        env="WALLET_REGISTRY_OPERATOR_ADDRESS"
-    )
-    wallet_registry_operator_private_key: str = Field(
-        default="",
-        env="WALLET_REGISTRY_OPERATOR_PRIVATE_KEY"
-    )
-    
-    # Transaction Configuration
-    max_gas_price_gwei: int = Field(default=50, env="MAX_GAS_PRICE_GWEI")
-    gas_multiplier: float = Field(default=1.2, env="GAS_MULTIPLIER")
-    transaction_timeout: int = Field(default=300, env="TRANSACTION_TIMEOUT")
-    max_retry_attempts: int = Field(default=3, env="MAX_RETRY_ATTEMPTS")
+    # Strategy Configuration
+    strategy_min_tvl: float = Field(default=500_000, env="STRATEGY_MIN_TVL")
+    strategy_min_volume_24h: float = Field(default=100_000, env="STRATEGY_MIN_VOLUME_24H")
+    strategy_min_apr: float = Field(default=80, env="STRATEGY_MIN_APR")
+    strategy_max_pool_concentration: float = Field(default=0.25, env="STRATEGY_MAX_POOL_CONCENTRATION")
+    strategy_max_token_concentration: float = Field(default=0.40, env="STRATEGY_MAX_TOKEN_CONCENTRATION")
+    strategy_max_var_1d: float = Field(default=0.05, env="STRATEGY_MAX_VAR_1D")
+    strategy_max_var_7d: float = Field(default=0.10, env="STRATEGY_MAX_VAR_7D")
+    strategy_circuit_breaker_threshold: float = Field(default=0.08, env="STRATEGY_CIRCUIT_BREAKER_THRESHOLD")
+    strategy_upward_break_reversal_prob: float = Field(default=0.70, env="STRATEGY_UPWARD_BREAK_REVERSAL_PROB")
+    strategy_cache_ttl_opportunities: int = Field(default=300, env="STRATEGY_CACHE_TTL_OPPORTUNITIES")
+    strategy_cache_ttl_analysis: int = Field(default=60, env="STRATEGY_CACHE_TTL_ANALYSIS")
     
     class Config:
         env_file = ".env"
