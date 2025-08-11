@@ -72,7 +72,7 @@ class StrategyCalculator:
         
         # Volume Consistency Score (V)
         volume_24h = pool_data.get('volume_24h', 0)
-        tvl = pool_data.get('tvl', 1)  # Avoid division by zero
+        tvl = pool_data.get('tvl_usd', pool_data.get('tvl', 1))  # Support both field names
         volume_tvl_ratio = volume_24h / tvl if tvl > 0 else 0
         scores['volume_consistency'] = self._calculate_volume_consistency_score(volume_tvl_ratio)
         
