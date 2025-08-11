@@ -11,7 +11,7 @@ import aiohttp
 from web3 import Web3
 from web3.contract import Contract
 
-from ..exceptions import PoolNotFoundError, RPCError
+from .exceptions import PoolNotFoundError, RPCError
 from .models import SwapRoute
 from .constants import (
     DEFAULT_BASE_RPC,
