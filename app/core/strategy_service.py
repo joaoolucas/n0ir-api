@@ -87,6 +87,22 @@ class StrategyService:
         if cached:
             return OpportunitiesResponse(**cached)
         
+        # Determine optimal number of positions based on capital
+        # Strategy: 3-7 positions based on capital size
+        if request.max_capital < 10000:
+            max_positions = 3
+        elif request.max_capital < 50000:
+            max_positions = 5
+        else:
+            max_positions = 7
+        
+        # Adjust for already invested positions
+        current_positions = len(request.exclude_addresses)
+        max_new_positions = max(1, max_positions - current_positions)
+        
+        # Use balanced risk profile for all executors
+        risk_profile = 'balanced'
+        
         # Fetch whitelisted pools
         pools = await self._fetch_whitelisted_pools(request.exclude_addresses)
         
@@ -94,7 +110,7 @@ class StrategyService:
         opportunities = []
         for pool in pools:
             # Skip if below minimum thresholds
-            if not self._meets_minimum_requirements(pool, request.risk_profile):
+            if not self._meets_minimum_requirements(pool, risk_profile):
                 continue
             
             # Calculate score
@@ -108,7 +124,7 @@ class StrategyService:
             recommended_amount, max_amount = self.calculator.calculate_position_size(
                 pool,
                 request.available_capital,
-                request.risk_profile
+                risk_profile
             )
             
             # Calculate optimal range
@@ -117,7 +133,7 @@ class StrategyService:
             lower_tick, upper_tick = self.calculator.calculate_optimal_range(
                 current_price,
                 volatility,
-                request.risk_profile
+                risk_profile
             )
             
             # Calculate slippage estimate
@@ -156,8 +172,8 @@ class StrategyService:
         # Sort by score descending
         opportunities.sort(key=lambda x: x.score, reverse=True)
         
-        # Limit to max positions
-        opportunities = opportunities[:request.max_positions]
+        # Limit to calculated max positions
+        opportunities = opportunities[:max_new_positions]
         
         response = OpportunitiesResponse(opportunities=opportunities)
         
@@ -270,21 +286,18 @@ class StrategyService:
             correlation_benefit=risk_metrics['correlation_benefit']
         )
         
-        # Calculate optimal range if not provided
-        if request.proposed_range:
-            optimal_range = request.proposed_range
-        else:
-            current_price = pool.get('current_price', 1.0)
-            volatility = pool.get('volatility_24h', 20)
-            lower_tick, upper_tick = self.calculator.calculate_optimal_range(
-                current_price,
-                volatility,
-                'balanced'
-            )
-            optimal_range = RangeParameters(
-                lower_tick=lower_tick,
-                upper_tick=upper_tick
-            )
+        # Always calculate optimal range - this is our proposal to the executor
+        current_price = pool.get('current_price', 1.0)
+        volatility = pool.get('volatility_24h', 20)
+        lower_tick, upper_tick = self.calculator.calculate_optimal_range(
+            current_price,
+            volatility,
+            'balanced'  # Use balanced risk profile for all
+        )
+        optimal_range = RangeParameters(
+            lower_tick=lower_tick,
+            upper_tick=upper_tick
+        )
         
         # Determine if should enter
         should_enter = (
@@ -316,18 +329,34 @@ class StrategyService:
         """
         Monitor active positions and provide recommendations.
         """
+        # Fetch positions for the user
+        try:
+            positions_data = await positions_service.get_positions_by_owner(request.user_address)
+        except Exception as e:
+            logger.error(f"Error fetching positions for {request.user_address}: {e}")
+            positions_data = []
+        
         position_statuses = []
         
-        for position_info in request.positions:
+        for position_data in positions_data:
             # Fetch current pool data
-            pool = await pools_service.get_pool(position_info.pool_address)
+            pool = await pools_service.get_pool(position_data.get('pool_address', ''))
             if not pool:
                 continue
             
             # Check range status
-            current_price = pool.get('current_price', position_info.entry_price)
+            current_price = pool.get('current_price', pool.get('token0_price', 1.0))
+            
+            # Build position info for range detection
+            position_info = {
+                'current_range': {
+                    'lower_tick': position_data.get('tick_lower', 0),
+                    'upper_tick': position_data.get('tick_upper', 0)
+                }
+            }
+            
             range_break = self.range_detector.detect_range_break(
-                position_info.dict(),
+                position_info,
                 current_price
             )
             
@@ -337,14 +366,11 @@ class StrategyService:
                 range_break_severity = range_break['severity']
                 status = 'critical' if range_break_severity > 70 else 'out_of_range'
             else:
-                in_range = True
-                # Calculate position within range
-                lower_price = position_info.current_range.lower_price or 0
-                upper_price = position_info.current_range.upper_price or float('inf')
-                price_range = upper_price - lower_price
-                price_position = (current_price - lower_price) / price_range if price_range > 0 else 0.5
+                in_range = position_data.get('in_range', True)
+                # Simplified price position calculation
+                price_position = 0.5  # Default to middle if we can't calculate
                 range_break_severity = 0
-                status = 'in_range'
+                status = 'in_range' if in_range else 'out_of_range'
             
             # Calculate health score
             health_score = 100
@@ -369,12 +395,12 @@ class StrategyService:
                 action_details = None
             
             position_status = PositionStatus(
-                token_id=position_info.token_id,
-                pool_address=position_info.pool_address,
+                token_id=position_data.get('token_id', 0),
+                pool_address=position_data.get('pool_address', ''),
                 status=status,
                 health_score=health_score,
                 current_apr=pool.get('apr', 0),
-                accumulated_fees=0,  # Would calculate from position history
+                accumulated_fees=position_data.get('uncollected_fees_usd', 0),
                 accumulated_rewards=0,  # Would calculate from position history
                 range_status=RangeStatus(
                     in_range=in_range,
@@ -388,8 +414,17 @@ class StrategyService:
             position_statuses.append(position_status)
         
         # Calculate portfolio metrics
-        positions_data = [p.dict() for p in request.positions]
-        portfolio_analysis = self.portfolio_analyzer.calculate_portfolio_metrics(positions_data)
+        # Convert position data to expected format
+        portfolio_positions = []
+        for pos in positions_data:
+            portfolio_positions.append({
+                'current_value': pos.get('total_value_usd', 0),
+                'invested_amount': pos.get('total_value_usd', 0),  # Approximation
+                'volatility_24h': 20,  # Default volatility
+                'current_apr': pool.get('apr', 0) if pool else 0
+            })
+        
+        portfolio_analysis = self.portfolio_analyzer.calculate_portfolio_metrics(portfolio_positions)
         
         portfolio_metrics = PortfolioMetrics(
             total_value=portfolio_analysis['total_value'],
