@@ -87,6 +87,16 @@ class StrategyService:
         if cached:
             return OpportunitiesResponse(**cached)
         
+        # Fetch executor's current positions to exclude already invested pools
+        exclude_addresses = []
+        try:
+            executor_positions = await positions_service.get_positions_by_owner(request.executor_address)
+            exclude_addresses = list(set([pos.get('pool_address', '') for pos in executor_positions if pos.get('pool_address')]))
+            logger.info(f"Executor has {len(executor_positions)} positions in {len(exclude_addresses)} unique pools")
+        except Exception as e:
+            logger.warning(f"Could not fetch executor positions: {e}")
+            executor_positions = []
+        
         # Determine optimal number of positions based on capital
         # Strategy: 3-7 positions based on capital size
         if request.max_capital < 10000:
@@ -97,14 +107,14 @@ class StrategyService:
             max_positions = 7
         
         # Adjust for already invested positions
-        current_positions = len(request.exclude_addresses)
+        current_positions = len(exclude_addresses)
         max_new_positions = max(1, max_positions - current_positions)
         
         # Use balanced risk profile for all executors
         risk_profile = 'balanced'
         
         # Fetch whitelisted pools
-        pools = await self._fetch_whitelisted_pools(request.exclude_addresses)
+        pools = await self._fetch_whitelisted_pools(exclude_addresses)
         
         # Score and rank pools
         opportunities = []
@@ -445,26 +455,48 @@ class StrategyService:
         """
         Handle range break events with immediate action recommendations.
         """
-        position = request.position
+        # Fetch position data
+        try:
+            position_data = await positions_service.get_position_by_id(request.token_id)
+        except Exception as e:
+            logger.error(f"Error fetching position {request.token_id}: {e}")
+            raise ValueError(f"Position {request.token_id} not found")
+        
+        # Fetch pool data to get current price
+        pool_address = position_data.get('pool_address')
+        pool = await pools_service.get_pool(pool_address)
+        if not pool:
+            raise ValueError(f"Pool {pool_address} not found")
+        
+        current_price = pool.get('current_price', pool.get('token0_price', 1.0))
+        
+        # Calculate range boundaries from ticks
+        tick_lower = position_data.get('tick_lower', 0)
+        tick_upper = position_data.get('tick_upper', 0)
+        
+        # Simple tick to price conversion (simplified)
+        lower_price = (1.0001 ** tick_lower) ** 2
+        upper_price = (1.0001 ** tick_upper) ** 2
+        
+        # Determine break type
+        if current_price > upper_price:
+            break_type = 'upward'
+            distance = (current_price - upper_price) / upper_price
+        elif current_price < lower_price:
+            break_type = 'downward'
+            distance = (lower_price - current_price) / lower_price
+        else:
+            # Not actually broken
+            break_type = None
+            distance = 0
         
         # Create break info for analysis
         break_info = {
-            'break_type': position.break_type,
-            'severity': 0,  # Will be calculated
+            'break_type': break_type if break_type else 'none',
+            'severity': min(100, distance * 200) if break_type else 0,  # 50% distance = 100 severity
             'severity_level': '',
-            'current_price': position.current_price
+            'current_price': current_price
         }
-        
-        # Calculate severity
-        lower_price = position.range['lower_price']
-        upper_price = position.range['upper_price']
-        
-        if position.break_type == 'upward':
-            distance = (position.current_price - upper_price) / upper_price
-        else:
-            distance = (lower_price - position.current_price) / lower_price
-        
-        break_info['severity'] = min(100, distance * 200)  # 50% distance = 100 severity
         
         # Determine severity level
         if break_info['severity'] >= 85:
@@ -476,14 +508,39 @@ class StrategyService:
         else:
             break_info['severity_level'] = 'mild'
         
+        # If no break, return monitor action
+        if not break_type:
+            return RangeBreakResponse(
+                action='monitor',
+                urgency='low',
+                reasoning='Position is within range',
+                execution_params=ExecutionParams(
+                    exit_percentage=0,
+                    max_slippage=0.5,
+                    deadline=3600
+                ),
+                alternative_action=AlternativeAction(
+                    type='hold',
+                    expected_cost=0
+                ),
+                risk_metrics=RangeBreakMetrics(
+                    reversal_probability=0,
+                    expected_loss_if_reversal=0,
+                    break_severity=0
+                )
+            )
+        
         # Analyze range break probability
         reversal_analysis = self.range_detector.analyze_range_break_probability(
             {},  # Empty history for now
             break_info
         )
         
+        # Get invested amount from position
+        invested_amount = position_data.get('total_value_usd', 0)
+        
         # Determine action based on break type and severity
-        if position.break_type == 'upward':
+        if break_type == 'upward':
             if break_info['severity'] >= 70:
                 action = 'emergency_exit'
                 urgency = 'critical'
@@ -556,16 +613,30 @@ class StrategyService:
         """
         Analyze whether and how to exit a position.
         """
-        position = request.position
+        # Fetch position data
+        try:
+            position_data = await positions_service.get_position_by_id(request.token_id)
+        except Exception as e:
+            logger.error(f"Error fetching position {request.token_id}: {e}")
+            raise ValueError(f"Position {request.token_id} not found")
+        
+        # Build position object from fetched data
+        position = {
+            'current_value': position_data.get('total_value_usd', 0),
+            'invested_amount': position_data.get('total_value_usd', 0),  # Approximation
+            'accumulated_fees': position_data.get('uncollected_fees_usd', 0),
+            'accumulated_rewards': 0,  # Would need to track separately
+            'entry_timestamp': datetime.utcnow()  # Would need to track separately
+        }
         
         # Calculate ROI
-        roi = ((position.current_value - position.invested_amount) / 
-               position.invested_amount * 100) if position.invested_amount > 0 else 0
+        roi = ((position['current_value'] - position['invested_amount']) / 
+               position['invested_amount'] * 100) if position['invested_amount'] > 0 else 0
         
         # Calculate total returns including fees and rewards
-        total_returns = (position.current_value - position.invested_amount + 
-                        position.accumulated_fees + position.accumulated_rewards)
-        roi_with_fees = (total_returns / position.invested_amount * 100) if position.invested_amount > 0 else 0
+        total_returns = (position['current_value'] - position['invested_amount'] + 
+                        position['accumulated_fees'] + position['accumulated_rewards'])
+        roi_with_fees = (total_returns / position['invested_amount'] * 100) if position['invested_amount'] > 0 else 0
         
         # Determine exit strategy based on reason
         if request.exit_reason == 'range_break':
@@ -590,7 +661,7 @@ class StrategyService:
         slippage_estimate = 1.0  # 1% conservative estimate
         
         # Calculate expected proceeds
-        expected_proceeds = position.current_value * (1 - slippage_estimate / 100)
+        expected_proceeds = position['current_value'] * (1 - slippage_estimate / 100)
         
         return ExitAnalysisResponse(
             should_exit=should_exit,
@@ -612,16 +683,16 @@ class StrategyService:
         """
         Detect whipsaw patterns in position history.
         """
-        position = request.position
+        # Fetch position data
+        try:
+            position_data = await positions_service.get_position_by_id(request.token_id)
+        except Exception as e:
+            logger.error(f"Error fetching position {request.token_id}: {e}")
+            raise ValueError(f"Position {request.token_id} not found")
         
-        # Convert range break history to expected format
-        break_history = [
-            {
-                'timestamp': event.timestamp.isoformat(),
-                'type': event.type
-            }
-            for event in position.range_break_history
-        ]
+        # For now, create empty break history
+        # In production, this would be tracked or calculated from historical data
+        break_history = []
         
         # Detect whipsaw pattern
         whipsaw_result = self.range_detector.detect_whipsaw_pattern(break_history)
@@ -683,14 +754,21 @@ class StrategyService:
         """
         Generate portfolio rebalancing recommendations.
         """
-        # Convert positions to expected format
-        positions_data = [p.dict() for p in request.positions]
+        # Fetch user's positions
+        try:
+            positions_list = await positions_service.get_positions_by_owner(request.user_address)
+        except Exception as e:
+            logger.warning(f"Could not fetch positions for {request.user_address}: {e}")
+            positions_list = []
         
-        # Generate recommendations
+        # Convert positions to expected format
+        positions_data = positions_list
+        
+        # Generate recommendations (always use balanced risk tolerance)
         raw_recommendations = self.portfolio_analyzer.generate_rebalancing_recommendations(
             positions_data,
             request.available_capital,
-            request.risk_tolerance
+            'balanced'
         )
         
         # Convert to response format
@@ -732,21 +810,19 @@ class StrategyService:
         """
         Calculate dynamic slippage for a trade.
         """
+        # Fetch pool data to get TVL, volatility, and pair info
+        pool_data = await pools_service.get_pool(request.pool_address)
+        if not pool_data:
+            raise ValueError(f"Pool {request.pool_address} not found")
+        
         # Create pool dict for slippage calculator
         pool = {
             'address': request.pool_address,
-            'tvl': request.current_tvl,
-            'volatility_24h': request.volatility_24h
+            'tvl': pool_data.get('tvl', 1_000_000),
+            'volatility_24h': pool_data.get('volatility_24h', 20),
+            'token0_symbol': pool_data.get('token0_symbol', 'UNKNOWN'),
+            'token1_symbol': pool_data.get('token1_symbol', 'UNKNOWN')
         }
-        
-        # Parse pair to get tokens
-        if '/' in request.pair:
-            token0, token1 = request.pair.split('/')
-            pool['token0_symbol'] = token0
-            pool['token1_symbol'] = token1
-        else:
-            pool['token0_symbol'] = 'UNKNOWN'
-            pool['token1_symbol'] = 'UNKNOWN'
         
         # Calculate slippage breakdown
         breakdown = self.slippage_calc.calculate_slippage_breakdown(
@@ -764,13 +840,19 @@ class StrategyService:
             pair_classification=breakdown['pair_classification']
         )
     
-    async def assess_risk(self) -> RiskAssessmentResponse:
+    async def assess_risk(self, user_address: Optional[str] = None) -> RiskAssessmentResponse:
         """
         Get current portfolio risk assessment.
         """
-        # For now, return example data
-        # In production, would fetch actual positions
-        positions = []
+        # Fetch positions if user_address provided
+        if user_address:
+            try:
+                positions = await positions_service.get_positions_by_owner(user_address)
+            except Exception as e:
+                logger.warning(f"Could not fetch positions for {user_address}: {e}")
+                positions = []
+        else:
+            positions = []
         
         # Calculate VaR
         var_metrics = self.portfolio_analyzer.calculate_portfolio_var(positions)
@@ -815,7 +897,7 @@ class StrategyService:
     async def get_performance_analytics(
         self,
         period: str = '24h',
-        executor_address: Optional[str] = None
+        user_address: Optional[str] = None
     ) -> PerformanceAnalyticsResponse:
         """
         Get performance analytics for the strategy.
