@@ -139,10 +139,12 @@ class StrategyService:
             # Calculate optimal range
             current_price = pool.get('current_price', 1.0)
             volatility = pool.get('volatility_24h', 20)
+            tick_spacing = pool.get('tick_spacing', 100)  # Default to 100 if not provided
             lower_tick, upper_tick = self.calculator.calculate_optimal_range(
                 current_price,
                 volatility,
-                risk_profile
+                risk_profile,
+                tick_spacing
             )
             
             # Calculate slippage estimate
@@ -305,10 +307,12 @@ class StrategyService:
         # Always calculate optimal range - this is our proposal to the executor
         current_price = pool.get('current_price', 1.0)
         volatility = pool.get('volatility_24h', 20)
+        tick_spacing = pool.get('tick_spacing', 100)  # Default to 100 if not provided
         lower_tick, upper_tick = self.calculator.calculate_optimal_range(
             current_price,
             volatility,
-            'balanced'  # Use balanced risk profile for all
+            'balanced',  # Use balanced risk profile for all
+            tick_spacing
         )
         optimal_range = RangeParameters(
             lower_tick=lower_tick,

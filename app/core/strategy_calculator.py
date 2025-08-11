@@ -151,7 +151,8 @@ class StrategyCalculator:
         self, 
         current_price: float, 
         volatility_24h: float,
-        risk_profile: str = 'balanced'
+        risk_profile: str = 'balanced',
+        tick_spacing: int = 100
     ) -> Tuple[int, int]:
         """
         Calculate optimal tick range for concentrated liquidity position.
@@ -160,6 +161,7 @@ class StrategyCalculator:
             current_price: Current pool price
             volatility_24h: 24-hour volatility percentage
             risk_profile: Risk profile for range calculation
+            tick_spacing: Pool's tick spacing (1, 10, 50, 100, 200, 2000)
             
         Returns:
             Tuple of (lower_tick, upper_tick)
@@ -167,20 +169,26 @@ class StrategyCalculator:
         profile = self.RISK_PROFILES[risk_profile]
         range_multiplier = profile['range_multiplier']
         
-        # Calculate price range based on volatility
+        # Calculate minimum range based on tick spacing
+        # Minimum range = tick_spacing / 100
+        # E.g., tick_spacing 200 = 2% minimum range (1% each side)
+        min_range_percent_each_side = tick_spacing / 100 / 2
+        
+        # Calculate desired price range based on volatility
         # Using 2-sigma approach for range calculation
-        price_range_percent = volatility_24h * range_multiplier / 100
+        desired_range_percent = volatility_24h * range_multiplier / 100
+        
+        # Ensure range is at least the minimum allowed by tick spacing
+        price_range_percent = max(desired_range_percent, min_range_percent_each_side)
         
         lower_price = current_price * (1 - price_range_percent)
         upper_price = current_price * (1 + price_range_percent)
         
-        # Convert prices to ticks (simplified - assumes tick spacing of 60)
-        # In production, this would use the actual pool's tick math
+        # Convert prices to ticks
         lower_tick = self._price_to_tick(lower_price)
         upper_tick = self._price_to_tick(upper_price)
         
         # Ensure ticks are aligned to tick spacing
-        tick_spacing = 60
         lower_tick = (lower_tick // tick_spacing) * tick_spacing
         upper_tick = ((upper_tick // tick_spacing) + 1) * tick_spacing
         
@@ -211,8 +219,10 @@ class StrategyCalculator:
             Optimal number of positions
         """
         # Simple tiered approach based on capital
-        if total_capital < 1000:
-            return 1
+        if total_capital < 100:
+            return 1  # Single position for very small amounts
+        elif total_capital < 1000:
+            return 1  # Still single position under $1k
         elif total_capital < 5000:
             return min(2, max(1, int(total_capital / 1000)))
         elif total_capital < 10000:
@@ -238,12 +248,17 @@ class StrategyCalculator:
         # Convert APR to decimal
         apr_decimal = apr / 100 if apr > 1 else apr
         
-        # Formula: max($100, $0.50 × 365 / (APR × 0.5))
-        # Position must generate returns to cover gas costs
-        gas_based_minimum = (self.BASE_GAS_COSTS['total_lifecycle'] * 365) / (apr_decimal * 0.5) if apr_decimal > 0 else 1000
+        # With Base L2's ultra-low gas ($0.50 total), we can allow smaller positions
+        # At 100% APR, $10 generates $10/year, covering gas in ~18 days
+        # At 200% APR, $10 generates $20/year, covering gas in ~9 days
         
-        # Absolute minimum of $100
-        return max(100, gas_based_minimum)
+        # Formula: Position should cover gas costs within 30 days
+        # gas_based_minimum = (gas_cost × 12) / apr_decimal
+        # This ensures position covers gas in 1 month
+        gas_based_minimum = (self.BASE_GAS_COSTS['total_lifecycle'] * 12) / apr_decimal if apr_decimal > 0 else 100
+        
+        # Absolute minimum of $10 for Base L2
+        return max(10, gas_based_minimum)
     
     def calculate_position_size(
         self, 
