@@ -10,7 +10,6 @@ from .constants import (
     API_BATCH_SIZE,
     API_RATE_LIMIT_DELAY,
     DEXSCREENER_API_BASE,
-    TICK_SPACING_TO_EFFICIENCY_RATE,
 )
 
 
@@ -121,13 +120,13 @@ def calculate_apr(
     tick_spacing: int
 ) -> float:
     """
-    Calculate APR based on emissions and efficiency rate.
+    Calculate APR based on emissions.
     
     Args:
         emissions_per_second: Emissions in AERO per second
         staked_tvl: Total value locked in USD
         aero_price: Current AERO price in USD
-        tick_spacing: Pool tick spacing
+        tick_spacing: Pool tick spacing (not used anymore)
         
     Returns:
         APR as percentage
@@ -141,13 +140,7 @@ def calculate_apr(
     # Calculate emissions APR
     emissions_apr = (emissions_per_year * aero_price * 100) / staked_tvl
     
-    # Get efficiency rate based on tick spacing
-    efficiency_rate = TICK_SPACING_TO_EFFICIENCY_RATE.get(tick_spacing, 1)
-    
-    # Calculate real APR (divide by efficiency rate)
-    real_apr = emissions_apr / efficiency_rate
-    
-    return real_apr
+    return emissions_apr
 
 
 def calculate_fee_tier(tick_spacing: int) -> int:

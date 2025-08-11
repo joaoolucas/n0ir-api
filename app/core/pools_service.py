@@ -499,20 +499,12 @@ class PoolsService:
         if staked_tvl <= 0:
             return 0
         
-        # Get efficiency rate based on tick spacing
-        efficiency_rates = {
-            1: 3, 10: 3, 50: 3,  # Stable pools
-            100: 6, 200: 4, 2000: 1  # Volatile pools
-        }
-        efficiency_rate = efficiency_rates.get(tick_spacing, 1)
-        
         # Calculate annual emissions value
         annual_emissions = emissions_per_second * 365 * 24 * 60 * 60
         annual_emissions_value = annual_emissions * aero_price
         
-        # Apply efficiency rate and calculate APR
-        effective_emissions_value = annual_emissions_value * efficiency_rate
-        apr = (effective_emissions_value / staked_tvl) * 100
+        # Calculate APR directly without efficiency rate
+        apr = (annual_emissions_value / staked_tvl) * 100
         
         return apr  # Return actual APR without cap for accurate agent decision-making
     
