@@ -11,6 +11,13 @@ class StrategyCalculator:
     Implements the quantitative scoring model and strategy calculations.
     """
     
+    # Base L2 Gas Costs (in USDC)
+    BASE_GAS_COSTS = {
+        'open_position': 0.25,
+        'close_position': 0.25,
+        'total_lifecycle': 0.50
+    }
+    
     # Scoring weights for the composite model
     WEIGHTS = {
         'fee_efficiency': 0.30,
@@ -192,6 +199,52 @@ class StrategyCalculator:
         # price = (1.0001^tick)^2
         return (1.0001 ** tick) ** 2
     
+    def calculate_optimal_position_count(self, total_capital: float, apr: float) -> int:
+        """
+        Calculate optimal number of positions for individual agent.
+        
+        Args:
+            total_capital: Total available capital in USDC
+            apr: Expected average APR as percentage (e.g., 100 for 100%)
+            
+        Returns:
+            Optimal number of positions
+        """
+        # Simple tiered approach based on capital
+        if total_capital < 1000:
+            return 1
+        elif total_capital < 5000:
+            return min(2, max(1, int(total_capital / 1000)))
+        elif total_capital < 10000:
+            return 3
+        elif total_capital < 25000:
+            return 4
+        elif total_capital < 50000:
+            return 5
+        else:
+            # $50k+ gets maximum 7 positions
+            return 7
+    
+    def calculate_minimum_position_size(self, apr: float) -> float:
+        """
+        Calculate minimum viable position size based on APR and gas costs.
+        
+        Args:
+            apr: Expected APR as percentage (e.g., 100 for 100%)
+            
+        Returns:
+            Minimum position size in USDC
+        """
+        # Convert APR to decimal
+        apr_decimal = apr / 100 if apr > 1 else apr
+        
+        # Formula: max($100, $0.50 × 365 / (APR × 0.5))
+        # Position must generate returns to cover gas costs
+        gas_based_minimum = (self.BASE_GAS_COSTS['total_lifecycle'] * 365) / (apr_decimal * 0.5) if apr_decimal > 0 else 1000
+        
+        # Absolute minimum of $100
+        return max(100, gas_based_minimum)
+    
     def calculate_position_size(
         self, 
         pool_stats: Dict,
@@ -200,48 +253,44 @@ class StrategyCalculator:
         existing_positions: List[Dict] = None
     ) -> Tuple[float, float]:
         """
-        Calculate optimal position size using Modified Kelly Criterion.
+        Calculate optimal position size for individual agent.
         
         Args:
             pool_stats: Pool statistics including APR, volatility
             available_capital: Available USDC for investment
             risk_profile: Risk profile
-            existing_positions: Existing positions for concentration check
+            existing_positions: Existing positions (for individual agent)
             
         Returns:
             Tuple of (recommended_amount, max_amount)
         """
-        profile = self.RISK_PROFILES[risk_profile]
-        max_position_percent = profile['max_position_size']
+        apr = pool_stats.get('apr', 100)  # Default 100% APR
         
-        # Base position size from Kelly Criterion
-        expected_return = pool_stats.get('apr', 0) / 100 / 365  # Daily return
-        volatility = pool_stats.get('volatility_24h', 20) / 100
+        # Calculate optimal number of positions for this capital level
+        optimal_position_count = self.calculate_optimal_position_count(available_capital, apr)
         
-        if volatility > 0:
-            kelly_fraction = expected_return / (volatility ** 2)
-            # Apply safety factor (use 25% of Kelly for crypto)
-            safe_kelly = kelly_fraction * 0.25
+        # Base allocation per position
+        base_allocation = available_capital / optimal_position_count if optimal_position_count > 0 else available_capital
+        
+        # Get minimum position size based on APR
+        min_position = self.calculate_minimum_position_size(apr)
+        
+        # If base allocation is below minimum, reduce position count
+        if base_allocation < min_position:
+            adjusted_count = max(1, int(available_capital / min_position))
+            recommended_amount = available_capital / adjusted_count
         else:
-            safe_kelly = 0.1  # Default 10% if no volatility data
+            recommended_amount = base_allocation
         
-        # Calculate recommended amount
-        recommended_amount = available_capital * min(safe_kelly, max_position_percent)
+        # Apply maximum concentration limit (25% for individual agents)
+        max_single_position = available_capital * 0.25
+        recommended_amount = min(recommended_amount, max_single_position)
         
-        # Check concentration limits if we have existing positions
-        if existing_positions:
-            total_invested = sum(p.get('invested_amount', 0) for p in existing_positions)
-            total_portfolio = total_invested + available_capital
-            
-            # Don't exceed 25% in any single position
-            max_single_position = total_portfolio * 0.25
-            recommended_amount = min(recommended_amount, max_single_position - total_invested)
+        # Ensure we meet the minimum
+        recommended_amount = max(recommended_amount, min_position)
         
-        # Ensure minimum position size of $1000
-        if recommended_amount < 1000:
-            recommended_amount = min(1000, available_capital * max_position_percent)
-        
-        max_amount = available_capital * max_position_percent
+        # For individual agents, max amount is capped at 25% of capital
+        max_amount = min(available_capital * 0.25, available_capital)
         
         return (recommended_amount, max_amount)
     
@@ -272,8 +321,8 @@ class StrategyCalculator:
         expected_rewards = expected_fees * 0.3
         expected_trading_fees = expected_fees * 0.7
         
-        # Estimate costs
-        estimated_gas = 50  # $50 estimated gas for entry/exit
+        # Estimate costs using Base L2 gas costs
+        estimated_gas = self.BASE_GAS_COSTS['total_lifecycle']  # $0.50 for entry/exit
         volatility = pool.get('volatility_24h', 20)
         estimated_slippage = position_size * (volatility / 100) * 0.01  # Rough estimate
         

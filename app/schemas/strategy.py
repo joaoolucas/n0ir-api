@@ -114,6 +114,8 @@ class PoolOpportunity(BaseModel):
 class OpportunitiesResponse(BaseModel):
     """Response for pool opportunities."""
     opportunities: List[PoolOpportunity]
+    optimal_position_count: int = Field(..., description="Recommended total number of positions")
+    minimum_position_size: float = Field(..., description="Minimum viable position size in USDC")
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -247,6 +249,7 @@ class PortfolioRebalanceResponse(BaseModel):
     """Response for portfolio rebalancing."""
     recommendations: List[RebalanceRecommendation]
     expected_portfolio_improvement: PortfolioImprovement
+    is_full_rebalance: bool = Field(default=False, description="True if withdrawal detected requiring full rebalance")
 
 
 class SlippageCalculationResponse(BaseModel):

@@ -97,18 +97,17 @@ class StrategyService:
             logger.warning(f"Could not fetch executor positions: {e}")
             executor_positions = []
         
-        # Determine optimal number of positions based on capital
-        # Strategy: 3-7 positions based on capital size
-        if request.max_capital < 10000:
-            max_positions = 3
-        elif request.max_capital < 50000:
-            max_positions = 5
-        else:
-            max_positions = 7
+        # Calculate optimal number of positions using new formula for Base L2
+        # Average APR estimate for calculation (will vary by pool)
+        avg_apr = 100  # 100% APR average estimate
+        optimal_total_positions = self.calculator.calculate_optimal_position_count(
+            request.max_capital, 
+            avg_apr
+        )
         
         # Adjust for already invested positions
         current_positions = len(exclude_addresses)
-        max_new_positions = max(1, max_positions - current_positions)
+        max_new_positions = max(1, optimal_total_positions - current_positions)
         
         # Use balanced risk profile for all executors
         risk_profile = 'balanced'
@@ -185,7 +184,14 @@ class StrategyService:
         # Limit to calculated max positions
         opportunities = opportunities[:max_new_positions]
         
-        response = OpportunitiesResponse(opportunities=opportunities)
+        # Calculate minimum position size for the average APR
+        min_position_size = self.calculator.calculate_minimum_position_size(avg_apr)
+        
+        response = OpportunitiesResponse(
+            opportunities=opportunities,
+            optimal_position_count=optimal_total_positions,
+            minimum_position_size=min_position_size
+        )
         
         # Cache the response
         await cache_manager.set_custom(
@@ -753,6 +759,7 @@ class StrategyService:
     ) -> PortfolioRebalanceResponse:
         """
         Generate portfolio rebalancing recommendations.
+        Handles withdrawals by closing all positions and redeploying.
         """
         # Fetch user's positions
         try:
@@ -761,31 +768,96 @@ class StrategyService:
             logger.warning(f"Could not fetch positions for {request.user_address}: {e}")
             positions_list = []
         
-        # Convert positions to expected format
-        positions_data = positions_list
+        # Calculate total value in positions
+        total_position_value = sum(pos.get('total_value_usd', 0) for pos in positions_list)
         
-        # Generate recommendations (always use balanced risk tolerance)
-        raw_recommendations = self.portfolio_analyzer.generate_rebalancing_recommendations(
-            positions_data,
-            request.available_capital,
-            'balanced'
+        # Detect withdrawal: available capital is significantly less than position value
+        # This indicates user has withdrawn funds
+        is_withdrawal = (
+            total_position_value > 0 and 
+            request.available_capital < total_position_value * 0.8  # 20% threshold
         )
         
-        # Convert to response format
         recommendations = []
-        for rec in raw_recommendations:
-            recommendation = RebalanceRecommendation(
-                action=rec['action'],
-                token_id=rec.get('token_id'),
-                pool_address=rec.get('pool_address'),
-                target_percentage=rec.get('target_percentage'),
-                suggested_amount=rec.get('suggested_amount'),
-                reason=rec['reason']
-            )
-            recommendations.append(recommendation)
         
-        # Calculate expected improvement (simplified)
-        current_metrics = self.portfolio_analyzer.calculate_portfolio_metrics(positions_data)
+        if is_withdrawal:
+            # Full rebalance: close all positions and redeploy
+            logger.info(f"Withdrawal detected for {request.user_address}. Recommending full rebalance.")
+            
+            # Recommend closing all positions
+            for pos in positions_list:
+                recommendation = RebalanceRecommendation(
+                    action='close',
+                    token_id=pos.get('token_id'),
+                    pool_address=pos.get('pool_address'),
+                    target_percentage=0,
+                    suggested_amount=0,
+                    reason='Withdrawal detected - closing all positions for redeployment'
+                )
+                recommendations.append(recommendation)
+            
+            # Calculate redeployment strategy for remaining capital
+            if request.available_capital > 100:  # Minimum to redeploy
+                redeployment = await self._calculate_redeployment_strategy(
+                    request.available_capital,
+                    request.user_address
+                )
+                
+                for strategy in redeployment:
+                    recommendation = RebalanceRecommendation(
+                        action='open',
+                        pool_address=strategy['pool_address'],
+                        suggested_amount=strategy['amount'],
+                        reason='Redeployment after withdrawal'
+                    )
+                    recommendations.append(recommendation)
+        else:
+            # Normal rebalancing (no withdrawal detected)
+            # Check if new deposit (available capital > expected)
+            is_deposit = request.available_capital > total_position_value * 0.1  # Has extra capital
+            
+            if is_deposit and len(positions_list) > 0:
+                # Check if we should add new positions
+                avg_apr = 100  # Estimate
+                current_count = len(positions_list)
+                total_capital = total_position_value + request.available_capital
+                
+                if self._should_add_position(current_count, total_capital, avg_apr):
+                    # Recommend opening new positions with available capital
+                    redeployment = await self._calculate_redeployment_strategy(
+                        request.available_capital,
+                        request.user_address
+                    )
+                    
+                    for strategy in redeployment[:2]:  # Limit new positions
+                        recommendation = RebalanceRecommendation(
+                            action='open',
+                            pool_address=strategy['pool_address'],
+                            suggested_amount=strategy['amount'],
+                            reason='New deposit - opening additional position'
+                        )
+                        recommendations.append(recommendation)
+            else:
+                # Standard rebalancing logic
+                raw_recommendations = self.portfolio_analyzer.generate_rebalancing_recommendations(
+                    positions_list,
+                    request.available_capital,
+                    'balanced'
+                )
+                
+                for rec in raw_recommendations:
+                    recommendation = RebalanceRecommendation(
+                        action=rec['action'],
+                        token_id=rec.get('token_id'),
+                        pool_address=rec.get('pool_address'),
+                        target_percentage=rec.get('target_percentage'),
+                        suggested_amount=rec.get('suggested_amount'),
+                        reason=rec['reason']
+                    )
+                    recommendations.append(recommendation)
+        
+        # Calculate expected improvement
+        current_metrics = self.portfolio_analyzer.calculate_portfolio_metrics(positions_list)
         
         # Estimate improvements
         apr_increase = 5.0 if len(recommendations) > 0 else 0
@@ -800,7 +872,8 @@ class StrategyService:
         
         return PortfolioRebalanceResponse(
             recommendations=recommendations,
-            expected_portfolio_improvement=improvement
+            expected_portfolio_improvement=improvement,
+            is_full_rebalance=is_withdrawal  # Add this field to schema
         )
     
     async def calculate_slippage(
@@ -937,6 +1010,69 @@ class StrategyService:
             risk_metrics=risk_metrics,
             execution_quality=execution_quality
         )
+    
+    async def _calculate_redeployment_strategy(
+        self,
+        remaining_capital: float,
+        executor_address: str
+    ) -> List[Dict]:
+        """
+        Calculate new position deployment strategy after withdrawal.
+        
+        Args:
+            remaining_capital: Capital remaining after withdrawal
+            executor_address: Address of the executor
+            
+        Returns:
+            List of recommended positions to open
+        """
+        # Use the find_opportunities logic but with remaining capital
+        from app.schemas.strategy import OpportunitiesRequest
+        
+        request = OpportunitiesRequest(
+            executor_address=executor_address,
+            available_capital=remaining_capital,
+            max_capital=remaining_capital
+        )
+        
+        opportunities_response = await self.find_opportunities(request)
+        
+        # Convert opportunities to redeployment instructions
+        redeployment_strategy = []
+        for opp in opportunities_response.opportunities:
+            redeployment_strategy.append({
+                'pool_address': opp.pool_address,
+                'amount': opp.recommended_amount,
+                'lower_tick': opp.recommended_range.lower_tick,
+                'upper_tick': opp.recommended_range.upper_tick,
+                'action': 'open_position'
+            })
+        
+        return redeployment_strategy
+    
+    def _should_add_position(
+        self,
+        current_count: int,
+        available_capital: float,
+        apr: float
+    ) -> bool:
+        """
+        Determine if a new position should be added with deposit.
+        
+        Args:
+            current_count: Current number of positions
+            available_capital: Available capital for investment
+            apr: Average APR of opportunities
+            
+        Returns:
+            True if a new position should be added
+        """
+        optimal_count = self.calculator.calculate_optimal_position_count(
+            available_capital,
+            apr
+        )
+        
+        return current_count < optimal_count
 
 
 # Create singleton instance
