@@ -10,7 +10,6 @@ from .constants import (
     API_BATCH_SIZE,
     API_RATE_LIMIT_DELAY,
     DEXSCREENER_API_BASE,
-    TICK_SPACING_TO_EFFICIENCY_RATE,
 )
 
 
@@ -31,10 +30,18 @@ async def fetch_token_price(session: aiohttp.ClientSession, token_address: str) 
             if response.status == 200:
                 data = await response.json()
                 if data.get("pairs"):
-                    # Get price from first pair
-                    pair = data["pairs"][0]
-                    price = float(pair.get("priceUsd", 0))
-                    return token_address.lower(), price
+                    # Prefer Base chain pairs
+                    base_pairs = [p for p in data["pairs"] if p.get("chainId") == "base"]
+                    if base_pairs:
+                        # Sort by liquidity and get the highest
+                        base_pairs.sort(key=lambda x: float(x.get("liquidity", {}).get("usd", 0)), reverse=True)
+                        price = float(base_pairs[0].get("priceUsd", 0))
+                        return token_address.lower(), price
+                    # Fallback to first pair if no Base pairs
+                    elif data["pairs"]:
+                        pair = data["pairs"][0]
+                        price = float(pair.get("priceUsd", 0))
+                        return token_address.lower(), price
     except Exception:
         pass
     
@@ -113,13 +120,13 @@ def calculate_apr(
     tick_spacing: int
 ) -> float:
     """
-    Calculate APR based on emissions and efficiency rate.
+    Calculate APR based on emissions.
     
     Args:
         emissions_per_second: Emissions in AERO per second
         staked_tvl: Total value locked in USD
         aero_price: Current AERO price in USD
-        tick_spacing: Pool tick spacing
+        tick_spacing: Pool tick spacing (not used anymore)
         
     Returns:
         APR as percentage
@@ -133,13 +140,7 @@ def calculate_apr(
     # Calculate emissions APR
     emissions_apr = (emissions_per_year * aero_price * 100) / staked_tvl
     
-    # Get efficiency rate based on tick spacing
-    efficiency_rate = TICK_SPACING_TO_EFFICIENCY_RATE.get(tick_spacing, 1)
-    
-    # Calculate real APR (divide by efficiency rate)
-    real_apr = emissions_apr / efficiency_rate
-    
-    return real_apr
+    return emissions_apr
 
 
 def calculate_fee_tier(tick_spacing: int) -> int:

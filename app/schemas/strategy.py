@@ -44,7 +44,6 @@ class OpportunitiesRequest(BaseModel):
     """Request for finding pool opportunities."""
     executor_address: str
     available_capital: float = Field(..., gt=0)
-    max_capital: float = Field(..., gt=0, description="Maximum capital that can be deployed")
 
 
 class AnalyzeEntryRequest(BaseModel):

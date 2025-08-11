@@ -305,6 +305,10 @@ class PoolsClient:
         token0_price = prices.get(token0_addr.lower(), 0)
         token1_price = prices.get(token1_addr.lower(), 0)
         
+        # Add prices to token objects
+        token0.price_usd = token0_price
+        token1.price_usd = token1_price
+        
         # Get AERO price
         aero_price = await get_aero_price()
         
@@ -409,6 +413,10 @@ class PoolsClient:
                 # Get prices
                 token0_price = prices.get(token0_addr.lower(), 0)
                 token1_price = prices.get(token1_addr.lower(), 0)
+                
+                # Add prices to token objects
+                token0.price_usd = token0_price
+                token1.price_usd = token1_price
                 
                 # Skip if we don't have prices for either token
                 if token0_price == 0 or token1_price == 0:

@@ -89,19 +89,29 @@ class StrategyService:
         
         # Fetch executor's current positions to exclude already invested pools
         exclude_addresses = []
+        total_position_value = 0
         try:
             executor_positions = await positions_service.get_positions_by_owner(request.executor_address)
             exclude_addresses = list(set([pos.get('pool_address', '') for pos in executor_positions if pos.get('pool_address')]))
-            logger.info(f"Executor has {len(executor_positions)} positions in {len(exclude_addresses)} unique pools")
+            
+            # Calculate total value of current positions
+            for pos in executor_positions:
+                if pos.get('current_value_usd'):
+                    total_position_value += pos['current_value_usd']
+            
+            logger.info(f"Executor has {len(executor_positions)} positions in {len(exclude_addresses)} unique pools, total value: ${total_position_value}")
         except Exception as e:
             logger.warning(f"Could not fetch executor positions: {e}")
             executor_positions = []
+        
+        # Calculate max_capital as available_capital + total position value
+        max_capital = request.available_capital + total_position_value
         
         # Calculate optimal number of positions using new formula for Base L2
         # Average APR estimate for calculation (will vary by pool)
         avg_apr = 100  # 100% APR average estimate
         optimal_total_positions = self.calculator.calculate_optimal_position_count(
-            request.max_capital, 
+            max_capital, 
             avg_apr
         )
         
@@ -162,7 +172,7 @@ class StrategyService:
             
             opportunity = PoolOpportunity(
                 pool_address=pool['address'],
-                pair=f"{pool.get('token0_symbol', 'TOKEN0')}/{pool.get('token1_symbol', 'TOKEN1')}",
+                pair=f"{pool.get('token0', {}).get('symbol', 'TOKEN0')}/{pool.get('token1', {}).get('symbol', 'TOKEN1')}",
                 score=score,
                 expected_apr=returns['annualized_return'],
                 recommended_amount=recommended_amount,
@@ -172,7 +182,7 @@ class StrategyService:
                 ),
                 risk_metrics=RiskMetrics(
                     volatility_24h=volatility,
-                    volume_tvl_ratio=pool.get('volume_24h', 0) / max(pool.get('tvl', 1), 1),
+                    volume_tvl_ratio=pool.get('volume_24h', 0) / max(pool.get('tvl_usd', pool.get('tvl', 1)), 1),
                     slippage_estimate=slippage_breakdown['total_slippage']
                 ),
                 entry_conditions_met=self._check_entry_conditions(pool, score)
@@ -237,7 +247,7 @@ class StrategyService:
         """Check if pool meets minimum requirements for risk profile."""
         profile = self.calculator.RISK_PROFILES[risk_profile]
         
-        tvl = pool.get('tvl', 0)
+        tvl = pool.get('tvl_usd', 0)
         volume_24h = pool.get('volume_24h', 0)
         apr = pool.get('apr', 0)
         
@@ -251,7 +261,7 @@ class StrategyService:
         """Check if entry conditions are met."""
         return (
             score >= 60 and
-            pool.get('tvl', 0) >= 500_000 and
+            pool.get('tvl_usd', 0) >= 500_000 and
             pool.get('volume_24h', 0) >= 100_000 and
             pool.get('apr', 0) >= 80
         )

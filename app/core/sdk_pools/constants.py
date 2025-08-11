@@ -12,15 +12,7 @@ WETH = "0x4200000000000000000000000000000000000006"  # WETH on Base
 STABLE_TICK_SPACINGS = [1, 10, 50]
 VOLATILE_TICK_SPACINGS = [100, 200, 2000]
 
-# Tick spacing to efficiency rate mapping
-TICK_SPACING_TO_EFFICIENCY_RATE = {
-    1: 3,     # efficiency_rate = 3
-    10: 3,    # efficiency_rate = 3  
-    50: 3,    # efficiency_rate = 3
-    200: 4,   # efficiency_rate = 4
-    100: 6,   # efficiency_rate = 6
-    2000: 1   # efficiency_rate = 1
-}
+# Efficiency rate mapping removed - APR calculated directly from emissions
 
 # API configuration
 DEXSCREENER_API_BASE = "https://api.dexscreener.com/latest/dex"
