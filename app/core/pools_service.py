@@ -1,16 +1,10 @@
-import sys
 import hashlib
-from pathlib import Path
 from typing import Dict, List, Optional, Any
 from web3 import Web3
 
-# Add SDK path to system path
-sdk_path = Path("/home/mortiee/projects/n0ir/sdk")
-if str(sdk_path) not in sys.path:
-    sys.path.insert(0, str(sdk_path))
-
-from n0ir_sdk.pools import PoolsClient, PoolFilters, PoolAPRData, TokenInfo
-from n0ir_sdk.pools.utils import fetch_token_prices
+# Import from local SDK copy
+from app.core.sdk_pools import PoolsClient, PoolFilters, PoolAPRData, TokenInfo
+from app.core.sdk_pools.utils import fetch_token_prices
 
 from app.core.config import settings
 from app.core.cache import cache_manager
