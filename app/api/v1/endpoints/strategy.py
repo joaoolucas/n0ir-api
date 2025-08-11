@@ -36,6 +36,8 @@ async def get_pool_opportunities(request: OpportunitiesRequest) -> Opportunities
     """
     Find and rank pool opportunities based on the quantitative scoring model.
     
+    Automatically fetches executor's current positions to exclude already invested pools.
+    
     Analyzes whitelisted pools and returns ranked opportunities based on:
     - Composite scoring model (fee efficiency, volume, liquidity, etc.)
     - Risk-adjusted returns
@@ -155,6 +157,11 @@ async def monitor_active_positions(request: MonitorPositionsRequest) -> MonitorP
 async def handle_range_break(request: RangeBreakRequest) -> RangeBreakResponse:
     """
     Get immediate action recommendations when a position breaks its range.
+    
+    Takes only a token_id and fetches all necessary data internally:
+    - Position details and range
+    - Current pool price
+    - Calculates break type and severity
     
     Analyzes:
     - Break severity (mild to critical)
@@ -335,9 +342,17 @@ async def calculate_slippage(request: SlippageCalculationRequest) -> SlippageCal
         500: {"model": ErrorResponse, "description": "Internal server error"}
     }
 )
-async def get_risk_assessment() -> RiskAssessmentResponse:
+async def get_risk_assessment(
+    user_address: Optional[str] = Query(
+        default=None,
+        description="User address for specific portfolio risk assessment"
+    )
+) -> RiskAssessmentResponse:
     """
     Get current portfolio risk metrics and warnings.
+    
+    If user_address is provided, calculates risk for that specific portfolio.
+    Otherwise returns general risk metrics.
     
     Provides:
     - Portfolio VaR (1-day and 7-day at 95% confidence)
@@ -347,7 +362,7 @@ async def get_risk_assessment() -> RiskAssessmentResponse:
     - Actionable warnings
     """
     try:
-        return await strategy_service.assess_risk()
+        return await strategy_service.assess_risk(user_address)
     except Exception as e:
         logger.error(f"Error assessing risk: {e}")
         raise HTTPException(
@@ -376,9 +391,9 @@ async def get_performance_analytics(
         description="Time period for analytics",
         regex="^(24h|7d|30d|all)$"
     ),
-    executor_address: Optional[str] = Query(
+    user_address: Optional[str] = Query(
         default=None,
-        description="Executor address to filter by"
+        description="User address to filter by"
     )
 ) -> PerformanceAnalyticsResponse:
     """
@@ -390,10 +405,10 @@ async def get_performance_analytics(
     - Risk metrics (Sharpe ratio, max drawdown, win rate)
     - Execution quality (avg slippage, success rates)
     
-    Supports filtering by time period and executor address.
+    Supports filtering by time period and user address.
     """
     try:
-        return await strategy_service.get_performance_analytics(period, executor_address)
+        return await strategy_service.get_performance_analytics(period, user_address)
     except Exception as e:
         logger.error(f"Error getting performance analytics: {e}")
         raise HTTPException(

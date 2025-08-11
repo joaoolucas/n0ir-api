@@ -45,7 +45,6 @@ class OpportunitiesRequest(BaseModel):
     executor_address: str
     available_capital: float = Field(..., gt=0)
     max_capital: float = Field(..., gt=0, description="Maximum capital that can be deployed")
-    exclude_addresses: List[str] = Field(default_factory=list, description="Pools to exclude (already invested)")
 
 
 class AnalyzeEntryRequest(BaseModel):
@@ -69,72 +68,33 @@ class MonitorPositionsRequest(BaseModel):
     user_address: str = Field(..., description="User wallet address to monitor positions for")
 
 
-class RangeBreakPosition(BaseModel):
-    """Position information for range break analysis."""
-    pool_address: str
-    token_id: int
-    current_price: float
-    range: Dict[str, float]  # lower_price, upper_price
-    break_type: Literal["upward", "downward"]
-    time_since_break: int  # seconds
-    invested_amount: float
-
-
 class RangeBreakRequest(BaseModel):
     """Request for handling range breaks."""
-    position: RangeBreakPosition
-
-
-class ExitPosition(BaseModel):
-    """Position information for exit analysis."""
-    pool_address: str
-    token_id: int
-    current_value: float
-    invested_amount: float
-    accumulated_fees: float
-    accumulated_rewards: float
-    entry_timestamp: datetime
+    token_id: int = Field(..., description="NFT token ID of the position to check")
 
 
 class ExitAnalysisRequest(BaseModel):
     """Request for analyzing position exit."""
-    position: ExitPosition
+    token_id: int = Field(..., description="NFT token ID of the position")
     exit_reason: Literal["manual", "stop_loss", "take_profit", "range_break", "rebalance"]
-
-
-class RangeBreakEvent(BaseModel):
-    """Range break event information."""
-    timestamp: datetime
-    type: Literal["upward", "downward"]
-
-
-class WhipsawPosition(BaseModel):
-    """Position information for whipsaw detection."""
-    pool_address: str
-    token_id: int
-    range_break_history: List[RangeBreakEvent]
 
 
 class WhipsawDetectionRequest(BaseModel):
     """Request for detecting whipsaw patterns."""
-    position: WhipsawPosition
+    token_id: int = Field(..., description="NFT token ID of the position")
 
 
 class PortfolioRebalanceRequest(BaseModel):
     """Request for portfolio rebalancing."""
-    positions: List[PositionInfo]
+    user_address: str = Field(..., description="User wallet address")
     available_capital: float = Field(default=0, ge=0)
-    risk_tolerance: Literal["conservative", "balanced", "aggressive"] = "balanced"
 
 
 class SlippageCalculationRequest(BaseModel):
     """Request for calculating slippage."""
     pool_address: str
-    pair: str
     action: Literal["enter", "exit"]
     amount_usdc: float = Field(..., gt=0)
-    current_tvl: float = Field(..., gt=0)
-    volatility_24h: float = Field(..., ge=0)
 
 
 # ============= Response Models =============
