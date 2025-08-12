@@ -9,12 +9,15 @@ from app.core.sdk_pools.utils import fetch_token_prices
 from app.core.config import settings
 from app.core.cache import cache_manager
 from app.core.logger import logger
+from app.core.effective_apr_calculator import EffectiveAPRCalculator
+from app.schemas.pools import EffectiveAPRInfo
 
 
 class PoolsService:
     def __init__(self):
         self._client: Optional[PoolsClient] = None
         self._w3: Optional[Web3] = None
+        self.effective_apr_calc = EffectiveAPRCalculator()
         
     async def _get_client(self) -> PoolsClient:
         """Get or create PoolsClient instance"""
@@ -251,7 +254,8 @@ class PoolsService:
         limit: Optional[int] = 100,
         offset: Optional[int] = None,
         sort_by: str = "apr",
-        sort_order: str = "desc"
+        sort_order: str = "desc",
+        include_effective_apr: bool = False
     ) -> Dict:
         """Get pools with full data - optimized version"""
         # Check cache first
@@ -298,7 +302,7 @@ class PoolsService:
             try:
                 pool_address = Web3.to_checksum_address(pool[0])
                 volume_24h = pool_volumes.get(pool_address.lower(), 0)
-                pool_data = await self._process_pool_full(pool, prices, aero_price, client, volume_24h)
+                pool_data = await self._process_pool_full(pool, prices, aero_price, client, volume_24h, include_effective_apr)
                 
                 # Apply filters
                 if pool_data["tvl_usd"] < min_tvl:
@@ -348,7 +352,7 @@ class PoolsService:
         await cache_manager.set_pools_list(filters_hash, result)
         return result
     
-    async def _process_pool_full(self, pool: List, prices: Dict[str, float], aero_price: float, client, volume_24h: float = 0) -> Dict:
+    async def _process_pool_full(self, pool: List, prices: Dict[str, float], aero_price: float, client, volume_24h: float = 0, include_effective_apr: bool = False) -> Dict:
         """Process a single pool with full data including prices, APR, and volume"""
         # Field indices
         LP = 0
@@ -393,7 +397,7 @@ class PoolsService:
         
         fee_tier = self._calculate_fee_tier(tick_spacing)
         
-        return {
+        pool_data = {
             "address": pool_address,
             "symbol": f"{token0['symbol']}/{token1['symbol']}-{fee_tier/100}%",
             "token0": {
@@ -423,6 +427,18 @@ class PoolsService:
             "gauge_address": Web3.to_checksum_address(pool[GAUGE]) if pool[GAUGE] != "0x0000000000000000000000000000000000000000" else None,
             "is_stable": tick_spacing in settings.stable_tick_spacings
         }
+        
+        # Add effective APR if requested
+        if include_effective_apr and apr > 0:
+            effective_apr_ranges = self.effective_apr_calc.calculate_multiple_ranges(apr, tick_spacing)
+            pool_data["effective_apr"] = effective_apr_ranges.get("standard", 0)
+            pool_data["effective_apr_range"] = EffectiveAPRInfo(
+                narrow=effective_apr_ranges.get("narrow", 0),
+                standard=effective_apr_ranges.get("standard", 0),
+                wide=effective_apr_ranges.get("wide", 0)
+            )
+        
+        return pool_data
     
     async def _get_or_fetch_token_info(self, client, address: str, pool_symbol: str) -> Dict:
         """Get token info from cache or fetch from chain"""

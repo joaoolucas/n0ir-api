@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Dict
 from pydantic import BaseModel, Field, field_validator
 from app.schemas.common import PaginationInfo
 
@@ -12,6 +12,13 @@ class TokenInfo(BaseModel):
     logo_uri: Optional[str] = Field(None, description="Token logo URI")
 
 
+class EffectiveAPRInfo(BaseModel):
+    """Effective APR calculations for different range widths."""
+    narrow: float = Field(..., description="Effective APR for narrow range (5% total)")
+    standard: float = Field(..., description="Effective APR for standard range (10% total)")
+    wide: float = Field(..., description="Effective APR for wide range (20% total)")
+
+
 class PoolData(BaseModel):
     address: str = Field(..., description="Pool contract address")
     symbol: str = Field(..., description="Pool symbol")
@@ -21,7 +28,9 @@ class PoolData(BaseModel):
     volume_24h: float = Field(..., description="24-hour trading volume in USD")
     tick_spacing: int = Field(..., description="Pool tick spacing")
     fee_tier: int = Field(..., description="Fee tier in basis points")
-    apr: float = Field(..., description="Annual percentage rate")
+    apr: float = Field(..., description="Annual percentage rate (base APR without range adjustment)")
+    effective_apr: Optional[float] = Field(None, description="Effective APR for standard range (10%)")
+    effective_apr_range: Optional[EffectiveAPRInfo] = Field(None, description="Effective APR for different range widths")
     current_tick: int = Field(..., description="Current tick")
     liquidity: str = Field(..., description="Pool liquidity")
     sqrt_price_x96: str = Field(..., description="Square root price X96")

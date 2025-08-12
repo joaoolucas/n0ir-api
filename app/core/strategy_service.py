@@ -14,6 +14,7 @@ from app.core.portfolio_analyzer import PortfolioAnalyzer
 from app.core.pools_service import pools_service
 from app.core.positions_service import positions_service
 from app.core.cache import cache_manager
+from app.core.effective_apr_calculator import EffectiveAPRCalculator
 from app.schemas.strategy import (
     OpportunitiesRequest, OpportunitiesResponse, PoolOpportunity,
     AnalyzeEntryRequest, AnalyzeEntryResponse,
@@ -54,6 +55,9 @@ WHITELISTED_POOLS = {
     "0x4796eda5A091B8Ca92EFA7d7Ee6f4De113A626FE",  # LsETH/cbBTC
     "0x98eCc8425cc4C3f30dD4EF02360B05698008a8fc",  # USDC/LsETH
     "0x8782d97C8b25B4d17dBFbaa03f25dC18e51e909D",  # cbADA/cbBTC
+    "0x4e962BB3889Bf030368F56810A9c96B83CB3E778",  # USDC/cbBTC
+    "0xE846373C1a92B167b4E9cd5d8E4d6B1Db9E90EC7",  # EURC/USDC
+    "0x5d4e504EB4c526995E0cC7A6E327FDa75D8B52b5",  # WETH/EURC
 }
 
 
@@ -67,6 +71,7 @@ class StrategyService:
         self.range_detector = RangeBreakDetector()
         self.slippage_calc = SlippageCalculator()
         self.portfolio_analyzer = PortfolioAnalyzer()
+        self.effective_apr_calc = EffectiveAPRCalculator()
         
         # Cache TTLs (in seconds)
         self.CACHE_TTL_OPPORTUNITIES = 300  # 5 minutes
@@ -205,12 +210,6 @@ class StrategyService:
                 'enter'
             )
             
-            # Calculate expected returns
-            returns = self.calculator.calculate_expected_returns(
-                pool,
-                recommended_amount
-            )
-            
             # Calculate prices from ticks
             lower_price = self.calculator._tick_to_price(lower_tick)
             upper_price = self.calculator._tick_to_price(upper_tick)
@@ -228,11 +227,30 @@ class StrategyService:
                 upper_percentage = 0
                 range_width_percentage = 0
             
+            # Calculate effective APR for the recommended range
+            base_apr = pool.get('apr', 0)
+            effective_apr = self.effective_apr_calc.calculate_effective_apr_from_ticks(
+                base_apr,
+                tick_spacing,
+                lower_tick,
+                upper_tick,
+                current_tick
+            )
+            apr_efficiency = self.effective_apr_calc.calculate_apr_efficiency(base_apr, effective_apr)
+            
+            # Calculate expected returns using effective APR
+            returns = self.calculator.calculate_expected_returns(
+                pool,
+                recommended_amount
+            )
+            
             opportunity = PoolOpportunity(
                 pool_address=pool['address'],
                 pair=f"{pool.get('token0', {}).get('symbol', 'TOKEN0')}/{pool.get('token1', {}).get('symbol', 'TOKEN1')}",
                 score=score,
                 expected_apr=returns['annualized_return'],
+                effective_apr=effective_apr,
+                apr_efficiency=apr_efficiency,
                 recommended_amount=recommended_amount,
                 recommended_range=RangeParameters(
                     lower_tick=lower_tick,
@@ -432,6 +450,17 @@ class StrategyService:
             upper_percentage=upper_percentage
         )
         
+        # Calculate effective APR for the optimal range
+        base_apr = pool.get('apr', 0)
+        effective_apr = self.effective_apr_calc.calculate_effective_apr_from_ticks(
+            base_apr,
+            tick_spacing,
+            lower_tick,
+            upper_tick,
+            current_tick
+        )
+        apr_efficiency = self.effective_apr_calc.calculate_apr_efficiency(base_apr, effective_apr)
+        
         # Determine if should enter
         should_enter = (
             confidence_score >= 70 and
@@ -445,6 +474,8 @@ class StrategyService:
             warnings.append(f"High slippage: {slippage_breakdown['total_slippage']:.2f}%")
         if risk_metrics['concentration_risk']:
             warnings.append("Position would create concentration risk")
+        if effective_apr < 10:
+            warnings.append(f"Low effective APR: {effective_apr:.2f}% (efficiency: {apr_efficiency:.1f}%)")
         
         return AnalyzeEntryResponse(
             should_enter=should_enter,
@@ -452,6 +483,8 @@ class StrategyService:
             slippage=slippage_info,
             risk_analysis=risk_analysis,
             optimal_range=optimal_range,
+            effective_apr=effective_apr,
+            apr_efficiency=apr_efficiency,
             warnings=warnings
         )
     
