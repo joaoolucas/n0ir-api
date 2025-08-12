@@ -155,26 +155,75 @@ class StrategyService:
         # Fetch whitelisted pools
         pools = await self._fetch_whitelisted_pools(exclude_addresses)
         
-        # Score and rank pools
-        opportunities = []
+        # First pass: Calculate safety scores and allocation weights for all pools
+        pool_candidates = []
         for pool in pools:
             # Skip if below minimum thresholds
             if not self._meets_minimum_requirements(pool, risk_profile):
                 continue
             
-            # Calculate score
-            score = self.calculator.calculate_pool_score(pool)
+            # Calculate safety score using the new simplified method
+            safety_score = self.calculator.calculate_simple_safety_score(pool)
             
-            # Skip low-scoring pools
-            if score < 50:
+            # Skip very unsafe pools
+            if safety_score < 20:
                 continue
             
-            # Calculate position sizing
-            recommended_amount, max_amount = self.calculator.calculate_position_size(
-                pool,
-                request.available_capital,
-                risk_profile
+            # Calculate base score for compatibility
+            base_score = self.calculator.calculate_pool_score(pool)
+            
+            # Calculate allocation weight (combines safety and APR)
+            allocation_weight = self.calculator.calculate_allocation_weight(pool, safety_score)
+            
+            pool_candidates.append({
+                'pool': pool,
+                'safety_score': safety_score,
+                'base_score': base_score,
+                'allocation_weight': allocation_weight
+            })
+        
+        # Sort by allocation weight (best opportunities first)
+        pool_candidates.sort(key=lambda x: x['allocation_weight'], reverse=True)
+        
+        # Calculate total weight for normalization
+        total_weight = sum(p['allocation_weight'] for p in pool_candidates)
+        
+        # Second pass: Build opportunities with normalized allocations
+        opportunities = []
+        for candidate in pool_candidates:
+            pool = candidate['pool']
+            safety_score = candidate['safety_score']
+            base_score = candidate['base_score']
+            allocation_weight = candidate['allocation_weight']
+            
+            # Calculate normalized allocation percentage
+            if total_weight > 0:
+                allocation_pct = allocation_weight / total_weight
+            else:
+                allocation_pct = 1.0 / len(pool_candidates) if pool_candidates else 0
+            
+            # Calculate actual position size based on normalized allocation
+            base_amount = request.available_capital * allocation_pct
+            
+            # Get dynamic position limit based on safety score
+            max_position_pct = self.calculator.calculate_dynamic_position_limit(
+                safety_score, 
+                request.available_capital
             )
+            max_amount = request.available_capital * max_position_pct
+            
+            # Apply dynamic maximum
+            recommended_amount = min(base_amount, max_amount)
+            
+            # Ensure minimum position size
+            apr = pool.get('apr', 100)
+            min_position = self.calculator.calculate_minimum_position_size(apr)
+            
+            # Skip if we can't meet minimum
+            if recommended_amount < min_position:
+                continue
+            
+            recommended_amount = max(recommended_amount, min_position)
             
             # Calculate optimal range
             # Get current tick from pool data
@@ -194,13 +243,19 @@ class StrategyService:
             
             volatility = pool.get('volatility_24h', 20)
             tick_spacing = pool.get('tick_spacing', 100)  # Default to 100 if not provided
+            base_apr = pool.get('apr', 100)
+            tvl = pool.get('tvl_usd', pool.get('tvl', 1_000_000))
+            volume_24h = pool.get('volume_24h', 500_000)
             
-            # Calculate range relative to current tick
+            # Calculate range relative to current tick with enhanced parameters
             lower_tick, upper_tick = self.calculator.calculate_optimal_range_from_tick(
                 current_tick,
                 volatility,
                 risk_profile,
-                tick_spacing
+                tick_spacing,
+                base_apr,
+                tvl,
+                volume_24h
             )
             
             # Calculate slippage estimate
@@ -238,6 +293,18 @@ class StrategyService:
             )
             apr_efficiency = self.effective_apr_calc.calculate_apr_efficiency(base_apr, effective_apr)
             
+            # Use the base score adjusted by APR efficiency  
+            # The allocation weight already considers safety and APR balance
+            if apr_efficiency < 10:  # Less than 10% efficiency
+                final_score = base_score * 0.5
+            elif apr_efficiency < 20:  # Less than 20% efficiency
+                final_score = base_score * 0.75
+            else:
+                # Good efficiency, might even boost score slightly
+                final_score = base_score * (1 + (apr_efficiency / 200))  # Small boost for high efficiency
+            
+            final_score = min(100, final_score)  # Cap at 100
+            
             # Calculate expected returns using effective APR
             returns = self.calculator.calculate_expected_returns(
                 pool,
@@ -247,7 +314,7 @@ class StrategyService:
             opportunity = PoolOpportunity(
                 pool_address=pool['address'],
                 pair=f"{pool.get('token0', {}).get('symbol', 'TOKEN0')}/{pool.get('token1', {}).get('symbol', 'TOKEN1')}",
-                score=score,
+                score=final_score,
                 expected_apr=returns['annualized_return'],
                 effective_apr=effective_apr,
                 apr_efficiency=apr_efficiency,
@@ -266,7 +333,7 @@ class StrategyService:
                     volume_tvl_ratio=pool.get('volume_24h', 0) / max(pool.get('tvl_usd', pool.get('tvl', 1)), 1),
                     slippage_estimate=slippage_breakdown['total_slippage']
                 ),
-                entry_conditions_met=self._check_entry_conditions(pool, score)
+                entry_conditions_met=self._check_entry_conditions(pool, final_score, effective_apr)
             )
             
             opportunities.append(opportunity)
@@ -338,13 +405,16 @@ class StrategyService:
             apr >= 80  # Minimum 80% APR from strategy specs
         )
     
-    def _check_entry_conditions(self, pool: Dict, score: float) -> bool:
+    def _check_entry_conditions(self, pool: Dict, score: float, effective_apr: float = None) -> bool:
         """Check if entry conditions are met."""
+        # Use effective APR if provided, otherwise fall back to base APR
+        apr_to_check = effective_apr if effective_apr is not None else pool.get('apr', 0)
+        
         return (
             score >= 60 and
             pool.get('tvl_usd', 0) >= 500_000 and
             pool.get('volume_24h', 0) >= 100_000 and
-            pool.get('apr', 0) >= 80
+            apr_to_check >= 50  # Lower threshold for effective APR (50% instead of 80%)
         )
     
     async def analyze_entry(
@@ -366,9 +436,8 @@ class StrategyService:
         else:
             warnings = []
         
-        # Calculate confidence score
+        # Calculate base pool score
         pool_score = self.calculator.calculate_pool_score(pool)
-        confidence_score = min(100, pool_score * 1.2)  # Boost for entry analysis
         
         # Calculate slippage
         slippage_breakdown = self.slippage_calc.calculate_slippage_breakdown(
@@ -414,13 +483,19 @@ class StrategyService:
         
         volatility = pool.get('volatility_24h', 20)
         tick_spacing = pool.get('tick_spacing', 100)  # Default to 100 if not provided
+        base_apr = pool.get('apr', 100)
+        tvl = pool.get('tvl_usd', pool.get('tvl', 1_000_000))
+        volume_24h = pool.get('volume_24h', 500_000)
         
-        # Calculate range relative to current tick
+        # Calculate range relative to current tick with enhanced parameters
         lower_tick, upper_tick = self.calculator.calculate_optimal_range_from_tick(
             current_tick,
             volatility,
             'balanced',  # Use balanced risk profile for all
-            tick_spacing
+            tick_spacing,
+            base_apr,
+            tvl,
+            volume_24h
         )
         
         # Calculate prices from ticks
@@ -461,12 +536,27 @@ class StrategyService:
         )
         apr_efficiency = self.effective_apr_calc.calculate_apr_efficiency(base_apr, effective_apr)
         
-        # Determine if should enter
+        # Calculate confidence score based on both pool score and effective APR
+        # Weight the score to consider actual returns we'll get
+        base_confidence = pool_score * 0.6  # 60% weight on pool fundamentals
+        apr_confidence = min(100, (effective_apr / 100) * 40)  # 40% weight on effective APR
+        confidence_score = min(100, base_confidence + apr_confidence)
+        
+        # Adjust confidence based on APR efficiency
+        if apr_efficiency < 10:  # Less than 10% efficiency is very poor
+            confidence_score *= 0.5
+        elif apr_efficiency < 20:  # Less than 20% efficiency is poor
+            confidence_score *= 0.75
+        
+        # Determine if should enter based on effective APR
+        # Use effective APR for the entry decision since that's what we'll actually earn
         should_enter = (
             confidence_score >= 70 and
             slippage_breakdown['total_slippage'] <= 2.0 and
             request.pool_address.lower() in whitelisted_lower and
-            self._check_entry_conditions(pool, pool_score)
+            effective_apr >= 50 and  # Minimum 50% effective APR for entry
+            pool.get('tvl_usd', 0) >= 500_000 and
+            pool.get('volume_24h', 0) >= 100_000
         )
         
         # Add warnings for risks

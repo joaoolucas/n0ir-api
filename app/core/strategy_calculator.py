@@ -212,45 +212,83 @@ class StrategyCalculator:
         current_tick: int,
         volatility_24h: float,
         risk_profile: str = 'balanced',
-        tick_spacing: int = 100
+        tick_spacing: int = 100,
+        base_apr: float = 100,
+        tvl: float = 1_000_000,
+        volume_24h: float = 500_000
     ) -> Tuple[int, int]:
         """
-        Calculate optimal tick range based on current tick.
+        Advanced optimal tick range calculation using quantitative optimization.
+        
+        This implementation maximizes risk-adjusted returns by balancing:
+        - Effective APR (concentration benefit)
+        - Range break probability (rebalancing cost)
+        - Market depth (execution quality)
+        - Volatility regime (risk management)
         
         Args:
             current_tick: Current pool tick
             volatility_24h: 24-hour volatility percentage
             risk_profile: Risk profile for range calculation
             tick_spacing: Pool's tick spacing
+            base_apr: Base APR of the pool
+            tvl: Total value locked in USD
+            volume_24h: 24-hour trading volume in USD
             
         Returns:
             Tuple of (lower_tick, upper_tick)
         """
-        profile = self.RISK_PROFILES[risk_profile]
-        range_multiplier = profile['range_multiplier']
+        # Convert volatility to daily standard deviation
+        # Annual vol / sqrt(365) = daily vol
+        daily_vol = volatility_24h / 100 / math.sqrt(365)
         
-        # Calculate desired price range as percentage
-        # For concentrated liquidity, we want tighter ranges
-        # Base range = volatility * multiplier (e.g., 20% volatility * 1.5 = 30% range)
-        desired_range_percent = (volatility_24h / 100) * range_multiplier
+        # Step 1: Calculate base range using 2-sigma confidence for 7-day horizon
+        # This gives ~95% probability of staying in range for 7 days
+        time_horizon_days = 7
+        base_range = 2 * daily_vol * math.sqrt(time_horizon_days)
         
-        # Cap the maximum range to ensure capital efficiency
-        # Even for volatile pairs, we don't want more than 40% total range
-        max_range_percent = 0.40  # 40% max total range
-        desired_range_percent = min(desired_range_percent, max_range_percent)
+        # Step 2: Apply tick spacing constraints
+        # Minimum range must be at least 2x tick spacing to avoid too frequent rebalancing
+        min_ticks = max(20, tick_spacing * 2)
+        min_range = (1.0001 ** min_ticks - 1) * 2
+        base_range = max(base_range, min_range)
         
-        # Ensure minimum range based on tick spacing
-        # For tick spacing 200, minimum range should be ~2%
-        min_range_percent = max(0.02, tick_spacing / 10000)
-        desired_range_percent = max(desired_range_percent, min_range_percent)
+        # Step 3: Market depth adjustment
+        # Deeper markets can support tighter ranges
+        depth_factor = self._calculate_market_depth_factor(tvl, volume_24h)
+        adjusted_range = base_range * depth_factor
         
-        # Split range equally above and below
-        range_each_side = desired_range_percent / 2
+        # Step 4: Calculate maximum efficient range
+        # Beyond this point, effective APR becomes too low (<10% efficiency)
+        max_efficient_range = self._calculate_max_efficient_range(base_apr, tick_spacing)
         
-        # Calculate current price from tick
+        # Step 5: Apply risk profile adjustment
+        risk_multipliers = {
+            'conservative': 1.3,   # 30% wider range for safety
+            'balanced': 1.0,       # Optimal range
+            'aggressive': 0.8      # 20% tighter range for higher APR
+        }
+        profile_multiplier = risk_multipliers.get(risk_profile, 1.0)
+        profile_range = adjusted_range * profile_multiplier
+        
+        # Step 6: Apply intelligent capping
+        # Never exceed 20% total range for capital efficiency
+        # Never go below 2% to prevent excessive rebalancing
+        # Never exceed max efficient range
+        final_range = min(max(profile_range, 0.02), min(0.20, max_efficient_range))
+        
+        # Step 7: Apply special adjustments for extreme volatility
+        if volatility_24h > 100:  # Extremely volatile (memecoins, etc)
+            # Force wider range for safety, but still cap at 20%
+            final_range = min(0.20, max(final_range, 0.15))
+        elif volatility_24h < 5:  # Very stable pairs
+            # Can use tighter range, but ensure minimum
+            final_range = max(0.02, min(final_range, 0.05))
+        
+        # Step 8: Convert to ticks
+        range_each_side = final_range / 2
         current_price = 1.0001 ** current_tick
         
-        # Calculate target prices
         lower_price = current_price * (1 - range_each_side)
         upper_price = current_price * (1 + range_each_side)
         
@@ -263,6 +301,280 @@ class StrategyCalculator:
         upper_tick = ((upper_tick // tick_spacing) + 1) * tick_spacing
         
         return (lower_tick, upper_tick)
+    
+    def _calculate_market_depth_factor(self, tvl: float, volume_24h: float) -> float:
+        """
+        Calculate market depth adjustment factor.
+        Deeper markets with higher liquidity can support tighter ranges.
+        
+        Args:
+            tvl: Total value locked in USD
+            volume_24h: 24-hour trading volume in USD
+            
+        Returns:
+            Depth factor (0.7-1.5, lower = tighter range allowed)
+        """
+        # Base depth factor based on TVL
+        if tvl >= 10_000_000:  # $10M+ TVL - very deep market
+            depth_factor = 0.8
+        elif tvl >= 5_000_000:  # $5M+ TVL - deep market
+            depth_factor = 0.9
+        elif tvl >= 1_000_000:  # $1M+ TVL - normal market
+            depth_factor = 1.0
+        elif tvl >= 500_000:  # $500k+ TVL - shallow market
+            depth_factor = 1.2
+        else:  # <$500k TVL - very shallow market
+            depth_factor = 1.5
+        
+        # Adjust based on volume/TVL ratio (market activity)
+        volume_tvl_ratio = volume_24h / tvl if tvl > 0 else 0
+        
+        if volume_tvl_ratio > 1.0:  # Very high activity
+            # High volume indicates active trading, can use tighter range
+            depth_factor *= 0.9
+        elif volume_tvl_ratio > 0.5:  # Normal activity
+            # No adjustment needed
+            pass
+        elif volume_tvl_ratio > 0.1:  # Low activity
+            # Lower volume means less price discovery, need wider range
+            depth_factor *= 1.1
+        else:  # Very low activity
+            # Almost no trading, need much wider range
+            depth_factor *= 1.3
+        
+        # Clamp to reasonable bounds
+        return max(0.7, min(1.5, depth_factor))
+    
+    def _calculate_max_efficient_range(self, base_apr: float, tick_spacing: int) -> float:
+        """
+        Calculate maximum range where effective APR stays above 10% of base APR.
+        Beyond this range, capital efficiency becomes too poor.
+        
+        Args:
+            base_apr: Base APR of the pool
+            tick_spacing: Pool's tick spacing
+            
+        Returns:
+            Maximum efficient range as decimal (e.g., 0.2 for 20%)
+        """
+        # We want: effective_apr >= 0.1 * base_apr
+        # Using the formula from effective_apr_calculator
+        
+        multiplier = 100 / tick_spacing
+        target_efficiency = 0.10  # We want at least 10% efficiency
+        
+        if tick_spacing < 100:
+            # Formula: effective = base / ((range * multiplier * 100) + 1)
+            # We want: 0.1 * base = base / ((range * multiplier * 100) + 1)
+            # Solving: range = (10 - 1) / (multiplier * 100)
+            max_range = 9 / (multiplier * 100)
+        else:
+            # Formula: effective = base / (range * multiplier * 100)
+            # We want: 0.1 * base = base / (range * multiplier * 100)
+            # Solving: range = 10 / (multiplier * 100)
+            max_range = 10 / (multiplier * 100)
+        
+        # Apply reasonable bounds
+        # Never exceed 30% range even if formula allows it
+        # Never less than 5% to ensure some flexibility
+        return max(0.05, min(0.30, max_range))
+    
+    def calculate_simple_safety_score(self, pool_data: Dict) -> float:
+        """
+        Calculate simple safety score using only existing data.
+        Score = TVL_score * 0.4 + Volume_score * 0.3 + Token_price_score * 0.3
+        
+        Returns score 0-100, where 100 is safest.
+        """
+        # TVL Score (0-100): Log scale, $10M+ gets 100
+        tvl = pool_data.get('tvl_usd', pool_data.get('tvl', 0))
+        if tvl >= 10_000_000:
+            tvl_score = 100
+        elif tvl >= 5_000_000:
+            tvl_score = 90
+        elif tvl >= 2_000_000:
+            tvl_score = 75
+        elif tvl >= 1_000_000:
+            tvl_score = 60
+        elif tvl >= 500_000:
+            tvl_score = 45
+        elif tvl >= 250_000:
+            tvl_score = 30
+        else:
+            tvl_score = max(0, (tvl / 250_000) * 30)
+        
+        # Volume Score (0-100): Based on volume/TVL ratio
+        volume_24h = pool_data.get('volume_24h', 0)
+        volume_tvl_ratio = volume_24h / tvl if tvl > 0 else 0
+        
+        if volume_tvl_ratio >= 0.5:  # 50%+ daily volume = very healthy
+            volume_score = 100
+        elif volume_tvl_ratio >= 0.3:
+            volume_score = 85
+        elif volume_tvl_ratio >= 0.15:
+            volume_score = 70
+        elif volume_tvl_ratio >= 0.05:
+            volume_score = 50
+        else:
+            volume_score = max(0, (volume_tvl_ratio / 0.05) * 50)
+        
+        # Token Price Score (0-100): Use prices as market cap proxy
+        # Higher priced tokens often = more established
+        token0_price = pool_data.get('token0', {}).get('price_usd', 0)
+        token1_price = pool_data.get('token1', {}).get('price_usd', 0)
+        
+        # Check for stablecoins (price near $1)
+        token0_symbol = pool_data.get('token0', {}).get('symbol', '').upper()
+        token1_symbol = pool_data.get('token1', {}).get('symbol', '').upper()
+        
+        stablecoins = {'USDC', 'USDT', 'DAI', 'EURC', 'FRAX', 'BUSD'}
+        has_stable = token0_symbol in stablecoins or token1_symbol in stablecoins
+        
+        if has_stable:
+            # Stablecoin pairs get bonus safety score
+            token_score = 80
+        else:
+            # For non-stable pairs, use average price as proxy
+            avg_price = (token0_price + token1_price) / 2 if (token0_price + token1_price) > 0 else 0
+            
+            if avg_price >= 1000:  # High value tokens (ETH, BTC level)
+                token_score = 90
+            elif avg_price >= 100:
+                token_score = 75
+            elif avg_price >= 10:
+                token_score = 60
+            elif avg_price >= 1:
+                token_score = 45
+            else:
+                token_score = max(20, avg_price * 45)  # Min 20 for any token
+        
+        # Calculate weighted safety score
+        safety_score = (tvl_score * 0.4) + (volume_score * 0.3) + (token_score * 0.3)
+        
+        return min(100, max(0, safety_score))
+    
+    def calculate_dynamic_position_limit(self, safety_score: float, wallet_size: float) -> float:
+        """
+        Calculate dynamic position limit based on safety and wallet size.
+        Safer pools can get larger allocations.
+        
+        Returns: Maximum position size as percentage (0.1 = 10%)
+        """
+        # Base limits by safety tier
+        if safety_score >= 80:  # Very safe
+            base_limit = 0.40  # 40% max
+        elif safety_score >= 65:  # Safe
+            base_limit = 0.30  # 30% max
+        elif safety_score >= 50:  # Moderate
+            base_limit = 0.20  # 20% max
+        elif safety_score >= 35:  # Risky
+            base_limit = 0.15  # 15% max
+        else:  # Very risky
+            base_limit = 0.10  # 10% max
+        
+        # Adjust for wallet size (larger wallets should diversify more)
+        if wallet_size >= 100_000:
+            # Large wallets: reduce limits for diversification
+            wallet_multiplier = 0.7
+        elif wallet_size >= 50_000:
+            wallet_multiplier = 0.8
+        elif wallet_size >= 25_000:
+            wallet_multiplier = 0.9
+        elif wallet_size >= 10_000:
+            wallet_multiplier = 1.0
+        else:
+            # Small wallets: can concentrate more
+            wallet_multiplier = 1.2
+        
+        return base_limit * wallet_multiplier
+    
+    def calculate_allocation_weight(self, pool_data: Dict, safety_score: float) -> float:
+        """
+        Calculate allocation weight balancing safety and APR.
+        
+        Returns: Allocation weight (higher = more allocation)
+        """
+        # Get effective APR (already calculated)
+        apr = pool_data.get('effective_apr', pool_data.get('apr', 0))
+        
+        # APR Score (0-100): Normalize APR to score
+        if apr >= 200:
+            apr_score = 100
+        elif apr >= 150:
+            apr_score = 85
+        elif apr >= 100:
+            apr_score = 70
+        elif apr >= 75:
+            apr_score = 55
+        elif apr >= 50:
+            apr_score = 40
+        else:
+            apr_score = max(0, (apr / 50) * 40)
+        
+        # Balance safety vs returns
+        # Conservative: 60% safety, 40% APR
+        # Can adjust these weights based on risk profile
+        allocation_weight = (safety_score * 0.6) + (apr_score * 0.4)
+        
+        return allocation_weight
+    
+    def calculate_range_break_probability(
+        self,
+        range_width: float,
+        daily_volatility: float,
+        time_horizon_days: int = 7
+    ) -> float:
+        """
+        Calculate probability of price breaking out of range within time horizon.
+        Uses normal distribution assumption for price movements.
+        
+        Args:
+            range_width: Total range width as decimal (e.g., 0.1 for 10%)
+            daily_volatility: Daily volatility as decimal
+            time_horizon_days: Number of days to consider
+            
+        Returns:
+            Probability of range break (0-1)
+        """
+        import math
+        
+        # Calculate standard deviation over time horizon
+        # Volatility scales with square root of time
+        period_volatility = daily_volatility * math.sqrt(time_horizon_days)
+        
+        # Range is split equally above and below
+        half_range = range_width / 2
+        
+        # Calculate z-score: how many standard deviations to reach range boundary
+        if period_volatility > 0:
+            z_score = half_range / period_volatility
+            
+            # Use normal CDF approximation
+            # P(break) = 2 * P(Z > z_score) = 2 * (1 - Φ(z_score))
+            # Using approximation: Φ(z) ≈ 0.5 + 0.5 * erf(z/√2)
+            # For simplicity, using a polynomial approximation
+            
+            # Approximate normal CDF
+            def norm_cdf(z):
+                # Approximation accurate to ~0.01
+                t = 1 / (1 + 0.2316419 * abs(z))
+                d = 0.3989423 * math.exp(-z * z / 2)
+                prob = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))))
+                if z > 0:
+                    return 1 - prob
+                else:
+                    return prob
+            
+            # Probability of staying within range
+            prob_in_range = norm_cdf(z_score) - norm_cdf(-z_score)
+            
+            # Probability of breaking out
+            prob_break = 1 - prob_in_range
+            
+            return min(1.0, max(0.0, prob_break))
+        else:
+            # No volatility means no break
+            return 0.0
     
     def calculate_optimal_position_count(self, total_capital: float, apr: float) -> int:
         """
@@ -325,7 +637,7 @@ class StrategyCalculator:
         existing_positions: List[Dict] = None
     ) -> Tuple[float, float]:
         """
-        Calculate optimal position size for individual agent.
+        Calculate optimal position size with dynamic limits based on pool safety.
         
         Args:
             pool_stats: Pool statistics including APR, volatility
@@ -336,33 +648,38 @@ class StrategyCalculator:
         Returns:
             Tuple of (recommended_amount, max_amount)
         """
+        # Calculate safety score for this pool
+        safety_score = self.calculate_simple_safety_score(pool_stats)
+        
+        # Get dynamic position limit based on safety and wallet size
+        max_position_pct = self.calculate_dynamic_position_limit(safety_score, available_capital)
+        
+        # Calculate allocation weight (combination of safety and APR)
+        allocation_weight = self.calculate_allocation_weight(pool_stats, safety_score)
+        
+        # Get APR for minimum position calculation
         apr = pool_stats.get('apr', 100)  # Default 100% APR
         
         # Calculate optimal number of positions for this capital level
         optimal_position_count = self.calculate_optimal_position_count(available_capital, apr)
         
-        # Base allocation per position
-        base_allocation = available_capital / optimal_position_count if optimal_position_count > 0 else available_capital
+        # Base allocation from weight (this will be normalized by service layer)
+        # For now, use a simple approach based on allocation weight
+        base_allocation = available_capital * (allocation_weight / 100) / optimal_position_count
+        
+        # Apply dynamic maximum based on safety score
+        max_amount = available_capital * max_position_pct
         
         # Get minimum position size based on APR
         min_position = self.calculate_minimum_position_size(apr)
         
-        # If base allocation is below minimum, reduce position count
-        if base_allocation < min_position:
-            adjusted_count = max(1, int(available_capital / min_position))
-            recommended_amount = available_capital / adjusted_count
-        else:
-            recommended_amount = base_allocation
-        
-        # Apply maximum concentration limit (25% for individual agents)
-        max_single_position = available_capital * 0.25
-        recommended_amount = min(recommended_amount, max_single_position)
-        
-        # Ensure we meet the minimum
+        # Calculate recommended amount
+        recommended_amount = min(base_allocation, max_amount)
         recommended_amount = max(recommended_amount, min_position)
         
-        # For individual agents, max amount is capped at 25% of capital
-        max_amount = min(available_capital * 0.25, available_capital)
+        # If we can't meet minimum with available capital, adjust
+        if recommended_amount > available_capital:
+            return (min_position, min_position)
         
         return (recommended_amount, max_amount)
     

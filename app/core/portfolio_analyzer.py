@@ -479,3 +479,185 @@ class PortfolioAnalyzer:
             'average_correlation': avg_correlation,
             'high_correlation_warning': avg_correlation > self.RISK_THRESHOLDS['max_correlation']
         }
+    
+    def get_dynamic_thresholds(
+        self,
+        positions: List[Dict],
+        wallet_size: float,
+        market_conditions: Optional[Dict] = None
+    ) -> Dict:
+        """
+        Calculate dynamic risk thresholds based on portfolio safety and market conditions.
+        
+        These thresholds adapt based on:
+        - Portfolio safety score
+        - Wallet size (larger wallets need stricter thresholds)
+        - Current market conditions
+        - Portfolio composition
+        
+        Args:
+            positions: Current positions
+            wallet_size: Total wallet value in USD
+            market_conditions: Optional market condition data
+            
+        Returns:
+            Dynamic risk thresholds dictionary
+        """
+        # Import calculator for safety scores
+        from app.core.strategy_calculator import StrategyCalculator
+        calculator = StrategyCalculator()
+        
+        # Calculate average safety score of current positions
+        avg_safety_score = 0
+        if positions:
+            safety_scores = []
+            for position in positions:
+                # Build pool data from position for safety calculation
+                pool_data = {
+                    'tvl_usd': position.get('pool_tvl', position.get('tvl', 1_000_000)),
+                    'volume_24h': position.get('volume_24h', 100_000),
+                    'token0': {'price_usd': position.get('token0_price', 1)},
+                    'token1': {'price_usd': position.get('token1_price', 1)}
+                }
+                safety_scores.append(calculator.calculate_simple_safety_score(pool_data))
+            avg_safety_score = sum(safety_scores) / len(safety_scores)
+        else:
+            # No positions = neutral safety
+            avg_safety_score = 50
+        
+        # Base thresholds (copy from class defaults)
+        thresholds = self.RISK_THRESHOLDS.copy()
+        
+        # Adjust based on portfolio safety
+        if avg_safety_score >= 70:  # Very safe portfolio
+            # Can tolerate slightly higher concentration
+            thresholds['max_pool_concentration'] = 0.30  # 30% (from 25%)
+            thresholds['max_token_concentration'] = 0.45  # 45% (from 40%)
+            thresholds['max_var_1d'] = 0.06  # 6% (from 5%)
+            thresholds['max_var_7d'] = 0.12  # 12% (from 10%)
+        elif avg_safety_score >= 50:  # Moderate safety
+            # Keep defaults
+            pass
+        else:  # Low safety portfolio
+            # Need stricter thresholds
+            thresholds['max_pool_concentration'] = 0.20  # 20% (from 25%)
+            thresholds['max_token_concentration'] = 0.35  # 35% (from 40%)
+            thresholds['max_var_1d'] = 0.04  # 4% (from 5%)
+            thresholds['max_var_7d'] = 0.08  # 8% (from 10%)
+        
+        # Adjust based on wallet size
+        if wallet_size >= 100_000:  # Large wallet
+            # Stricter concentration limits for diversification
+            thresholds['max_pool_concentration'] *= 0.8
+            thresholds['max_token_concentration'] *= 0.85
+            thresholds['min_sharpe_ratio'] = 2.0  # Higher Sharpe requirement
+        elif wallet_size >= 50_000:  # Medium-large wallet
+            thresholds['max_pool_concentration'] *= 0.9
+            thresholds['max_token_concentration'] *= 0.95
+            thresholds['min_sharpe_ratio'] = 1.75
+        elif wallet_size >= 25_000:  # Medium wallet
+            # Keep defaults
+            pass
+        elif wallet_size >= 10_000:  # Small-medium wallet
+            # Can concentrate a bit more
+            thresholds['max_pool_concentration'] *= 1.1
+            thresholds['max_token_concentration'] *= 1.05
+            thresholds['min_sharpe_ratio'] = 1.25
+        else:  # Small wallet (<$10k)
+            # Can concentrate more due to limited capital
+            thresholds['max_pool_concentration'] = min(0.40, thresholds['max_pool_concentration'] * 1.2)
+            thresholds['max_token_concentration'] = min(0.50, thresholds['max_token_concentration'] * 1.1)
+            thresholds['min_sharpe_ratio'] = 1.0
+        
+        # Adjust based on market conditions if provided
+        if market_conditions:
+            market_volatility = market_conditions.get('market_volatility', 50)
+            
+            if market_volatility > 80:  # High volatility market
+                # Stricter VaR limits
+                thresholds['max_var_1d'] *= 0.8
+                thresholds['max_var_7d'] *= 0.8
+                thresholds['max_correlation'] = 0.6  # Lower correlation limit
+            elif market_volatility > 60:  # Moderate-high volatility
+                thresholds['max_var_1d'] *= 0.9
+                thresholds['max_var_7d'] *= 0.9
+            elif market_volatility < 20:  # Very low volatility
+                # Can be slightly more aggressive
+                thresholds['max_var_1d'] *= 1.2
+                thresholds['max_var_7d'] *= 1.2
+                thresholds['max_correlation'] = 0.8  # Higher correlation acceptable
+        
+        # Calculate position count recommendations
+        optimal_positions = self._calculate_optimal_position_count(wallet_size, avg_safety_score)
+        
+        return {
+            'thresholds': thresholds,
+            'portfolio_safety_score': avg_safety_score,
+            'wallet_size_category': self._get_wallet_size_category(wallet_size),
+            'recommended_position_count': optimal_positions,
+            'adjustments_applied': {
+                'safety_based': avg_safety_score < 50 or avg_safety_score >= 70,
+                'size_based': wallet_size < 25_000 or wallet_size >= 50_000,
+                'market_based': market_conditions is not None
+            }
+        }
+    
+    def _calculate_optimal_position_count(self, wallet_size: float, safety_score: float) -> int:
+        """
+        Calculate optimal number of positions based on wallet size and safety.
+        
+        Args:
+            wallet_size: Total wallet value
+            safety_score: Average portfolio safety score
+            
+        Returns:
+            Optimal number of positions
+        """
+        # Base count by wallet size
+        if wallet_size < 1_000:
+            base_count = 1
+        elif wallet_size < 5_000:
+            base_count = 2
+        elif wallet_size < 10_000:
+            base_count = 3
+        elif wallet_size < 25_000:
+            base_count = 4
+        elif wallet_size < 50_000:
+            base_count = 5
+        elif wallet_size < 100_000:
+            base_count = 7
+        else:
+            base_count = 10
+        
+        # Adjust based on safety
+        if safety_score >= 70:
+            # Very safe = can concentrate more
+            return max(1, base_count - 1)
+        elif safety_score < 40:
+            # Low safety = need more diversification
+            return min(15, base_count + 2)
+        
+        return base_count
+    
+    def _get_wallet_size_category(self, wallet_size: float) -> str:
+        """
+        Categorize wallet size.
+        
+        Args:
+            wallet_size: Wallet value in USD
+            
+        Returns:
+            Category string
+        """
+        if wallet_size < 1_000:
+            return "micro"
+        elif wallet_size < 10_000:
+            return "small"
+        elif wallet_size < 25_000:
+            return "medium"
+        elif wallet_size < 50_000:
+            return "large"
+        elif wallet_size < 100_000:
+            return "xlarge"
+        else:
+            return "whale"
