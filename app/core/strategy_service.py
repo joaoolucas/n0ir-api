@@ -73,6 +73,31 @@ class StrategyService:
         self.CACHE_TTL_ANALYSIS = 60       # 1 minute
         self.CACHE_TTL_MONITORING = 30     # 30 seconds
     
+    def _calculate_price_from_sqrt_x96(self, sqrt_price_x96: str, token0_decimals: int = 18, token1_decimals: int = 18) -> float:
+        """Calculate price from sqrtPriceX96.
+        
+        Returns the price of token0 in terms of token1.
+        """
+        try:
+            sqrt_price_x96_int = int(sqrt_price_x96)
+            if sqrt_price_x96_int == 0:
+                return 1.0
+            
+            # Convert from X96 format
+            sqrt_price = sqrt_price_x96_int / (2 ** 96)
+            
+            # Square to get the price
+            price = sqrt_price ** 2
+            
+            # Adjust for decimals difference
+            # Price is token1/token0, so we need to adjust decimals
+            decimal_adjustment = 10 ** (token1_decimals - token0_decimals)
+            adjusted_price = price * decimal_adjustment
+            
+            return adjusted_price
+        except (ValueError, TypeError):
+            return 1.0
+    
     async def find_opportunities(
         self,
         request: OpportunitiesRequest
@@ -147,11 +172,27 @@ class StrategyService:
             )
             
             # Calculate optimal range
-            current_price = pool.get('current_price', 1.0)
+            # Get current tick from pool data
+            current_tick = pool.get('current_tick', 0)
+            
+            # Calculate price from sqrtPriceX96 if available
+            if 'sqrt_price_x96' in pool:
+                token0_decimals = pool.get('token0', {}).get('decimals', 18)
+                token1_decimals = pool.get('token1', {}).get('decimals', 18)
+                current_price = self._calculate_price_from_sqrt_x96(
+                    pool['sqrt_price_x96'],
+                    token0_decimals,
+                    token1_decimals
+                )
+            else:
+                current_price = pool.get('current_price', 1.0)
+            
             volatility = pool.get('volatility_24h', 20)
             tick_spacing = pool.get('tick_spacing', 100)  # Default to 100 if not provided
-            lower_tick, upper_tick = self.calculator.calculate_optimal_range(
-                current_price,
+            
+            # Calculate range relative to current tick
+            lower_tick, upper_tick = self.calculator.calculate_optimal_range_from_tick(
+                current_tick,
                 volatility,
                 risk_profile,
                 tick_spacing
@@ -170,6 +211,23 @@ class StrategyService:
                 recommended_amount
             )
             
+            # Calculate prices from ticks
+            lower_price = self.calculator._tick_to_price(lower_tick)
+            upper_price = self.calculator._tick_to_price(upper_tick)
+            
+            # Use tick-based price for consistency
+            current_price_from_tick = self.calculator._tick_to_price(current_tick)
+            
+            # Calculate range percentages using tick-based prices for consistency
+            if current_price_from_tick > 0:
+                lower_percentage = ((current_price_from_tick - lower_price) / current_price_from_tick) * 100
+                upper_percentage = ((upper_price - current_price_from_tick) / current_price_from_tick) * 100
+                range_width_percentage = lower_percentage + upper_percentage
+            else:
+                lower_percentage = 0
+                upper_percentage = 0
+                range_width_percentage = 0
+            
             opportunity = PoolOpportunity(
                 pool_address=pool['address'],
                 pair=f"{pool.get('token0', {}).get('symbol', 'TOKEN0')}/{pool.get('token1', {}).get('symbol', 'TOKEN1')}",
@@ -178,7 +236,12 @@ class StrategyService:
                 recommended_amount=recommended_amount,
                 recommended_range=RangeParameters(
                     lower_tick=lower_tick,
-                    upper_tick=upper_tick
+                    upper_tick=upper_tick,
+                    lower_price=lower_price,
+                    upper_price=upper_price,
+                    range_percentage=range_width_percentage,
+                    lower_percentage=lower_percentage,
+                    upper_percentage=upper_percentage
                 ),
                 risk_metrics=RiskMetrics(
                     volatility_24h=volatility,
@@ -278,8 +341,9 @@ class StrategyService:
         if not pool:
             raise ValueError(f"Pool {request.pool_address} not found")
         
-        # Check if pool is whitelisted
-        if request.pool_address not in WHITELISTED_POOLS:
+        # Check if pool is whitelisted (case-insensitive comparison)
+        whitelisted_lower = {addr.lower() for addr in WHITELISTED_POOLS}
+        if request.pool_address.lower() not in whitelisted_lower:
             warnings = ["Pool is not in the whitelist"]
         else:
             warnings = []
@@ -315,25 +379,64 @@ class StrategyService:
         )
         
         # Always calculate optimal range - this is our proposal to the executor
-        current_price = pool.get('current_price', 1.0)
+        # Get current tick from pool
+        current_tick = pool.get('current_tick', 0)
+        
+        # Calculate price from sqrtPriceX96 if available
+        if 'sqrt_price_x96' in pool:
+            token0_decimals = pool.get('token0', {}).get('decimals', 18)
+            token1_decimals = pool.get('token1', {}).get('decimals', 18)
+            current_price = self._calculate_price_from_sqrt_x96(
+                pool['sqrt_price_x96'],
+                token0_decimals,
+                token1_decimals
+            )
+        else:
+            current_price = pool.get('current_price', 1.0)
+        
         volatility = pool.get('volatility_24h', 20)
         tick_spacing = pool.get('tick_spacing', 100)  # Default to 100 if not provided
-        lower_tick, upper_tick = self.calculator.calculate_optimal_range(
-            current_price,
+        
+        # Calculate range relative to current tick
+        lower_tick, upper_tick = self.calculator.calculate_optimal_range_from_tick(
+            current_tick,
             volatility,
             'balanced',  # Use balanced risk profile for all
             tick_spacing
         )
+        
+        # Calculate prices from ticks
+        lower_price = self.calculator._tick_to_price(lower_tick)
+        upper_price = self.calculator._tick_to_price(upper_tick)
+        
+        # Use tick-based price for consistency
+        current_price_from_tick = self.calculator._tick_to_price(current_tick)
+        
+        # Calculate range percentages using tick-based prices for consistency
+        if current_price_from_tick > 0:
+            lower_percentage = ((current_price_from_tick - lower_price) / current_price_from_tick) * 100
+            upper_percentage = ((upper_price - current_price_from_tick) / current_price_from_tick) * 100
+            range_width_percentage = lower_percentage + upper_percentage
+        else:
+            lower_percentage = 0
+            upper_percentage = 0
+            range_width_percentage = 0
+        
         optimal_range = RangeParameters(
             lower_tick=lower_tick,
-            upper_tick=upper_tick
+            upper_tick=upper_tick,
+            lower_price=lower_price,
+            upper_price=upper_price,
+            range_percentage=range_width_percentage,
+            lower_percentage=lower_percentage,
+            upper_percentage=upper_percentage
         )
         
         # Determine if should enter
         should_enter = (
             confidence_score >= 70 and
             slippage_breakdown['total_slippage'] <= 2.0 and
-            request.pool_address in WHITELISTED_POOLS and
+            request.pool_address.lower() in whitelisted_lower and
             self._check_entry_conditions(pool, pool_score)
         )
         
@@ -375,7 +478,17 @@ class StrategyService:
                 continue
             
             # Check range status
-            current_price = pool.get('current_price', pool.get('token0_price', 1.0))
+            # Calculate price from sqrtPriceX96 if available
+            if 'sqrt_price_x96' in pool:
+                token0_decimals = pool.get('token0', {}).get('decimals', 18)
+                token1_decimals = pool.get('token1', {}).get('decimals', 18)
+                current_price = self._calculate_price_from_sqrt_x96(
+                    pool['sqrt_price_x96'],
+                    token0_decimals,
+                    token1_decimals
+                )
+            else:
+                current_price = pool.get('current_price', pool.get('token0_price', 1.0))
             
             # Build position info for range detection
             position_info = {
@@ -488,7 +601,17 @@ class StrategyService:
         if not pool:
             raise ValueError(f"Pool {pool_address} not found")
         
-        current_price = pool.get('current_price', pool.get('token0_price', 1.0))
+        # Calculate price from sqrtPriceX96 if available
+        if 'sqrt_price_x96' in pool:
+            token0_decimals = pool.get('token0', {}).get('decimals', 18)
+            token1_decimals = pool.get('token1', {}).get('decimals', 18)
+            current_price = self._calculate_price_from_sqrt_x96(
+                pool['sqrt_price_x96'],
+                token0_decimals,
+                token1_decimals
+            )
+        else:
+            current_price = pool.get('current_price', pool.get('token0_price', 1.0))
         
         # Calculate range boundaries from ticks
         tick_lower = position_data.get('tick_lower', 0)

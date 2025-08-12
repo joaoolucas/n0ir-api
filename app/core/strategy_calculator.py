@@ -203,9 +203,66 @@ class StrategyCalculator:
         return int(math.log(math.sqrt(price)) / math.log(1.0001))
     
     def _tick_to_price(self, tick: int) -> float:
-        """Convert tick to price (simplified Uniswap V3 math)."""
-        # price = (1.0001^tick)^2
-        return (1.0001 ** tick) ** 2
+        """Convert tick to price (Uniswap V3 math)."""
+        # price = 1.0001^tick
+        return 1.0001 ** tick
+    
+    def calculate_optimal_range_from_tick(
+        self,
+        current_tick: int,
+        volatility_24h: float,
+        risk_profile: str = 'balanced',
+        tick_spacing: int = 100
+    ) -> Tuple[int, int]:
+        """
+        Calculate optimal tick range based on current tick.
+        
+        Args:
+            current_tick: Current pool tick
+            volatility_24h: 24-hour volatility percentage
+            risk_profile: Risk profile for range calculation
+            tick_spacing: Pool's tick spacing
+            
+        Returns:
+            Tuple of (lower_tick, upper_tick)
+        """
+        profile = self.RISK_PROFILES[risk_profile]
+        range_multiplier = profile['range_multiplier']
+        
+        # Calculate desired price range as percentage
+        # For concentrated liquidity, we want tighter ranges
+        # Base range = volatility * multiplier (e.g., 20% volatility * 1.5 = 30% range)
+        desired_range_percent = (volatility_24h / 100) * range_multiplier
+        
+        # Cap the maximum range to ensure capital efficiency
+        # Even for volatile pairs, we don't want more than 40% total range
+        max_range_percent = 0.40  # 40% max total range
+        desired_range_percent = min(desired_range_percent, max_range_percent)
+        
+        # Ensure minimum range based on tick spacing
+        # For tick spacing 200, minimum range should be ~2%
+        min_range_percent = max(0.02, tick_spacing / 10000)
+        desired_range_percent = max(desired_range_percent, min_range_percent)
+        
+        # Split range equally above and below
+        range_each_side = desired_range_percent / 2
+        
+        # Calculate current price from tick
+        current_price = 1.0001 ** current_tick
+        
+        # Calculate target prices
+        lower_price = current_price * (1 - range_each_side)
+        upper_price = current_price * (1 + range_each_side)
+        
+        # Convert prices back to ticks
+        lower_tick = int(math.log(lower_price) / math.log(1.0001))
+        upper_tick = int(math.log(upper_price) / math.log(1.0001))
+        
+        # Align to tick spacing
+        lower_tick = (lower_tick // tick_spacing) * tick_spacing
+        upper_tick = ((upper_tick // tick_spacing) + 1) * tick_spacing
+        
+        return (lower_tick, upper_tick)
     
     def calculate_optimal_position_count(self, total_capital: float, apr: float) -> int:
         """

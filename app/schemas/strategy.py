@@ -15,6 +15,9 @@ class RangeParameters(BaseModel):
     upper_tick: int
     lower_price: Optional[float] = None
     upper_price: Optional[float] = None
+    range_percentage: Optional[float] = Field(None, description="Range width as percentage from current price")
+    lower_percentage: Optional[float] = Field(None, description="Percentage below current price")
+    upper_percentage: Optional[float] = Field(None, description="Percentage above current price")
 
 
 class RiskMetrics(BaseModel):
