@@ -456,65 +456,78 @@ class StrategyCalculator:
     def calculate_dynamic_position_limit(self, safety_score: float, wallet_size: float) -> float:
         """
         Calculate dynamic position limit based on safety and wallet size.
-        Safer pools can get larger allocations.
+        More aggressive limits for smaller wallets to ensure proper allocation.
         
         Returns: Maximum position size as percentage (0.1 = 10%)
         """
-        # Base limits by safety tier
+        # MORE AGGRESSIVE base limits by safety tier
         if safety_score >= 80:  # Very safe
-            base_limit = 0.40  # 40% max
+            base_limit = 0.50  # 50% max (was 40%)
         elif safety_score >= 65:  # Safe
-            base_limit = 0.30  # 30% max
+            base_limit = 0.40  # 40% max (was 30%)
         elif safety_score >= 50:  # Moderate
-            base_limit = 0.20  # 20% max
+            base_limit = 0.35  # 35% max (was 20%)
         elif safety_score >= 35:  # Risky
-            base_limit = 0.15  # 15% max
+            base_limit = 0.25  # 25% max (was 15%)
         else:  # Very risky
-            base_limit = 0.10  # 10% max
+            base_limit = 0.15  # 15% max (was 10%)
         
-        # Adjust for wallet size (larger wallets should diversify more)
+        # Adjust for wallet size - MORE AGGRESSIVE for small wallets
         if wallet_size >= 100_000:
             # Large wallets: reduce limits for diversification
-            wallet_multiplier = 0.7
+            wallet_multiplier = 0.6  # More diversification needed
         elif wallet_size >= 50_000:
-            wallet_multiplier = 0.8
+            wallet_multiplier = 0.7
         elif wallet_size >= 25_000:
-            wallet_multiplier = 0.9
+            wallet_multiplier = 0.8
         elif wallet_size >= 10_000:
-            wallet_multiplier = 1.0
+            wallet_multiplier = 1.0  # No adjustment
+        elif wallet_size >= 5_000:
+            # $5k-10k wallets: allow concentration for efficiency
+            wallet_multiplier = 1.3  # 30% boost
         else:
-            # Small wallets: can concentrate more
-            wallet_multiplier = 1.2
+            # <$5k wallets: heavy concentration is optimal
+            wallet_multiplier = 1.5  # 50% boost
         
         return base_limit * wallet_multiplier
     
     def calculate_allocation_weight(self, pool_data: Dict, safety_score: float) -> float:
         """
         Calculate allocation weight balancing safety and APR.
+        More balanced approach to include safer pools.
         
         Returns: Allocation weight (higher = more allocation)
         """
         # Get effective APR (already calculated)
         apr = pool_data.get('effective_apr', pool_data.get('apr', 0))
         
-        # APR Score (0-100): Normalize APR to score
+        # APR Score (0-100): More generous scoring for moderate APRs
         if apr >= 200:
             apr_score = 100
         elif apr >= 150:
-            apr_score = 85
+            apr_score = 90  # Was 85
         elif apr >= 100:
-            apr_score = 70
+            apr_score = 80  # Was 70
         elif apr >= 75:
-            apr_score = 55
+            apr_score = 70  # Was 55
         elif apr >= 50:
-            apr_score = 40
+            apr_score = 60  # Was 40 - big boost for 50%+ APR
+        elif apr >= 30:
+            apr_score = 45  # New tier for lower APR pools
         else:
-            apr_score = max(0, (apr / 50) * 40)
+            apr_score = max(0, (apr / 30) * 45)  # More generous base
         
-        # Balance safety vs returns
-        # Conservative: 60% safety, 40% APR
-        # Can adjust these weights based on risk profile
-        allocation_weight = (safety_score * 0.6) + (apr_score * 0.4)
+        # For high safety pools, give more weight to safety
+        # This helps USDC/WETH type pools compete
+        if safety_score >= 80:
+            # Very safe pools: 70% safety, 30% APR
+            allocation_weight = (safety_score * 0.7) + (apr_score * 0.3)
+        elif safety_score >= 65:
+            # Safe pools: balanced 50/50
+            allocation_weight = (safety_score * 0.5) + (apr_score * 0.5)
+        else:
+            # Riskier pools: favor APR more (40% safety, 60% APR)
+            allocation_weight = (safety_score * 0.4) + (apr_score * 0.6)
         
         return allocation_weight
     
@@ -579,6 +592,7 @@ class StrategyCalculator:
     def calculate_optimal_position_count(self, total_capital: float, apr: float) -> int:
         """
         Calculate optimal number of positions for individual agent.
+        More aggressive position counts for better capital utilization.
         
         Args:
             total_capital: Total available capital in USDC
@@ -587,22 +601,24 @@ class StrategyCalculator:
         Returns:
             Optimal number of positions
         """
-        # Simple tiered approach based on capital
+        # Optimized for Base L2's low gas costs - can have more positions
         if total_capital < 100:
             return 1  # Single position for very small amounts
         elif total_capital < 1000:
             return 1  # Still single position under $1k
+        elif total_capital < 3000:
+            return 2  # 2 positions for $1k-3k
         elif total_capital < 5000:
-            return min(2, max(1, int(total_capital / 1000)))
+            return 3  # 3 positions for $3k-5k (key change)
         elif total_capital < 10000:
-            return 3
+            return 4  # 4 positions for $5k-10k (was 3)
         elif total_capital < 25000:
-            return 4
+            return 5  # 5 positions for $10k-25k (was 4)
         elif total_capital < 50000:
-            return 5
+            return 6  # 6 positions for $25k-50k (was 5)
         else:
-            # $50k+ gets maximum 7 positions
-            return 7
+            # $50k+ gets maximum 8 positions (was 7)
+            return 8
     
     def calculate_minimum_position_size(self, apr: float) -> float:
         """

@@ -185,25 +185,43 @@ class StrategyService:
         # Sort by allocation weight (best opportunities first)
         pool_candidates.sort(key=lambda x: x['allocation_weight'], reverse=True)
         
-        # Calculate total weight for normalization
-        total_weight = sum(p['allocation_weight'] for p in pool_candidates)
+        # Take only the top N candidates based on optimal position count
+        # This ensures proper capital allocation to selected positions
+        top_candidates = pool_candidates[:max_new_positions]
         
-        # Second pass: Build opportunities with normalized allocations
+        # Calculate total weight ONLY for selected positions
+        total_weight = sum(p['allocation_weight'] for p in top_candidates)
+        
+        # Target 85-90% capital utilization for optimal allocation
+        # Small wallets should use more of their capital
+        if request.available_capital < 10_000:
+            target_utilization = 0.90  # Use 90% for small wallets
+        elif request.available_capital < 25_000:
+            target_utilization = 0.87  # Use 87% for medium wallets
+        else:
+            target_utilization = 0.85  # Use 85% for larger wallets
+        allocatable_capital = request.available_capital * target_utilization
+        
+        # Second pass: Build opportunities with proper allocations
         opportunities = []
-        for candidate in pool_candidates:
+        allocated_so_far = 0
+        
+        for i, candidate in enumerate(top_candidates):
             pool = candidate['pool']
             safety_score = candidate['safety_score']
             base_score = candidate['base_score']
             allocation_weight = candidate['allocation_weight']
             
-            # Calculate normalized allocation percentage
+            # Calculate allocation for THIS position among selected positions
             if total_weight > 0:
+                # Allocate based on weight among SELECTED positions only
                 allocation_pct = allocation_weight / total_weight
             else:
-                allocation_pct = 1.0 / len(pool_candidates) if pool_candidates else 0
+                # Equal allocation if no weights
+                allocation_pct = 1.0 / len(top_candidates) if top_candidates else 0
             
-            # Calculate actual position size based on normalized allocation
-            base_amount = request.available_capital * allocation_pct
+            # Calculate position size from allocatable capital
+            base_amount = allocatable_capital * allocation_pct
             
             # Get dynamic position limit based on safety score
             max_position_pct = self.calculator.calculate_dynamic_position_limit(
@@ -212,7 +230,21 @@ class StrategyService:
             )
             max_amount = request.available_capital * max_position_pct
             
-            # Apply dynamic maximum
+            # Apply dynamic maximum but be more aggressive for small wallets
+            # Small wallets need larger position sizes to be effective
+            if request.available_capital < 5_000:
+                # Very small wallet: allow up to 45% per position
+                aggressive_max = request.available_capital * 0.45
+                max_amount = max(max_amount, aggressive_max)
+            elif request.available_capital < 10_000:
+                # Small wallet: allow up to 40% per position
+                aggressive_max = request.available_capital * 0.40
+                max_amount = max(max_amount, aggressive_max)
+            elif request.available_capital < 25_000:
+                # Medium wallet: allow up to 35% per position
+                aggressive_max = request.available_capital * 0.35
+                max_amount = max(max_amount, aggressive_max)
+            
             recommended_amount = min(base_amount, max_amount)
             
             # Ensure minimum position size
@@ -224,6 +256,9 @@ class StrategyService:
                 continue
             
             recommended_amount = max(recommended_amount, min_position)
+            
+            # Track allocation
+            allocated_so_far += recommended_amount
             
             # Calculate optimal range
             # Get current tick from pool data
@@ -338,11 +373,14 @@ class StrategyService:
             
             opportunities.append(opportunity)
         
-        # Sort by score descending
-        opportunities.sort(key=lambda x: x.score, reverse=True)
+        # Log allocation efficiency
+        if allocated_so_far > 0:
+            allocation_efficiency = allocated_so_far / request.available_capital
+            logger.info(f"Allocation efficiency: {allocation_efficiency:.1%} of capital allocated across {len(opportunities)} positions")
         
-        # Limit to calculated max positions
-        opportunities = opportunities[:max_new_positions]
+        # Already limited to max_new_positions in selection phase
+        # Sort for display
+        opportunities.sort(key=lambda x: x.score, reverse=True)
         
         # Calculate minimum position size for the average APR
         min_position_size = self.calculator.calculate_minimum_position_size(avg_apr)
@@ -399,10 +437,21 @@ class StrategyService:
         volume_24h = pool.get('volume_24h', 0)
         apr = pool.get('apr', 0)
         
+        # Relax APR requirement to include safer pools
+        # High TVL/volume pools can have lower APR
+        if tvl >= 5_000_000:  # $5M+ TVL - very safe pools
+            min_apr = 30
+        elif tvl >= 2_000_000:  # $2M+ TVL - safe pools
+            min_apr = 40
+        elif tvl >= 1_000_000:  # $1M+ TVL - moderate pools
+            min_apr = 50
+        else:
+            min_apr = 80  # Smaller pools need higher APR
+        
         return (
             tvl >= profile['min_tvl'] and
             volume_24h >= profile['min_volume_24h'] and
-            apr >= 80  # Minimum 80% APR from strategy specs
+            apr >= min_apr
         )
     
     def _check_entry_conditions(self, pool: Dict, score: float, effective_apr: float = None) -> bool:
