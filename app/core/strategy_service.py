@@ -580,8 +580,8 @@ class StrategyService:
         )
         
         # Always calculate optimal range - this is our proposal to the executor
-        # Get current tick from pool
-        current_tick = pool.get('current_tick', 0)
+        # Get current tick from pool - ensure it's never None
+        current_tick = pool.get('current_tick', 0) or 0
         
         # Calculate price from sqrtPriceX96 if available
         if 'sqrt_price_x96' in pool:
@@ -595,13 +595,13 @@ class StrategyService:
         else:
             current_price = pool.get('current_price', 1.0)
         
-        tick_spacing = pool.get('tick_spacing', 100)  # Default to 100 if not provided
+        tick_spacing = pool.get('tick_spacing', 100) or 100  # Default to 100 if None
         is_stable = pool.get('is_stable', False)
         # Calculate volatility based on tick spacing
         volatility = self.calculator.calculate_volatility_from_tick_spacing(tick_spacing, is_stable)
-        base_apr = pool.get('apr', 100)
-        tvl = pool.get('tvl_usd', pool.get('tvl', 1_000_000))
-        volume_24h = pool.get('volume_24h', 500_000)
+        base_apr = pool.get('apr', 100) or 100
+        tvl = pool.get('tvl_usd', pool.get('tvl', 1_000_000)) or 1_000_000
+        volume_24h = pool.get('volume_24h', 500_000) or 500_000
         
         # Calculate range relative to current tick with enhanced parameters
         lower_tick, upper_tick = self.calculator.calculate_optimal_range_from_tick(
@@ -1122,17 +1122,16 @@ class StrategyService:
                     new_range_multiplier=1.5
                 ))
         
-        # Map recommendation
+        # Map recommendation - check if recommended_action exists in result
         action_map = {
             'exit': 'exit',
             'reduce_position': 'reduce',
             'widen_range': 'widen_range',
             'monitor': 'monitor'
         }
-        recommended_action = action_map.get(
-            whipsaw_result['recommended_action'],
-            'monitor'
-        )
+        # Default to 'monitor' if no action in result
+        raw_action = whipsaw_result.get('recommended_action', 'monitor')
+        recommended_action = action_map.get(raw_action, 'monitor')
         
         return WhipsawDetectionResponse(
             whipsaw_detected=whipsaw_result['whipsaw_detected'],
