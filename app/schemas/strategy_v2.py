@@ -165,6 +165,7 @@ class MonitorResponse(BaseModel):
     total_alerts: int = Field(default=0)
     critical_alerts: int = Field(default=0)
     recommended_actions: List[str] = Field(default_factory=list)
+    average_apr: float = Field(default=0.0, description="Weighted average APR of all positions based on their value")
     
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 

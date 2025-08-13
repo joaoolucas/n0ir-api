@@ -289,6 +289,33 @@ async def monitor_positions(request: MonitorRequest) -> MonitorResponse:
             if alert.severity > 70:
                 recommended_actions.append(f"Token {alert.token_id}: {alert.recommended_action}")
         
+        # Calculate weighted average APR based on position values
+        # We need to fetch the actual position data to get their values
+        from app.core.positions_service import positions_service
+        
+        try:
+            # Fetch the actual position data which contains current_value_usd
+            positions_data = await positions_service.get_positions_by_owner(request.user_address)
+            
+            # Calculate weighted average APR
+            total_value = 0
+            weighted_apr_sum = 0
+            
+            for pos_data in positions_data:
+                # Find the corresponding position status with the effective APR
+                pos_status = next((p for p in positions if p.token_id == pos_data.id), None)
+                if pos_status and pos_data.current_value_usd:
+                    position_value = pos_data.current_value_usd
+                    total_value += position_value
+                    weighted_apr_sum += position_value * pos_status.current_apr
+            
+            average_apr = weighted_apr_sum / total_value if total_value > 0 else 0
+            
+        except Exception as e:
+            logger.warning(f"Could not calculate weighted average APR: {e}")
+            # Fallback to simple average
+            average_apr = sum(p.current_apr for p in positions) / len(positions) if positions else 0
+        
         # Build consolidated response
         return MonitorResponse(
             positions=positions,
@@ -297,7 +324,8 @@ async def monitor_positions(request: MonitorRequest) -> MonitorResponse:
             whipsaw_detections=whipsaw_detections,
             total_alerts=total_alerts,
             critical_alerts=critical_alerts,
-            recommended_actions=recommended_actions
+            recommended_actions=recommended_actions,
+            average_apr=average_apr
         )
         
     except Exception as e:

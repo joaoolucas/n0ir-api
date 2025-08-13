@@ -756,11 +756,40 @@ class StrategyService:
                 range_break_severity = 0
                 status = 'in_range' if in_range else 'out_of_range'
             
+            # Calculate effective APR for this position
+            base_apr = pool.get('apr', 0)
+            effective_apr = base_apr  # Default to base APR
+            
+            if in_range and position_data.tick_spacing:
+                # Calculate effective APR based on position's range
+                try:
+                    effective_apr = self.effective_apr_calc.calculate_effective_apr_from_ticks(
+                        base_apr,
+                        position_data.tick_spacing,
+                        position_data.tick_lower,
+                        position_data.tick_upper,
+                        current_tick if current_tick is not None else 0
+                    )
+                except:
+                    # Fallback to simplified calculation if the above fails
+                    range_width = position_data.tick_upper - position_data.tick_lower
+                    if range_width > 0:
+                        # Approximate range percentage
+                        range_percentage = range_width / 10000  # Rough approximation
+                        effective_apr = self.effective_apr_calc.calculate_effective_apr(
+                            base_apr,
+                            position_data.tick_spacing,
+                            range_percentage
+                        )
+            else:
+                # Position out of range gets 0 effective APR
+                effective_apr = 0
+            
             # Calculate health score
             health_score = 100
             if not in_range:
                 health_score -= range_break_severity * 0.5
-            if pool.get('apr', 0) < 50:
+            if effective_apr < 50:
                 health_score -= 20
             health_score = max(0, health_score)
             
@@ -788,7 +817,7 @@ class StrategyService:
                 pool_address=position_data.pool_address,
                 status=status,
                 health_score=health_score,
-                current_apr=pool.get('apr', 0),
+                current_apr=effective_apr,  # Use effective APR instead of base APR
                 accumulated_fees=position_data.unclaimed_fees_usd or 0,
                 accumulated_rewards=0,  # Would calculate from position history
                 range_status=RangeStatus(
