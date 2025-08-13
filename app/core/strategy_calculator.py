@@ -71,8 +71,8 @@ class StrategyCalculator:
         scores['fee_efficiency'] = self._calculate_fee_efficiency_score(apr, fee_tier)
         
         # Volume Consistency Score (V)
-        volume_24h = pool_data.get('volume_24h', 0)
-        tvl = pool_data.get('tvl_usd', pool_data.get('tvl', 1))  # Support both field names
+        volume_24h = pool_data.get('volume_24h', 0) or 0
+        tvl = pool_data.get('tvl_usd', pool_data.get('tvl', 1)) or 1  # Support both field names, ensure not None
         volume_tvl_ratio = volume_24h / tvl if tvl > 0 else 0
         scores['volume_consistency'] = self._calculate_volume_consistency_score(volume_tvl_ratio)
         
@@ -136,6 +136,8 @@ class StrategyCalculator:
     
     def _calculate_liquidity_depth_score(self, tvl: float) -> float:
         """Calculate liquidity depth score - more generous for smaller pools."""
+        # Ensure tvl is not None
+        tvl = tvl if tvl is not None else 0
         if tvl <= 0:
             return 0
         elif tvl < 100_000:
@@ -328,6 +330,10 @@ class StrategyCalculator:
         Returns:
             Depth factor (0.7-1.5, lower = tighter range allowed)
         """
+        # Ensure tvl and volume_24h are not None
+        tvl = tvl if tvl is not None else 1_000_000
+        volume_24h = volume_24h if volume_24h is not None else 500_000
+        
         # Base depth factor based on TVL
         if tvl >= 10_000_000:  # $10M+ TVL - very deep market
             depth_factor = 0.8
@@ -437,7 +443,7 @@ class StrategyCalculator:
         Returns score 0-100, where 100 is safest.
         """
         # TVL Score (0-100): Log scale, $10M+ gets 100
-        tvl = pool_data.get('tvl_usd', pool_data.get('tvl', 0))
+        tvl = pool_data.get('tvl_usd', pool_data.get('tvl', 0)) or 0  # Ensure not None
         if tvl >= 10_000_000:
             tvl_score = 100
         elif tvl >= 5_000_000:
@@ -454,7 +460,7 @@ class StrategyCalculator:
             tvl_score = max(0, (tvl / 250_000) * 30)
         
         # Volume Score (0-100): Based on volume/TVL ratio
-        volume_24h = pool_data.get('volume_24h', 0)
+        volume_24h = pool_data.get('volume_24h', 0) or 0  # Ensure not None
         volume_tvl_ratio = volume_24h / tvl if tvl > 0 else 0
         
         if volume_tvl_ratio >= 0.5:  # 50%+ daily volume = very healthy
