@@ -745,8 +745,8 @@ class StrategyService:
             if range_break:
                 in_range = False
                 price_position = 0 if range_break['break_type'] == 'downward' else 1
-                range_break_severity = range_break['severity']
-                status = 'critical' if range_break_severity > 70 else 'out_of_range'
+                range_break_severity = range_break.get('severity', 0)
+                status = 'critical' if range_break_severity and range_break_severity > 70 else 'out_of_range'
             else:
                 in_range = position_data.in_range
                 # Simplified price position calculation
@@ -768,10 +768,10 @@ class StrategyService:
                 recommended_action = 'exit'
                 action_details = {'urgency': 'high', 'reason': 'Position is unstaked - close to avoid losing rewards'}
                 health_score = 0  # Set health score to 0 for unstaked positions
-            elif range_break_severity > 85:
+            elif range_break_severity and range_break_severity > 85:
                 recommended_action = 'exit'
                 action_details = {'urgency': 'high', 'reason': 'Severe range break'}
-            elif range_break_severity > 70:
+            elif range_break_severity and range_break_severity > 70:
                 recommended_action = 'rebalance'
                 action_details = {'urgency': 'medium', 'reason': 'Range break detected'}
             elif health_score < 50:
@@ -894,11 +894,12 @@ class StrategyService:
         }
         
         # Determine severity level
-        if break_info['severity'] >= 85:
+        severity = break_info.get('severity', 0)
+        if severity >= 85:
             break_info['severity_level'] = 'critical'
-        elif break_info['severity'] >= 70:
+        elif severity >= 70:
             break_info['severity_level'] = 'severe'
-        elif break_info['severity'] >= 40:
+        elif severity >= 40:
             break_info['severity_level'] = 'moderate'
         else:
             break_info['severity_level'] = 'mild'
@@ -936,13 +937,13 @@ class StrategyService:
         
         # Determine action based on break type and severity
         if break_type == 'upward':
-            if break_info['severity'] >= 70:
+            if break_info.get('severity', 0) >= 70:
                 action = 'emergency_exit'
                 urgency = 'critical'
                 reasoning = f"Upward break with {reversal_analysis['reversal_probability']*100:.0f}% reversal probability"
                 exit_percentage = 100
                 max_slippage = 2.0
-            elif break_info['severity'] >= 40:
+            elif break_info.get('severity', 0) >= 40:
                 action = 'partial_exit'
                 urgency = 'high'
                 reasoning = "Moderate upward break - reduce exposure"
@@ -955,7 +956,7 @@ class StrategyService:
                 exit_percentage = 0
                 max_slippage = 1.0
         else:  # downward
-            if break_info['severity'] >= 85:
+            if break_info.get('severity', 0) >= 85:
                 action = 'rebalance'
                 urgency = 'high'
                 reasoning = "Severe downward break - consider rebalancing"
@@ -989,7 +990,7 @@ class StrategyService:
         risk_metrics = RangeBreakMetrics(
             reversal_probability=reversal_analysis['reversal_probability'],
             expected_loss_if_reversal=reversal_analysis['expected_loss_if_reversal'],
-            break_severity=break_info['severity']
+            break_severity=break_info.get('severity', 0)
         )
         
         return RangeBreakResponse(
@@ -1102,12 +1103,13 @@ class StrategyService:
         
         # Generate alternative strategies
         alternatives = []
-        if whipsaw_result['whipsaw_detected']:
-            if whipsaw_result['severity'] > 80:
+        if whipsaw_result.get('whipsaw_detected', False):
+            severity = whipsaw_result.get('severity', 0)
+            if severity > 80:
                 alternatives.append(AlternativeStrategy(
                     type='exit'
                 ))
-            elif whipsaw_result['severity'] > 60:
+            elif severity > 60:
                 alternatives.append(AlternativeStrategy(
                     type='reduce_position',
                     reduction_percentage=75
@@ -1134,8 +1136,8 @@ class StrategyService:
         recommended_action = action_map.get(raw_action, 'monitor')
         
         return WhipsawDetectionResponse(
-            whipsaw_detected=whipsaw_result['whipsaw_detected'],
-            severity=whipsaw_result['severity'],
+            whipsaw_detected=whipsaw_result.get('whipsaw_detected', False),
+            severity=whipsaw_result.get('severity', 0),
             pattern=pattern,
             recommended_action=recommended_action,
             alternative_strategies=alternatives
@@ -1328,8 +1330,8 @@ class StrategyService:
         # Calculate concentration
         concentration_analysis = self.portfolio_analyzer.analyze_portfolio_concentration(positions)
         concentration_risk = ConcentrationRisk(
-            highest_pool_percentage=concentration_analysis['highest_pool_percentage'],
-            highest_token_percentage=concentration_analysis['highest_token_percentage']
+            highest_pool_percentage=concentration_analysis.get('highest_pool_percentage', 0),
+            highest_token_percentage=concentration_analysis.get('highest_token_percentage', 0)
         )
         
         # Calculate range break risk
@@ -1344,9 +1346,9 @@ class StrategyService:
         
         # Generate warnings
         warnings = []
-        if concentration_risk.highest_pool_percentage > 25:
+        if concentration_risk.highest_pool_percentage and concentration_risk.highest_pool_percentage > 25:
             warnings.append("High concentration in single pool")
-        if risk_score > 70:
+        if risk_score and risk_score > 70:
             warnings.append("Overall risk level is high")
         
         return RiskAssessmentResponse(
