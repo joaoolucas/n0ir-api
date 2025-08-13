@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import pools, tokens, health, positions, wallets, strategy
+from app.api.v1.endpoints import pools, tokens, health, positions, wallets, strategy, strategy_v2
 
 api_router = APIRouter()
 
@@ -32,4 +32,10 @@ api_router.include_router(
 api_router.include_router(
     strategy.router,
     tags=["Strategy"]
+)
+
+# Include new consolidated strategy endpoints
+api_router.include_router(
+    strategy_v2.router,
+    tags=["Strategy v2"]
 )

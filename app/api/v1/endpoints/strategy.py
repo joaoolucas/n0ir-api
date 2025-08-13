@@ -1,8 +1,12 @@
 """
 Strategy API endpoints for the n0ir DeFi strategy module.
+
+DEPRECATION NOTICE: These endpoints are deprecated in favor of the consolidated v2 endpoints.
+Please migrate to /api/v1/strategy/* endpoints (without /strategy prefix duplication).
 """
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi.responses import JSONResponse
 import logging
 
 from app.core.strategy_service import strategy_service
@@ -23,6 +27,30 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/strategy", tags=["strategy"])
 
+# Deprecation warning to be added to all responses
+DEPRECATION_MESSAGE = "This endpoint is deprecated. Please use the v2 endpoints: /api/v1/strategy/screen, /api/v1/strategy/analyze, /api/v1/strategy/monitor, or /api/v1/strategy/portfolio"
+
+
+def add_deprecation_headers(response_data):
+    """Add deprecation headers to response."""
+    import json
+    from datetime import datetime
+    
+    # Custom JSON encoder for datetime
+    class DateTimeEncoder(json.JSONEncoder):
+        def default(self, obj):
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            return super().default(obj)
+    
+    # Convert to JSON string with custom encoder, then parse back
+    json_str = json.dumps(response_data, cls=DateTimeEncoder)
+    response = JSONResponse(content=json.loads(json_str))
+    response.headers["X-API-Deprecation"] = "true"
+    response.headers["X-API-Deprecation-Date"] = "2025-06-01"
+    response.headers["X-API-Deprecation-Info"] = DEPRECATION_MESSAGE
+    return response
+
 
 @router.post(
     "/opportunities",
@@ -30,9 +58,11 @@ router = APIRouter(prefix="/strategy", tags=["strategy"])
     responses={
         400: {"model": ErrorResponse, "description": "Bad request"},
         500: {"model": ErrorResponse, "description": "Internal server error"}
-    }
+    },
+    deprecated=True,
+    summary="[DEPRECATED] Get pool opportunities - Use /api/v1/strategy/screen instead"
 )
-async def get_pool_opportunities(request: OpportunitiesRequest) -> OpportunitiesResponse:
+async def get_pool_opportunities(request: OpportunitiesRequest):
     """
     Find and rank pool opportunities based on the quantitative scoring model.
     
@@ -45,7 +75,15 @@ async def get_pool_opportunities(request: OpportunitiesRequest) -> Opportunities
     - Optimal range calculations
     """
     try:
-        return await strategy_service.find_opportunities(request)
+        result = await strategy_service.find_opportunities(request)
+        # Convert to dict for JSON response with deprecation headers
+        if hasattr(result, 'model_dump'):
+            response_data = result.model_dump()
+        elif hasattr(result, 'dict'):
+            response_data = result.dict()
+        else:
+            response_data = result
+        return add_deprecation_headers(response_data)
     except Exception as e:
         logger.error(f"Error finding opportunities: {e}")
         raise HTTPException(
@@ -67,9 +105,11 @@ async def get_pool_opportunities(request: OpportunitiesRequest) -> Opportunities
         400: {"model": ErrorResponse, "description": "Bad request"},
         404: {"model": ErrorResponse, "description": "Pool not found"},
         500: {"model": ErrorResponse, "description": "Internal server error"}
-    }
+    },
+    deprecated=True,
+    summary="[DEPRECATED] Analyze entry - Use /api/v1/strategy/analyze with action='entry' instead"
 )
-async def analyze_position_entry(request: AnalyzeEntryRequest) -> AnalyzeEntryResponse:
+async def analyze_position_entry(request: AnalyzeEntryRequest):
     """
     Analyze a potential position entry with detailed risk assessment.
     
