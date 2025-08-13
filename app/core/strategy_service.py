@@ -193,13 +193,16 @@ class StrategyService:
         total_weight = sum(p['allocation_weight'] for p in top_candidates)
         
         # Target 85-90% capital utilization for optimal allocation
-        # Small wallets should use more of their capital
-        if request.available_capital < 10_000:
-            target_utilization = 0.90  # Use 90% for small wallets
-        elif request.available_capital < 25_000:
-            target_utilization = 0.87  # Use 87% for medium wallets
+        # Use TOTAL portfolio value to determine utilization rate
+        # Someone with $100 available but $900 in positions should be treated as $1000 portfolio
+        total_portfolio = max_capital  # This includes positions + available
+        
+        if total_portfolio < 10_000:
+            target_utilization = 0.90  # Use 90% for small portfolios
+        elif total_portfolio < 25_000:
+            target_utilization = 0.87  # Use 87% for medium portfolios
         else:
-            target_utilization = 0.85  # Use 85% for larger wallets
+            target_utilization = 0.85  # Use 85% for larger portfolios
         allocatable_capital = request.available_capital * target_utilization
         
         # Second pass: Build opportunities with proper allocations
@@ -224,24 +227,28 @@ class StrategyService:
             base_amount = allocatable_capital * allocation_pct
             
             # Get dynamic position limit based on safety score
+            # Use TOTAL portfolio value (positions + available) for sizing decisions
+            total_portfolio_value = max_capital  # This includes positions + available
             max_position_pct = self.calculator.calculate_dynamic_position_limit(
                 safety_score, 
-                request.available_capital
+                total_portfolio_value  # Use total portfolio, not just available
             )
+            # But apply percentage only to available capital
             max_amount = request.available_capital * max_position_pct
             
             # Apply dynamic maximum but be more aggressive for small wallets
             # Small wallets need larger position sizes to be effective
-            if request.available_capital < 5_000:
-                # Very small wallet: allow up to 45% per position
+            # Use total portfolio value for wallet size classification
+            if total_portfolio_value < 5_000:
+                # Very small portfolio: allow up to 45% of available capital
                 aggressive_max = request.available_capital * 0.45
                 max_amount = max(max_amount, aggressive_max)
-            elif request.available_capital < 10_000:
-                # Small wallet: allow up to 40% per position
+            elif total_portfolio_value < 10_000:
+                # Small portfolio: allow up to 40% of available capital
                 aggressive_max = request.available_capital * 0.40
                 max_amount = max(max_amount, aggressive_max)
-            elif request.available_capital < 25_000:
-                # Medium wallet: allow up to 35% per position
+            elif total_portfolio_value < 25_000:
+                # Medium portfolio: allow up to 35% of available capital
                 aggressive_max = request.available_capital * 0.35
                 max_amount = max(max_amount, aggressive_max)
             
