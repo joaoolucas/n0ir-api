@@ -157,15 +157,16 @@ class StrategyService:
         # First pass: Calculate safety scores and allocation weights for all pools
         pool_candidates = []
         for pool in pools:
-            # Skip if below minimum thresholds
-            if not self._meets_minimum_requirements(pool, risk_profile):
+            # Skip if below minimum thresholds - pass available_capital for wallet-aware filtering
+            if not self._meets_minimum_requirements(pool, risk_profile, request.available_capital):
                 continue
             
             # Calculate safety score using the new simplified method
             safety_score = self.calculator.calculate_simple_safety_score(pool)
             
-            # Skip very unsafe pools
-            if safety_score < 20:
+            # Skip very unsafe pools - more lenient for small wallets
+            min_safety_score = 10 if request.available_capital < 100 else 20
+            if safety_score < min_safety_score:
                 continue
             
             # Calculate base score for compatibility
@@ -377,7 +378,7 @@ class StrategyService:
                     volume_tvl_ratio=pool.get('volume_24h', 0) / max(pool.get('tvl_usd', pool.get('tvl', 1)), 1),
                     slippage_estimate=slippage_breakdown['total_slippage']
                 ),
-                entry_conditions_met=self._check_entry_conditions(pool, final_score, effective_apr)
+                entry_conditions_met=self._check_entry_conditions(pool, final_score, effective_apr, request.available_capital)
             )
             
             opportunities.append(opportunity)
@@ -437,47 +438,90 @@ class StrategyService:
     def _meets_minimum_requirements(
         self,
         pool: Dict,
-        risk_profile: str
+        risk_profile: str,
+        available_capital: float = None
     ) -> bool:
-        """Check if pool meets minimum requirements for risk profile."""
+        """Check if pool meets minimum requirements for risk profile.
+        Now wallet-size aware - smaller wallets get access to more pools."""
         profile = self.calculator.RISK_PROFILES[risk_profile]
         
         tvl = pool.get('tvl_usd', 0)
         volume_24h = pool.get('volume_24h', 0)
         apr = pool.get('apr', 0)
         
-        # Relax APR requirement to include safer pools
-        # High TVL/volume pools can have lower APR
-        if tvl >= 5_000_000:  # $5M+ TVL - very safe pools
-            min_apr = 30
-        elif tvl >= 2_000_000:  # $2M+ TVL - safe pools
-            min_apr = 40
-        elif tvl >= 1_000_000:  # $1M+ TVL - moderate pools
-            min_apr = 50
+        # Dynamic thresholds based on wallet size
+        if available_capital and available_capital < 100:
+            # Micro wallets ($10-100): Very lenient requirements
+            min_tvl = 50_000      # vs 250k-1M normally
+            min_volume = 10_000   # vs 50k-200k normally
+            min_apr = 20          # vs 30-80 normally
+        elif available_capital and available_capital < 1_000:
+            # Small wallets ($100-1k): Lenient requirements  
+            min_tvl = 100_000     # vs 250k-1M normally
+            min_volume = 20_000   # vs 50k-200k normally
+            min_apr = 25          # vs 30-80 normally
+        elif available_capital and available_capital < 10_000:
+            # Medium wallets ($1k-10k): Moderate requirements
+            min_tvl = 200_000     # vs 250k-1M normally
+            min_volume = 40_000   # vs 50k-200k normally
+            min_apr = 30          # vs 30-80 normally
         else:
-            min_apr = 80  # Smaller pools need higher APR
+            # Large wallets ($10k+): Use profile defaults
+            min_tvl = profile['min_tvl']
+            min_volume = profile['min_volume_24h']
+            
+            # APR requirement based on TVL
+            if tvl >= 5_000_000:  # $5M+ TVL - very safe pools
+                min_apr = 30
+            elif tvl >= 2_000_000:  # $2M+ TVL - safe pools
+                min_apr = 40
+            elif tvl >= 1_000_000:  # $1M+ TVL - moderate pools
+                min_apr = 50
+            else:
+                min_apr = 80  # Smaller pools need higher APR
         
         return (
-            tvl >= profile['min_tvl'] and
-            volume_24h >= profile['min_volume_24h'] and
+            tvl >= min_tvl and
+            volume_24h >= min_volume and
             apr >= min_apr
         )
     
-    def _check_entry_conditions(self, pool: Dict, score: float, effective_apr: float = None) -> bool:
-        """Check if entry conditions are met - more lenient for smaller wallets."""
+    def _check_entry_conditions(self, pool: Dict, score: float, effective_apr: float = None, available_capital: float = None) -> bool:
+        """Check if entry conditions are met - wallet-size aware."""
         # Use effective APR if provided, otherwise fall back to base APR
         apr_to_check = effective_apr if effective_apr is not None else pool.get('apr', 0)
         
-        # More lenient conditions for entry
-        # Score threshold: 45 instead of 60
-        # TVL threshold: 250k instead of 500k
-        # Volume threshold: 50k instead of 100k
-        # APR threshold: 30% instead of 50%
+        # Dynamic thresholds based on wallet size
+        if available_capital and available_capital < 100:
+            # Micro wallets ($10-100): Very lenient conditions
+            min_score = 20       # vs 45 normally
+            min_tvl = 50_000     # vs 250k normally
+            min_volume = 10_000  # vs 50k normally
+            min_apr = 15         # vs 30 normally
+        elif available_capital and available_capital < 1_000:
+            # Small wallets ($100-1k): Lenient conditions
+            min_score = 30       # vs 45 normally
+            min_tvl = 100_000    # vs 250k normally
+            min_volume = 20_000  # vs 50k normally
+            min_apr = 20         # vs 30 normally
+        elif available_capital and available_capital < 10_000:
+            # Medium wallets ($1k-10k): Moderate conditions
+            min_score = 40       # vs 45 normally
+            min_tvl = 200_000    # vs 250k normally
+            min_volume = 40_000  # vs 50k normally
+            min_apr = 25         # vs 30 normally
+        else:
+            # Large wallets ($10k+): Standard conditions
+            min_score = 45
+            min_tvl = 250_000
+            min_volume = 50_000
+            min_apr = 30
+        
         return (
-            score >= 45 and
-            pool.get('tvl_usd', 0) >= 250_000 and
-            pool.get('volume_24h', 0) >= 50_000 and
-            apr_to_check >= 30  # Lower threshold for effective APR
+            score >= min_score and
+            pool.get('tvl_usd', 0) >= min_tvl and
+            pool.get('volume_24h', 0) >= min_volume and
+            apr_to_check >= min_apr
         )
     
     async def analyze_entry(
