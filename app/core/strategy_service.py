@@ -5,7 +5,7 @@ import asyncio
 import math
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
-import logging
+from app.core.logger import logger
 
 from app.core.strategy_calculator import StrategyCalculator
 from app.core.range_break_detector import RangeBreakDetector
@@ -33,8 +33,6 @@ from app.schemas.strategy import (
     RangeBreakRisk, ReturnMetrics, FeeBreakdown,
     RiskPerformanceMetrics, ExecutionQuality
 )
-
-logger = logging.getLogger(__name__)
 
 
 # Whitelisted pools from specs/whitelist.md
@@ -156,9 +154,21 @@ class StrategyService:
         
         # First pass: Calculate safety scores and allocation weights for all pools
         pool_candidates = []
+        logger.info(f"Screening {len(pools)} pools for ${request.available_capital} wallet")
+        
+        pools_filtered_requirements = 0
+        pools_filtered_safety = 0
+        
         for pool in pools:
+            pool_addr = pool.get('address', 'unknown')
+            pool_tvl = pool.get('tvl_usd', 0)
+            pool_volume = pool.get('volume_24h', 0)
+            pool_apr = pool.get('apr', 0)
+            
             # Skip if below minimum thresholds - pass available_capital for wallet-aware filtering
             if not self._meets_minimum_requirements(pool, risk_profile, request.available_capital):
+                pools_filtered_requirements += 1
+                logger.info(f"Pool {pool_addr} filtered: TVL=${pool_tvl:.0f}, Vol=${pool_volume:.0f}, APR={pool_apr:.1f}%")
                 continue
             
             # Calculate safety score using the new simplified method
@@ -167,6 +177,8 @@ class StrategyService:
             # Skip very unsafe pools - more lenient for small wallets
             min_safety_score = 10 if request.available_capital < 100 else 20
             if safety_score < min_safety_score:
+                pools_filtered_safety += 1
+                logger.info(f"Pool {pool_addr} safety score {safety_score:.1f} < {min_safety_score}")
                 continue
             
             # Calculate base score for compatibility
@@ -182,6 +194,8 @@ class StrategyService:
                 'allocation_weight': allocation_weight
             })
         
+        logger.info(f"Filtering summary: {pools_filtered_requirements} pools failed requirements, {pools_filtered_safety} failed safety, {len(pool_candidates)} passed")
+        
         # Sort by allocation weight (best opportunities first)
         pool_candidates.sort(key=lambda x: x['allocation_weight'], reverse=True)
         
@@ -189,18 +203,23 @@ class StrategyService:
         # This ensures proper capital allocation to selected positions
         top_candidates = pool_candidates[:max_new_positions]
         
+        logger.info(f"Selected top {len(top_candidates)} from {len(pool_candidates)} candidates (max new positions: {max_new_positions})")
+        
         # Calculate total weight ONLY for selected positions
         total_weight = sum(p['allocation_weight'] for p in top_candidates)
         
-        # Target 85-90% capital utilization for optimal allocation
+        # Target 85-100% capital utilization based on wallet size
         # Use TOTAL portfolio value to determine utilization rate
         # Someone with $100 available but $900 in positions should be treated as $1000 portfolio
         total_portfolio = max_capital  # This includes positions + available
         
-        if total_portfolio < 10_000:
-            target_utilization = 0.90  # Use 90% for small portfolios
+        # For micro wallets, use 100% to ensure we can meet minimum position size
+        if request.available_capital <= 100:
+            target_utilization = 1.0  # Use 100% for micro wallets
+        elif total_portfolio < 10_000:
+            target_utilization = 0.95  # Use 95% for small portfolios
         elif total_portfolio < 25_000:
-            target_utilization = 0.87  # Use 87% for medium portfolios
+            target_utilization = 0.90  # Use 90% for medium portfolios
         else:
             target_utilization = 0.85  # Use 85% for larger portfolios
         allocatable_capital = request.available_capital * target_utilization
@@ -226,33 +245,46 @@ class StrategyService:
             # Calculate position size from allocatable capital
             base_amount = allocatable_capital * allocation_pct
             
-            # Get dynamic position limit based on safety score
-            # Use TOTAL portfolio value (positions + available) for sizing decisions
-            total_portfolio_value = max_capital  # This includes positions + available
-            max_position_pct = self.calculator.calculate_dynamic_position_limit(
-                safety_score, 
-                total_portfolio_value  # Use total portfolio, not just available
-            )
-            # But apply percentage only to available capital
-            max_amount = request.available_capital * max_position_pct
+            # For micro wallets with single position, ensure we use full available capital
+            if request.available_capital <= 100 and len(top_candidates) == 1:
+                base_amount = allocatable_capital  # Use full allocated capital
+                
+            logger.debug(f"Pool {pool['address']}: allocatable=${allocatable_capital:.2f}, pct={allocation_pct:.2f}, base=${base_amount:.2f}")
             
-            # Apply dynamic maximum but be more aggressive for small wallets
-            # Small wallets need larger position sizes to be effective
-            # Use total portfolio value for wallet size classification
-            if total_portfolio_value < 5_000:
-                # Very small portfolio: allow up to 45% of available capital
-                aggressive_max = request.available_capital * 0.45
-                max_amount = max(max_amount, aggressive_max)
-            elif total_portfolio_value < 10_000:
-                # Small portfolio: allow up to 40% of available capital
-                aggressive_max = request.available_capital * 0.40
-                max_amount = max(max_amount, aggressive_max)
-            elif total_portfolio_value < 25_000:
-                # Medium portfolio: allow up to 35% of available capital
-                aggressive_max = request.available_capital * 0.35
-                max_amount = max(max_amount, aggressive_max)
+            # For micro wallets, skip complex position limiting to ensure we can deploy
+            if request.available_capital <= 100:
+                # Micro wallet: use the full base amount (which is already 100% of capital)
+                max_amount = base_amount
+            else:
+                # Get dynamic position limit based on safety score
+                # Use TOTAL portfolio value (positions + available) for sizing decisions
+                total_portfolio_value = max_capital  # This includes positions + available
+                max_position_pct = self.calculator.calculate_dynamic_position_limit(
+                    safety_score, 
+                    total_portfolio_value  # Use total portfolio, not just available
+                )
+                # But apply percentage only to available capital
+                max_amount = request.available_capital * max_position_pct
+                
+                # Apply dynamic maximum but be more aggressive for small wallets
+                # Small wallets need larger position sizes to be effective
+                # Use total portfolio value for wallet size classification
+                if total_portfolio_value < 5_000:
+                    # Very small portfolio: allow up to 45% of available capital
+                    aggressive_max = request.available_capital * 0.45
+                    max_amount = max(max_amount, aggressive_max)
+                elif total_portfolio_value < 10_000:
+                    # Small portfolio: allow up to 40% of available capital
+                    aggressive_max = request.available_capital * 0.40
+                    max_amount = max(max_amount, aggressive_max)
+                elif total_portfolio_value < 25_000:
+                    # Medium portfolio: allow up to 35% of available capital
+                    aggressive_max = request.available_capital * 0.35
+                    max_amount = max(max_amount, aggressive_max)
             
             recommended_amount = min(base_amount, max_amount)
+            
+            logger.info(f"Pool {pool['address']}: base=${base_amount:.2f}, max=${max_amount:.2f}, recommended=${recommended_amount:.2f}")
             
             # Ensure minimum position size
             apr = pool.get('apr', 100)
@@ -260,6 +292,7 @@ class StrategyService:
             
             # Skip if we can't meet minimum
             if recommended_amount < min_position:
+                logger.info(f"Pool {pool['address']} skipped: recommended ${recommended_amount:.2f} < min ${min_position:.2f}")
                 continue
             
             recommended_amount = max(recommended_amount, min_position)
