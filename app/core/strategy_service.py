@@ -712,7 +712,7 @@ class StrategyService:
         
         for position_data in positions_data:
             # Fetch current pool data
-            pool = await pools_service.get_pool(position_data.get('pool_address', ''))
+            pool = await pools_service.get_pool(position_data.pool_address)
             if not pool:
                 continue
             
@@ -732,8 +732,8 @@ class StrategyService:
             # Build position info for range detection
             position_info = {
                 'current_range': {
-                    'lower_tick': position_data.get('tick_lower', 0),
-                    'upper_tick': position_data.get('tick_upper', 0)
+                    'lower_tick': position_data.tick_lower,
+                    'upper_tick': position_data.tick_upper
                 }
             }
             
@@ -748,7 +748,7 @@ class StrategyService:
                 range_break_severity = range_break['severity']
                 status = 'critical' if range_break_severity > 70 else 'out_of_range'
             else:
-                in_range = position_data.get('in_range', True)
+                in_range = position_data.in_range
                 # Simplified price position calculation
                 price_position = 0.5  # Default to middle if we can't calculate
                 range_break_severity = 0
@@ -777,12 +777,12 @@ class StrategyService:
                 action_details = None
             
             position_status = PositionStatus(
-                token_id=position_data.get('token_id', 0),
-                pool_address=position_data.get('pool_address', ''),
+                token_id=position_data.id,  # PositionInfo uses 'id' for token_id
+                pool_address=position_data.pool_address,
                 status=status,
                 health_score=health_score,
                 current_apr=pool.get('apr', 0),
-                accumulated_fees=position_data.get('uncollected_fees_usd', 0),
+                accumulated_fees=position_data.unclaimed_fees_usd or 0,
                 accumulated_rewards=0,  # Would calculate from position history
                 range_status=RangeStatus(
                     in_range=in_range,
@@ -798,15 +798,20 @@ class StrategyService:
         # Calculate portfolio metrics
         # Convert position data to expected format
         portfolio_positions = []
-        for pos in positions_data:
+        for i, pos in enumerate(positions_data):
+            # Get APR from corresponding position status if available
+            current_apr = 0
+            if i < len(position_statuses):
+                current_apr = position_statuses[i].current_apr
+            
             portfolio_positions.append({
-                'current_value': pos.get('total_value_usd', 0),
-                'invested_amount': pos.get('total_value_usd', 0),  # Approximation
+                'current_value': pos.current_value_usd or 0,
+                'invested_amount': pos.current_value_usd or 0,  # Approximation
                 'volatility_24h': self.calculator.calculate_volatility_from_tick_spacing(
-                    opp.get('tick_spacing', 100),
-                    opp.get('is_stable', False)
+                    pos.tick_spacing or 100,
+                    False  # is_stable not available in PositionInfo, default to False
                 ),  # Calculate based on tick spacing
-                'current_apr': pool.get('apr', 0) if pool else 0
+                'current_apr': current_apr
             })
         
         portfolio_analysis = self.portfolio_analyzer.calculate_portfolio_metrics(portfolio_positions)
