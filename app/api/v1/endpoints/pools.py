@@ -32,7 +32,8 @@ async def get_pools(
     offset: int = Query(0, ge=0, description="Pagination offset"),
     sort_by: str = Query("apr", pattern="^(apr|tvl|volume)$", description="Sort field"),
     sort_order: str = Query("desc", pattern="^(desc|asc)$", description="Sort order"),
-    full_data: bool = Query(False, description="Fetch full data including prices and APR (slower)")
+    full_data: bool = Query(False, description="Fetch full data including prices and APR (slower)"),
+    include_effective_apr: bool = Query(False, description="Calculate and include effective APR for different range widths")
 ):
     """
     Get pools with filters and pagination.
@@ -57,7 +58,8 @@ async def get_pools(
                 limit=limit,
                 offset=offset,
                 sort_by=sort_by,
-                sort_order=sort_order
+                sort_order=sort_order,
+                include_effective_apr=include_effective_apr
             )
         else:
             result = await pools_service.get_pools(

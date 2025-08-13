@@ -15,6 +15,9 @@ class RangeParameters(BaseModel):
     upper_tick: int
     lower_price: Optional[float] = None
     upper_price: Optional[float] = None
+    range_percentage: Optional[float] = Field(None, description="Range width as percentage from current price")
+    lower_percentage: Optional[float] = Field(None, description="Percentage below current price")
+    upper_percentage: Optional[float] = Field(None, description="Percentage above current price")
 
 
 class RiskMetrics(BaseModel):
@@ -104,6 +107,8 @@ class PoolOpportunity(BaseModel):
     pair: str
     score: float = Field(..., ge=0, le=100)
     expected_apr: float
+    effective_apr: float = Field(..., description="Effective APR based on recommended range")
+    apr_efficiency: float = Field(..., ge=0, le=100, description="Percentage of base APR captured")
     recommended_amount: float
     recommended_range: RangeParameters
     risk_metrics: RiskMetrics
@@ -132,6 +137,8 @@ class AnalyzeEntryResponse(BaseModel):
     slippage: SlippageInfo
     risk_analysis: RiskAnalysis
     optimal_range: RangeParameters
+    effective_apr: float = Field(..., description="Effective APR for the optimal range")
+    apr_efficiency: float = Field(..., ge=0, le=100, description="Percentage of base APR captured")
     warnings: List[str] = Field(default_factory=list)
 
 

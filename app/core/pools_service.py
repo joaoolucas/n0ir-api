@@ -2,27 +2,40 @@ import hashlib
 from typing import Dict, List, Optional, Any
 from web3 import Web3
 
-# Import from local SDK copy
-from app.core.sdk_pools import PoolsClient, PoolFilters, PoolAPRData, TokenInfo
-from app.core.sdk_pools.utils import fetch_token_prices
-
+# Import local modules
+from app.core.pool_models import PoolFilters, PoolAPRData, TokenInfoInternal
+from app.core.pool_constants import (
+    SUGAR_ABI,
+    TOKEN_ABI,
+    SugarFields,
+    TICK_SPACING_TO_FEE_TIER,
+    DEXSCREENER_API_BASE,
+    API_BATCH_SIZE,
+    API_RATE_LIMIT_DELAY
+)
 from app.core.config import settings
 from app.core.cache import cache_manager
 from app.core.logger import logger
+from app.core.effective_apr_calculator import EffectiveAPRCalculator
+from app.schemas.pools import EffectiveAPRInfo
 
 
 class PoolsService:
     def __init__(self):
-        self._client: Optional[PoolsClient] = None
-        self._w3: Optional[Web3] = None
+        # Initialize Web3 and Sugar contract directly
+        self.w3 = Web3(Web3.HTTPProvider(settings.rpc_url))
+        if not self.w3.is_connected():
+            logger.error(f"Failed to connect to RPC endpoint: {settings.rpc_url}")
+            raise Exception(f"Failed to connect to RPC endpoint")
         
-    async def _get_client(self) -> PoolsClient:
-        """Get or create PoolsClient instance"""
-        if self._client is None:
-            logger.debug("Initializing PoolsClient")
-            self._client = PoolsClient(rpc_url=settings.rpc_url)
-            self._w3 = self._client.w3
-        return self._client
+        # Initialize Sugar contract
+        self.sugar = self.w3.eth.contract(
+            address=Web3.to_checksum_address(settings.sugar_contract_address),
+            abi=SUGAR_ABI
+        )
+        
+        self.effective_apr_calc = EffectiveAPRCalculator()
+        logger.debug("PoolsService initialized with direct Web3 connection")
     
     def _get_filters_hash(self, filters: PoolFilters) -> str:
         """Generate a hash for the filters to use as cache key"""
@@ -55,11 +68,10 @@ class PoolsService:
         
         # For fast initial loading, skip expensive operations
         # We'll fetch basic pool data without individual price lookups
-        client = await self._get_client()
         
         # Directly fetch from Sugar contract
         logger.info(f"Fetching pools: type={pool_type}, filters applied")
-        pools_raw = await self._fetch_pools_fast(client, pool_type, blacklist)
+        pools_raw = await self._fetch_pools_fast(pool_type, blacklist)
         logger.debug(f"Fetched {len(pools_raw)} raw pools from Sugar contract")
         
         # Quick filtering without price fetches
@@ -99,9 +111,8 @@ class PoolsService:
         logger.debug(f"Cached pools list with hash {filters_hash}")
         return result
     
-    async def _fetch_pools_fast(self, client, pool_type: str, blacklist: Optional[List[str]]) -> List:
+    async def _fetch_pools_fast(self, pool_type: str, blacklist: Optional[List[str]]) -> List:
         """Fast pool fetching without price data"""
-        sugar = client.sugar
         pools = []
         offset = 8100
         limit = 500
@@ -123,7 +134,7 @@ class PoolsService:
         
         while True:
             try:
-                result = sugar.functions.all(limit, offset).call()
+                result = self.sugar.functions.all(limit, offset).call()
                 
                 if not result:
                     break
@@ -227,8 +238,7 @@ class PoolsService:
     
     def _calculate_fee_tier(self, tick_spacing: int) -> int:
         """Calculate fee tier from tick spacing"""
-        fee_map = {1: 100, 10: 100, 50: 500, 100: 500, 200: 3000, 2000: 10000}
-        return fee_map.get(tick_spacing, 500)
+        return TICK_SPACING_TO_FEE_TIER.get(tick_spacing, 500)
     
     def _serialize_token_minimal(self, token: dict) -> Dict:
         """Minimal token serialization"""
@@ -251,7 +261,8 @@ class PoolsService:
         limit: Optional[int] = 100,
         offset: Optional[int] = None,
         sort_by: str = "apr",
-        sort_order: str = "desc"
+        sort_order: str = "desc",
+        include_effective_apr: bool = False
     ) -> Dict:
         """Get pools with full data - optimized version"""
         # Check cache first
@@ -263,8 +274,7 @@ class PoolsService:
             return cached_result
         
         # Fetch pools using fast method first
-        client = await self._get_client()
-        pools_raw = await self._fetch_pools_fast(client, pool_type, blacklist)
+        pools_raw = await self._fetch_pools_fast(pool_type, blacklist)
         
         # Collect all unique token addresses
         token_addresses = set()
@@ -275,14 +285,14 @@ class PoolsService:
         # Batch fetch all token prices at once
         prices = {}
         if token_addresses:
-            # Import the SDK's price fetching utility
-            prices = await fetch_token_prices(list(token_addresses))
+            # Use our own price fetching utility
+            prices = await self._fetch_token_prices_from_dexscreener(list(token_addresses))
         
         # Get AERO price for APR calculation
         aero_price = prices.get(settings.aero_token_address.lower(), 0)
         if aero_price == 0:
             # Fetch AERO price separately if not in batch
-            aero_prices = await fetch_token_prices([settings.aero_token_address])
+            aero_prices = await self._fetch_token_prices_from_dexscreener([settings.aero_token_address])
             aero_price = aero_prices.get(settings.aero_token_address.lower(), 50)  # Default to $50 if failed
         
         # Batch fetch volume data for all pools
@@ -298,7 +308,7 @@ class PoolsService:
             try:
                 pool_address = Web3.to_checksum_address(pool[0])
                 volume_24h = pool_volumes.get(pool_address.lower(), 0)
-                pool_data = await self._process_pool_full(pool, prices, aero_price, client, volume_24h)
+                pool_data = await self._process_pool_full(pool, prices, aero_price, volume_24h, include_effective_apr)
                 
                 # Apply filters
                 if pool_data["tvl_usd"] < min_tvl:
@@ -348,7 +358,7 @@ class PoolsService:
         await cache_manager.set_pools_list(filters_hash, result)
         return result
     
-    async def _process_pool_full(self, pool: List, prices: Dict[str, float], aero_price: float, client, volume_24h: float = 0) -> Dict:
+    async def _process_pool_full(self, pool: List, prices: Dict[str, float], aero_price: float, volume_24h: float = 0, include_effective_apr: bool = False) -> Dict:
         """Process a single pool with full data including prices, APR, and volume"""
         # Field indices
         LP = 0
@@ -370,8 +380,8 @@ class PoolsService:
         token1_addr = Web3.to_checksum_address(pool[TOKEN1])
         
         # Get token info (from cache or fetch)
-        token0 = await self._get_or_fetch_token_info(client, token0_addr, pool[SYMBOL])
-        token1 = await self._get_or_fetch_token_info(client, token1_addr, pool[SYMBOL])
+        token0 = await self._get_or_fetch_token_info(token0_addr, pool[SYMBOL])
+        token1 = await self._get_or_fetch_token_info(token1_addr, pool[SYMBOL])
         
         # Get prices
         token0_price = prices.get(token0_addr.lower(), 0)
@@ -393,7 +403,7 @@ class PoolsService:
         
         fee_tier = self._calculate_fee_tier(tick_spacing)
         
-        return {
+        pool_data = {
             "address": pool_address,
             "symbol": f"{token0['symbol']}/{token1['symbol']}-{fee_tier/100}%",
             "token0": {
@@ -423,8 +433,20 @@ class PoolsService:
             "gauge_address": Web3.to_checksum_address(pool[GAUGE]) if pool[GAUGE] != "0x0000000000000000000000000000000000000000" else None,
             "is_stable": tick_spacing in settings.stable_tick_spacings
         }
+        
+        # Add effective APR if requested
+        if include_effective_apr and apr > 0:
+            effective_apr_ranges = self.effective_apr_calc.calculate_multiple_ranges(apr, tick_spacing)
+            pool_data["effective_apr"] = effective_apr_ranges.get("standard", 0)
+            pool_data["effective_apr_range"] = EffectiveAPRInfo(
+                narrow=effective_apr_ranges.get("narrow", 0),
+                standard=effective_apr_ranges.get("standard", 0),
+                wide=effective_apr_ranges.get("wide", 0)
+            )
+        
+        return pool_data
     
-    async def _get_or_fetch_token_info(self, client, address: str, pool_symbol: str) -> Dict:
+    async def _get_or_fetch_token_info(self, address: str, pool_symbol: str) -> Dict:
         """Get token info from cache or fetch from chain"""
         # Check cache first
         cached = await cache_manager.get_token_info(address)
@@ -435,17 +457,28 @@ class PoolsService:
         # Try to get from chain
         try:
             logger.debug(f"Fetching token info from chain: {address}")
-            info = await client.get_token_info(address)
+            # Create token contract instance
+            token_contract = self.w3.eth.contract(
+                address=Web3.to_checksum_address(address),
+                abi=TOKEN_ABI
+            )
+            
+            # Fetch token info from chain
+            symbol = token_contract.functions.symbol().call()
+            decimals = token_contract.functions.decimals().call()
+            name = token_contract.functions.name().call()
+            
             token_dict = {
-                "address": info.address,
-                "symbol": info.symbol,
-                "decimals": info.decimals,
-                "name": info.name
+                "address": address,
+                "symbol": symbol,
+                "decimals": decimals,
+                "name": name
             }
             await cache_manager.set_token_info(address, token_dict)
             logger.debug(f"Cached token info for {address}")
             return token_dict
-        except:
+        except Exception as e:
+            logger.warning(f"Failed to fetch token info for {address}: {e}")
             # Fallback: extract from pool symbol
             symbol_parts = pool_symbol.split("-")[-1].split("/") if "-" in pool_symbol else ["???", "???"]
             return {
@@ -461,12 +494,12 @@ class PoolsService:
         import asyncio
         
         volumes = {}
-        batch_size = 30  # DexScreener rate limit friendly
+        batch_size = API_BATCH_SIZE  # Use constant from pool_constants
         
         async def fetch_pool_volume(session: aiohttp.ClientSession, pool_address: str) -> tuple[str, float]:
             """Fetch volume for a single pool"""
             try:
-                url = f"https://api.dexscreener.com/latest/dex/pairs/base/{pool_address}"
+                url = f"{DEXSCREENER_API_BASE}/pairs/base/{pool_address}"
                 async with session.get(url) as response:
                     if response.status == 200:
                         data = await response.json()
@@ -490,7 +523,7 @@ class PoolsService:
                 
                 # Small delay between batches to respect rate limits
                 if i + batch_size < len(pool_addresses):
-                    await asyncio.sleep(0.1)
+                    await asyncio.sleep(API_RATE_LIMIT_DELAY)
         
         return volumes
     
@@ -508,21 +541,21 @@ class PoolsService:
         
         return apr  # Return actual APR without cap for accurate agent decision-making
     
-    async def get_pool(self, address: str) -> Dict:
+    async def get_pool(self, address: str, include_effective_apr: bool = True) -> Dict:
         """Get single pool by address"""
-        # Check cache
-        cached_pool = await cache_manager.get_pool(address)
-        
-        if cached_pool is None:
-            # Fetch from SDK
-            client = await self._get_client()
-            pool = await client.get_pool(address)
+        # Don't use cache for single pool fetches to ensure fresh data
+        try:
+            pool_data = self.sugar.functions.byAddress(
+                Web3.to_checksum_address(address)
+            ).call()
             
-            # Cache the pool
-            await cache_manager.set_pool(address, pool)
-            cached_pool = pool
-        
-        return self._serialize_pool(cached_pool)
+            # Convert to dict with effective APR
+            result = await self._convert_sugar_to_pool_data(pool_data, include_effective_apr=include_effective_apr)
+            
+            return result
+        except Exception as e:
+            logger.error(f"Failed to fetch pool {address}: {e}")
+            raise
     
     async def get_pools_batch(self, addresses: List[str]) -> List[Dict]:
         """Get multiple pools by addresses"""
@@ -534,16 +567,23 @@ class PoolsService:
             if cached_pool:
                 pools.append(cached_pool)
             else:
-                # Fetch from SDK
-                client = await self._get_client()
+                # Fetch from Sugar contract
                 try:
-                    pool = await client.get_pool(address)
+                    pool_data = self.sugar.functions.byAddress(
+                        Web3.to_checksum_address(address)
+                    ).call()
+                    
+                    # Convert to dict
+                    pool = await self._convert_sugar_to_pool_data(pool_data, include_effective_apr=False)  # No effective APR for batch
+                    
                     await cache_manager.set_pool(address, pool)
                     pools.append(pool)
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"Failed to fetch pool {address}: {e}")
                     continue
         
-        return [self._serialize_pool(p) for p in pools]
+        # Return dicts directly
+        return pools
     
     async def get_token_info(self, address: str) -> Dict:
         """Get token information"""
@@ -551,19 +591,40 @@ class PoolsService:
         cached_info = await cache_manager.get_token_info(address)
         
         if cached_info is None:
-            # Fetch from SDK
-            client = await self._get_client()
-            info = await client.get_token_info(address)
-            
-            # Get price
-            prices = await fetch_token_prices([address])
-            info.price_usd = prices.get(address.lower(), 0)
-            
-            # Cache the info
-            await cache_manager.set_token_info(address, info)
-            cached_info = info
+            # Fetch from chain
+            try:
+                token_contract = self.w3.eth.contract(
+                    address=Web3.to_checksum_address(address),
+                    abi=TOKEN_ABI
+                )
+                
+                symbol = token_contract.functions.symbol().call()
+                decimals = token_contract.functions.decimals().call()
+                name = token_contract.functions.name().call()
+                
+                cached_info = {
+                    "address": address,
+                    "symbol": symbol,
+                    "decimals": decimals,
+                    "name": name,
+                    "price_usd": 0  # Will be updated separately
+                }
+                
+                # Cache the info
+                await cache_manager.set_token_info(address, cached_info)
+            except Exception as e:
+                logger.error(f"Failed to fetch token info for {address}: {e}")
+                raise
         
-        return self._serialize_token(cached_info)
+        # Always fetch fresh price (cache is short TTL)
+        prices = await self._fetch_token_prices_from_dexscreener([address])
+        price_usd = prices.get(address.lower(), 0)
+        
+        # Update cached info with price
+        result = dict(cached_info)
+        result["price_usd"] = price_usd
+        
+        return self._serialize_token(result)
     
     async def _fetch_token_prices_from_dexscreener(self, addresses: List[str]) -> Dict[str, float]:
         """Fetch token prices from DexScreener API"""
@@ -572,10 +633,11 @@ class PoolsService:
         
         prices = {}
         
-        # Known stablecoins
+        # Known stablecoins (lowercase addresses)
         stablecoins = {
-            "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": 1.0,  # USDC on Base
-            "0x50c5725949a6f0c72e6c4a641f24049a917db0cb": 1.0,  # DAI on Base
+            "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913".lower(): 1.0,  # USDC on Base
+            "0x50c5725949a6f0c72e6c4a641f24049a917db0cb".lower(): 1.0,  # DAI on Base
+            "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca".lower(): 1.0,  # USDbC on Base
         }
         
         async def fetch_single_token_price(session: aiohttp.ClientSession, address: str) -> tuple[str, float]:
@@ -585,7 +647,7 @@ class PoolsService:
                 return (address.lower(), stablecoins[address.lower()])
             
             try:
-                url = f"https://api.dexscreener.com/latest/dex/tokens/{address}"
+                url = f"{DEXSCREENER_API_BASE}/tokens/{address}"
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as response:
                     if response.status == 200:
                         data = await response.json()
@@ -655,8 +717,7 @@ class PoolsService:
         """Get service health status"""
         try:
             logger.debug("Checking service health")
-            client = await self._get_client()
-            block = client.w3.eth.get_block("latest")
+            block = self.w3.eth.get_block("latest")
             
             return {
                 "status": "healthy",
@@ -673,35 +734,150 @@ class PoolsService:
                 "sugar_contract": settings.sugar_contract_address
             }
     
-    def _serialize_pool(self, pool: PoolAPRData) -> Dict:
-        """Convert PoolAPRData to dict for API response"""
-        return {
-            "address": pool.address,
-            "symbol": pool.symbol,
-            "token0": self._serialize_token(pool.token0),
-            "token1": self._serialize_token(pool.token1),
-            "tvl_usd": pool.tvl_usd,
-            "volume_24h": pool.volume_24h,
-            "tick_spacing": pool.tick_spacing,
-            "fee_tier": pool.fee_tier,
-            "apr": pool.apr,
-            "current_tick": pool.current_tick,
-            "liquidity": str(pool.liquidity),
-            "sqrt_price_x96": str(pool.sqrt_price_x96),
-            "gauge_address": pool.gauge_address,
-            "is_stable": pool.is_stable
-        }
+    def _serialize_pool(self, pool) -> Dict:
+        """Convert pool data to dict for API response"""
+        # Handle both PoolAPRData objects and dicts
+        if isinstance(pool, PoolAPRData):
+            return {
+                "address": pool.address,
+                "symbol": pool.symbol,
+                "token0": self._serialize_token(pool.token0),
+                "token1": self._serialize_token(pool.token1),
+                "tvl_usd": pool.tvl_usd,
+                "volume_24h": pool.volume_24h,
+                "tick_spacing": pool.tick_spacing,
+                "fee_tier": pool.fee_tier,
+                "apr": pool.apr,
+                "current_tick": pool.current_tick,
+                "liquidity": str(pool.liquidity),
+                "sqrt_price_x96": str(pool.sqrt_price_x96),
+                "gauge_address": pool.gauge_address,
+                "is_stable": pool.is_stable
+            }
+        else:
+            # It's already a dict, just return it
+            return pool
     
-    def _serialize_token(self, token: TokenInfo) -> Dict:
-        """Convert TokenInfo to dict for API response"""
-        return {
-            "address": token.address,
-            "symbol": token.symbol,
-            "decimals": token.decimals,
-            "name": token.name,
-            "price_usd": token.price_usd or 0,
-            "logo_uri": token.logo_uri
+    def _serialize_token(self, token) -> Dict:
+        """Convert token info to dict for API response"""
+        # Handle both TokenInfoInternal objects and dicts
+        if isinstance(token, TokenInfoInternal):
+            return {
+                "address": token.address,
+                "symbol": token.symbol,
+                "decimals": token.decimals,
+                "name": token.name,
+                "price_usd": token.price_usd or 0,
+                "logo_uri": token.logo_uri
+            }
+        elif isinstance(token, dict):
+            # It's already a dict, ensure all fields are present
+            return {
+                "address": token.get("address", ""),
+                "symbol": token.get("symbol", "???"),
+                "decimals": token.get("decimals", 18),
+                "name": token.get("name", ""),
+                "price_usd": token.get("price_usd", 0),
+                "logo_uri": token.get("logo_uri")
+            }
+        else:
+            # Fallback
+            return {
+                "address": "",
+                "symbol": "???",
+                "decimals": 18,
+                "name": "",
+                "price_usd": 0,
+                "logo_uri": None
+            }
+
+
+    async def _convert_sugar_to_pool_data(self, pool_data: tuple, include_effective_apr: bool = True) -> Dict:
+        """Convert Sugar contract response to pool data dict."""
+        # Extract basic data using SugarFields indices
+        pool_address = Web3.to_checksum_address(pool_data[SugarFields.LP])
+        token0_addr = Web3.to_checksum_address(pool_data[SugarFields.TOKEN0])
+        token1_addr = Web3.to_checksum_address(pool_data[SugarFields.TOKEN1])
+        
+        # Get token info
+        token0_info = await self._get_or_fetch_token_info(token0_addr, pool_data[SugarFields.SYMBOL])
+        token1_info = await self._get_or_fetch_token_info(token1_addr, pool_data[SugarFields.SYMBOL])
+        
+        # Fetch token prices
+        prices = await self._fetch_token_prices_from_dexscreener([token0_addr, token1_addr, settings.aero_token_address])
+        token0_price = prices.get(token0_addr.lower(), 0)
+        token1_price = prices.get(token1_addr.lower(), 0)
+        aero_price = prices.get(settings.aero_token_address.lower(), 50)  # Default to $50 if not found
+        
+        # Calculate TVL
+        token0_decimals = token0_info.get("decimals", 18)
+        token1_decimals = token1_info.get("decimals", 18)
+        reserve0 = int(pool_data[SugarFields.RESERVE0]) / (10 ** token0_decimals)
+        reserve1 = int(pool_data[SugarFields.RESERVE1]) / (10 ** token1_decimals)
+        tvl_usd = (reserve0 * token0_price) + (reserve1 * token1_price)
+        
+        # Get tick spacing and fee tier
+        tick_spacing = int(pool_data[SugarFields.TYPE])
+        fee_tier = self._calculate_fee_tier(tick_spacing)
+        
+        # Calculate APR
+        emissions_per_second = int(pool_data[SugarFields.EMISSIONS]) / 1e18
+        staked0 = int(pool_data[SugarFields.STAKED0]) / (10 ** token0_decimals)
+        staked1 = int(pool_data[SugarFields.STAKED1]) / (10 ** token1_decimals)
+        staked_tvl = (staked0 * token0_price) + (staked1 * token1_price)
+        
+        apr = self._calculate_apr(emissions_per_second, staked_tvl, aero_price, tick_spacing)
+        
+        # Get volume
+        volumes = await self._batch_fetch_pool_volumes([pool_address])
+        volume_24h = volumes.get(pool_address.lower(), 0)
+        
+        # Build response dict
+        result = {
+            "address": pool_address,
+            "symbol": f"{token0_info.get('symbol', '???')}/{token1_info.get('symbol', '???')}-{fee_tier/100}%",
+            "token0": {
+                "address": token0_addr,
+                "symbol": token0_info.get("symbol", "???"),
+                "decimals": token0_decimals,
+                "name": token0_info.get("name", ""),
+                "price_usd": token0_price,
+                "logo_uri": None
+            },
+            "token1": {
+                "address": token1_addr,
+                "symbol": token1_info.get("symbol", "???"),
+                "decimals": token1_decimals,
+                "name": token1_info.get("name", ""),
+                "price_usd": token1_price,
+                "logo_uri": None
+            },
+            "tvl_usd": tvl_usd,
+            "volume_24h": volume_24h,
+            "tick_spacing": tick_spacing,
+            "fee_tier": fee_tier,
+            "apr": apr,
+            "current_tick": int(pool_data[SugarFields.TICK]) if pool_data[SugarFields.TICK] else 0,
+            "liquidity": str(pool_data[SugarFields.LIQUIDITY]),
+            "sqrt_price_x96": str(pool_data[SugarFields.SQRT_RATIO]),
+            "gauge_address": Web3.to_checksum_address(pool_data[SugarFields.GAUGE]) if pool_data[SugarFields.GAUGE] != "0x0000000000000000000000000000000000000000" else None,
+            "is_stable": tick_spacing in settings.stable_tick_spacings
         }
+        
+        # Add effective APR if requested and APR > 0
+        if include_effective_apr and apr > 0:
+            effective_apr_ranges = self.effective_apr_calc.calculate_multiple_ranges(apr, tick_spacing)
+            result["effective_apr"] = effective_apr_ranges.get("standard", 0)
+            result["effective_apr_range"] = {
+                "narrow": effective_apr_ranges.get("narrow", 0),
+                "standard": effective_apr_ranges.get("standard", 0),
+                "wide": effective_apr_ranges.get("wide", 0)
+            }
+        else:
+            result["effective_apr"] = None
+            result["effective_apr_range"] = None
+        
+        return result
 
 
 # Create singleton instance

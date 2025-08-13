@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     
     # Wallet Registry Configuration
     wallet_registry_contract_address: str = Field(
-        default="0xBd221C9A75f44dBcF33e8F872daD001f2C0B6f26",
+        default="0xade8EB85dAE5F102B26499B0Fe43D2217b679778",
         env="WALLET_REGISTRY_CONTRACT_ADDRESS"
     )
     wallet_registry_operator_address: str = Field(

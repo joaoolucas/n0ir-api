@@ -1,12 +1,16 @@
-"""Data models for the pools module."""
+"""Internal data models for pool operations.
+
+These models are used internally by the service layer and are separate from 
+the API schemas to maintain clean separation between internal logic and API contracts.
+"""
 
 from dataclasses import dataclass, field
 from typing import List, Optional
 
 
 @dataclass
-class TokenInfo:
-    """Token information."""
+class TokenInfoInternal:
+    """Internal token information model."""
     
     address: str
     symbol: str
@@ -56,12 +60,12 @@ class PoolFilters:
 
 @dataclass
 class PoolAPRData:
-    """Concentrated liquidity pool data with APR information."""
+    """Internal concentrated liquidity pool data with APR information."""
     
     address: str
     symbol: str
-    token0: TokenInfo
-    token1: TokenInfo
+    token0: TokenInfoInternal
+    token1: TokenInfoInternal
     tvl_usd: float
     volume_24h: float
     tick_spacing: int
@@ -71,6 +75,7 @@ class PoolAPRData:
     liquidity: int
     sqrt_price_x96: int
     gauge_address: Optional[str] = None
+    is_stable: bool = False
     
     def __post_init__(self):
         """Validate and normalize pool address."""
@@ -81,26 +86,3 @@ class PoolAPRData:
     def fee_percentage(self) -> float:
         """Get fee as percentage (e.g., 0.05 for 0.05%)."""
         return self.fee_tier / 10000
-    
-    @property
-    def is_stable(self) -> bool:
-        """Check if this is a stable pool based on tick spacing."""
-        from .constants import STABLE_TICK_SPACINGS
-        return self.tick_spacing in STABLE_TICK_SPACINGS
-    
-    @property
-    def is_volatile(self) -> bool:
-        """Check if this is a volatile pool based on tick spacing."""
-        from .constants import VOLATILE_TICK_SPACINGS
-        return self.tick_spacing in VOLATILE_TICK_SPACINGS
-
-
-@dataclass
-class SwapRoute:
-    """Swap route configuration for token conversion.
-    
-    Used for defining token swap paths through pools.
-    """
-    pools: List[str]
-    tokens: List[str]
-    tick_spacings: List[int]

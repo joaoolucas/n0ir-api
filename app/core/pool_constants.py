@@ -1,26 +1,19 @@
-"""Constants and configuration for the pools module."""
+"""Constants and ABIs for pool operations."""
 
-# Contract addresses
-SUGAR_ADDRESS = "0x27fc745390d1f4BaF8D184FBd97748340f786634"
-AERO_TOKEN_ADDRESS = "0x940181a94A35A4569E4529A3CDfB74e38FD98631"
-
-# Common token addresses on Base
-USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"  # USDC on Base
-WETH = "0x4200000000000000000000000000000000000006"  # WETH on Base
-
-# Pool type mappings by tick spacing
-STABLE_TICK_SPACINGS = [1, 10, 50]
-VOLATILE_TICK_SPACINGS = [100, 200, 2000]
-
-# Efficiency rate mapping removed - APR calculated directly from emissions
-
-# API configuration
+# DexScreener API configuration
 DEXSCREENER_API_BASE = "https://api.dexscreener.com/latest/dex"
 API_RATE_LIMIT_DELAY = 0.1  # seconds between API calls
 API_BATCH_SIZE = 10  # number of concurrent requests
 
-# Default RPC endpoints
-DEFAULT_BASE_RPC = "https://mainnet.base.org"
+# Tick spacing to fee tier mapping (in basis points)
+TICK_SPACING_TO_FEE_TIER = {
+    1: 100,      # 0.01%
+    10: 100,     # 0.01%
+    50: 500,     # 0.05%
+    100: 500,    # 0.05%
+    200: 3000,   # 0.30%
+    2000: 10000  # 1.00%
+}
 
 # Sugar contract ABI (minimal)
 SUGAR_ABI = [

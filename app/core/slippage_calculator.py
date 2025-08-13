@@ -10,31 +10,31 @@ class SlippageCalculator:
     Calculates dynamic slippage based on pair characteristics, volatility, and position size.
     """
     
-    # Slippage profiles for different pair types
+    # Slippage profiles for different pair types (optimized for Base L2/Aerodrome)
     SLIPPAGE_PROFILES = {
         'stable': {
-            'base': 0.001,  # 0.1%
-            'max': 0.003,    # 0.3%
+            'base': 0.0005,  # 0.05% - very tight for stablecoins
+            'max': 0.002,    # 0.2% max
+            'volatility_multiplier': 0.2,
+            'size_impact_factor': 0.1
+        },
+        'semi-volatile': {
+            'base': 0.001,   # 0.1% - major pairs like WETH/USDC
+            'max': 0.005,    # 0.5% max
             'volatility_multiplier': 0.5,
             'size_impact_factor': 0.2
         },
-        'semi-volatile': {
-            'base': 0.005,  # 0.5%
-            'max': 0.010,   # 1.0%
+        'volatile': {
+            'base': 0.003,   # 0.3% - volatile but liquid pairs
+            'max': 0.015,    # 1.5% max
             'volatility_multiplier': 1.0,
             'size_impact_factor': 0.4
         },
-        'volatile': {
-            'base': 0.020,  # 2.0%
-            'max': 0.050,   # 5.0%
+        'memecoin': {
+            'base': 0.005,   # 0.5% - memecoins with lower liquidity
+            'max': 0.030,    # 3.0% max
             'volatility_multiplier': 1.5,
             'size_impact_factor': 0.6
-        },
-        'memecoin': {
-            'base': 0.030,  # 3.0%
-            'max': 0.100,   # 10.0%
-            'volatility_multiplier': 2.0,
-            'size_impact_factor': 0.8
         }
     }
     
@@ -117,9 +117,17 @@ class SlippageCalculator:
         Returns:
             Total slippage as a decimal (e.g., 0.01 for 1%)
         """
-        # Get pair classification
-        token0 = pool.get('token0_symbol', 'UNKNOWN')
-        token1 = pool.get('token1_symbol', 'UNKNOWN')
+        # Get pair classification - handle nested token structure
+        if 'token0' in pool and isinstance(pool['token0'], dict):
+            token0 = pool['token0'].get('symbol', 'UNKNOWN')
+        else:
+            token0 = pool.get('token0_symbol', 'UNKNOWN')
+            
+        if 'token1' in pool and isinstance(pool['token1'], dict):
+            token1 = pool['token1'].get('symbol', 'UNKNOWN')
+        else:
+            token1 = pool.get('token1_symbol', 'UNKNOWN')
+            
         pair_class = self.classify_pair(token0, token1)
         
         # Get slippage profile
@@ -136,7 +144,7 @@ class SlippageCalculator:
         )
         
         # Adjust for position size impact
-        tvl = pool.get('tvl', 1_000_000)  # Default 1M if not provided
+        tvl = pool.get('tvl_usd', pool.get('tvl', 1_000_000))  # Try tvl_usd first, then tvl
         size_impact = self._calculate_size_impact(
             position_size,
             tvl,
@@ -227,9 +235,17 @@ class SlippageCalculator:
         Returns:
             Detailed breakdown of slippage components
         """
-        # Get pair classification
-        token0 = pool.get('token0_symbol', 'UNKNOWN')
-        token1 = pool.get('token1_symbol', 'UNKNOWN')
+        # Get pair classification - handle nested token structure
+        if 'token0' in pool and isinstance(pool['token0'], dict):
+            token0 = pool['token0'].get('symbol', 'UNKNOWN')
+        else:
+            token0 = pool.get('token0_symbol', 'UNKNOWN')
+            
+        if 'token1' in pool and isinstance(pool['token1'], dict):
+            token1 = pool['token1'].get('symbol', 'UNKNOWN')
+        else:
+            token1 = pool.get('token1_symbol', 'UNKNOWN')
+            
         pair_class = self.classify_pair(token0, token1)
         
         # Get profile
@@ -244,7 +260,7 @@ class SlippageCalculator:
             profile['volatility_multiplier']
         )
         
-        tvl = pool.get('tvl', 1_000_000)
+        tvl = pool.get('tvl_usd', pool.get('tvl', 1_000_000))  # Try tvl_usd first
         size_impact = self._calculate_size_impact(
             position_size,
             tvl,
@@ -286,11 +302,18 @@ class SlippageCalculator:
         Returns:
             Maximum position size in USDC
         """
-        tvl = pool.get('tvl', 1_000_000)
+        tvl = pool.get('tvl_usd', pool.get('tvl', 1_000_000))
         
-        # Get pair classification
-        token0 = pool.get('token0_symbol', 'UNKNOWN')
-        token1 = pool.get('token1_symbol', 'UNKNOWN')
+        # Get pair classification - handle nested token structure
+        if 'token0' in pool and isinstance(pool['token0'], dict):
+            token0 = pool['token0'].get('symbol', 'UNKNOWN')
+        else:
+            token0 = pool.get('token0_symbol', 'UNKNOWN')
+            
+        if 'token1' in pool and isinstance(pool['token1'], dict):
+            token1 = pool['token1'].get('symbol', 'UNKNOWN')
+        else:
+            token1 = pool.get('token1_symbol', 'UNKNOWN')
         pair_class = self.classify_pair(token0, token1)
         
         profile = self.SLIPPAGE_PROFILES[pair_class]

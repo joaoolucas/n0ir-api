@@ -1,423 +1,334 @@
 """
-Strategy API endpoints for the n0ir DeFi strategy module.
+Consolidated strategy endpoints.
+Reduces 8 endpoints to 4 logical groups for better API design.
 """
-from typing import Optional
-from fastapi import APIRouter, HTTPException, Query, Depends
-import logging
+from typing import Dict, Any
+from fastapi import APIRouter, HTTPException, Depends
+from fastapi.responses import JSONResponse
+
+from app.schemas.strategy_v2 import (
+    ScreenRequest,
+    ScreenResponse,
+    AnalyzeRequest,
+    AnalyzeResponse,
+    AnalyzeEntryResponse,
+    AnalyzeExitResponse,
+    AnalyzeSlippageResponse,
+    MonitorRequest,
+    MonitorResponse,
+    RangeBreakAlert,
+    WhipsawAlert,
+    PortfolioRebalanceRequest,
+    PortfolioResponse,
+    ErrorResponse,
+    ErrorDetail
+)
+
+from app.schemas.strategy import (
+    OpportunitiesRequest,
+    AnalyzeEntryRequest,
+    ExitAnalysisRequest,
+    SlippageCalculationRequest,
+    MonitorPositionsRequest,
+    RangeBreakRequest,
+    WhipsawDetectionRequest,
+    RebalanceRecommendation,
+    PortfolioImprovement
+)
 
 from app.core.strategy_service import strategy_service
-from app.schemas.strategy import (
-    OpportunitiesRequest, OpportunitiesResponse,
-    AnalyzeEntryRequest, AnalyzeEntryResponse,
-    MonitorPositionsRequest, MonitorPositionsResponse,
-    RangeBreakRequest, RangeBreakResponse,
-    ExitAnalysisRequest, ExitAnalysisResponse,
-    WhipsawDetectionRequest, WhipsawDetectionResponse,
-    PortfolioRebalanceRequest, PortfolioRebalanceResponse,
-    SlippageCalculationRequest, SlippageCalculationResponse,
-    RiskAssessmentResponse, PerformanceAnalyticsResponse,
-    ErrorResponse, ErrorDetail
+from app.core.logger import logger
+
+router = APIRouter(
+    prefix="/strategy",
+    tags=["Strategy"],
+    responses={
+        400: {"model": ErrorResponse, "description": "Bad Request"},
+        500: {"model": ErrorResponse, "description": "Internal Server Error"}
+    }
 )
-
-logger = logging.getLogger(__name__)
-
-router = APIRouter(prefix="/strategy", tags=["strategy"])
 
 
 @router.post(
-    "/opportunities",
-    response_model=OpportunitiesResponse,
-    responses={
-        400: {"model": ErrorResponse, "description": "Bad request"},
-        500: {"model": ErrorResponse, "description": "Internal server error"}
-    }
+    "/screen",
+    response_model=ScreenResponse,
+    summary="Screen pool opportunities",
+    description="Find and rank pool opportunities based on quantitative scoring model (formerly /opportunities)"
 )
-async def get_pool_opportunities(request: OpportunitiesRequest) -> OpportunitiesResponse:
+async def screen_opportunities(request: ScreenRequest) -> ScreenResponse:
     """
-    Find and rank pool opportunities based on the quantitative scoring model.
+    Screen pools for investment opportunities.
     
-    Automatically fetches executor's current positions to exclude already invested pools.
-    
-    Analyzes whitelisted pools and returns ranked opportunities based on:
-    - Composite scoring model (fee efficiency, volume, liquidity, etc.)
-    - Risk-adjusted returns
-    - Position sizing recommendations
-    - Optimal range calculations
+    This endpoint:
+    - Fetches whitelisted pools
+    - Calculates safety scores and allocation weights
+    - Excludes pools where user already has positions
+    - Returns ranked opportunities with recommended allocations
     """
     try:
-        return await strategy_service.find_opportunities(request)
-    except Exception as e:
-        logger.error(f"Error finding opportunities: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": {
-                    "code": "STRATEGY_ERROR",
-                    "message": "Failed to find opportunities",
-                    "details": {"error": str(e)}
-                }
-            }
+        # Convert to v1 request format
+        v1_request = OpportunitiesRequest(
+            executor_address=request.executor_address,
+            available_capital=request.available_capital
         )
+        
+        # Call existing service method
+        v1_response = await strategy_service.find_opportunities(v1_request)
+        
+        # Convert to v2 response format
+        return ScreenResponse(
+            opportunities=v1_response.opportunities,
+            optimal_position_count=v1_response.optimal_position_count,
+            minimum_position_size=v1_response.minimum_position_size,
+            timestamp=v1_response.timestamp
+        )
+    except Exception as e:
+        logger.error(f"Error screening opportunities: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post(
-    "/analyze/entry",
-    response_model=AnalyzeEntryResponse,
-    responses={
-        400: {"model": ErrorResponse, "description": "Bad request"},
-        404: {"model": ErrorResponse, "description": "Pool not found"},
-        500: {"model": ErrorResponse, "description": "Internal server error"}
-    }
+    "/analyze",
+    response_model=AnalyzeResponse,
+    summary="Unified trade analysis",
+    description="Analyze entry, exit, or slippage for trading decisions"
 )
-async def analyze_position_entry(request: AnalyzeEntryRequest) -> AnalyzeEntryResponse:
+async def analyze_trade(request: AnalyzeRequest) -> AnalyzeResponse:
     """
-    Analyze a potential position entry with detailed risk assessment.
+    Unified endpoint for trade analysis.
     
-    Provides:
-    - Entry recommendation (should_enter)
-    - Confidence score
-    - Dynamic slippage calculation
-    - Risk analysis (VaR, portfolio impact)
-    - Optimal range parameters
-    - Warning flags
+    Supports three action types:
+    - entry: Analyze potential position entry
+    - exit: Analyze position exit strategy
+    - slippage: Calculate expected slippage
     """
     try:
-        return await strategy_service.analyze_entry(request)
-    except ValueError as e:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": {
-                    "code": "POOL_NOT_FOUND",
-                    "message": str(e)
-                }
-            }
-        )
+        if request.action == "entry":
+            if not request.entry_data:
+                raise HTTPException(400, "entry_data required for entry analysis")
+            
+            # Convert to v1 request
+            v1_request = AnalyzeEntryRequest(
+                pool_address=request.entry_data.pool_address,
+                amount_usdc=request.entry_data.amount_usdc
+            )
+            
+            # Call existing service
+            v1_response = await strategy_service.analyze_entry(v1_request)
+            
+            # Build v2 response
+            return AnalyzeResponse(
+                action="entry",
+                entry_response=AnalyzeEntryResponse(
+                    should_enter=v1_response.should_enter,
+                    confidence_score=v1_response.confidence_score,
+                    slippage=v1_response.slippage,
+                    risk_analysis=v1_response.risk_analysis,
+                    optimal_range=v1_response.optimal_range,
+                    effective_apr=v1_response.effective_apr,
+                    apr_efficiency=v1_response.apr_efficiency,
+                    warnings=v1_response.warnings
+                )
+            )
+            
+        elif request.action == "exit":
+            if not request.exit_data:
+                raise HTTPException(400, "exit_data required for exit analysis")
+            
+            # Convert to v1 request
+            v1_request = ExitAnalysisRequest(
+                token_id=request.exit_data.token_id,
+                exit_reason=request.exit_data.exit_reason
+            )
+            
+            # Call existing service
+            v1_response = await strategy_service.analyze_exit(v1_request)
+            
+            # Build v2 response
+            return AnalyzeResponse(
+                action="exit",
+                exit_response=AnalyzeExitResponse(
+                    should_exit=v1_response.should_exit,
+                    exit_strategy=v1_response.exit_strategy,
+                    optimal_timing=v1_response.optimal_timing,
+                    slippage_estimate=v1_response.slippage_estimate,
+                    expected_proceeds=v1_response.expected_proceeds,
+                    roi_percentage=v1_response.roi_percentage,
+                    tax_implications=v1_response.tax_implications
+                )
+            )
+            
+        elif request.action == "slippage":
+            if not request.slippage_data:
+                raise HTTPException(400, "slippage_data required for slippage analysis")
+            
+            # Convert to v1 request
+            v1_request = SlippageCalculationRequest(
+                pool_address=request.slippage_data.pool_address,
+                action=request.slippage_data.action,
+                amount_usdc=request.slippage_data.amount_usdc
+            )
+            
+            # Call existing service
+            v1_response = await strategy_service.calculate_slippage(v1_request)
+            
+            # Build v2 response
+            return AnalyzeResponse(
+                action="slippage",
+                slippage_response=AnalyzeSlippageResponse(
+                    base_slippage=v1_response.base_slippage,
+                    size_impact=v1_response.size_impact,
+                    volatility_adjustment=v1_response.volatility_adjustment,
+                    total_slippage=v1_response.total_slippage,
+                    max_recommended=v1_response.max_recommended,
+                    pair_classification=v1_response.pair_classification
+                )
+            )
+        else:
+            raise HTTPException(400, f"Invalid action: {request.action}")
+            
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error analyzing entry: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": {
-                    "code": "ANALYSIS_ERROR",
-                    "message": "Failed to analyze entry",
-                    "details": {"error": str(e)}
-                }
-            }
-        )
+        logger.error(f"Error analyzing trade: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post(
     "/monitor",
-    response_model=MonitorPositionsResponse,
-    responses={
-        400: {"model": ErrorResponse, "description": "Bad request"},
-        500: {"model": ErrorResponse, "description": "Internal server error"}
-    }
+    response_model=MonitorResponse,
+    summary="Monitor positions with range break and whipsaw detection",
+    description="Comprehensive position monitoring including health checks, range breaks, and whipsaw patterns"
 )
-async def monitor_active_positions(request: MonitorPositionsRequest) -> MonitorPositionsResponse:
+async def monitor_positions(request: MonitorRequest) -> MonitorResponse:
     """
-    Monitor active positions for a user and return recommended actions.
+    Enhanced position monitoring endpoint.
     
-    Takes only a user address and fetches all position data from the positions service.
+    Consolidates:
+    - Position health monitoring
+    - Range break detection
+    - Whipsaw pattern detection
     
-    Monitors:
-    - Range status (in/out of range)
-    - Health scores
-    - Current APR performance
-    - Accumulated fees and rewards
-    - Portfolio-level metrics
-    
-    Returns specific action recommendations for each position.
+    Returns comprehensive position health metrics in a single call.
     """
     try:
-        return await strategy_service.monitor_positions(request)
+        # Get basic position monitoring
+        v1_monitor_request = MonitorPositionsRequest(
+            user_address=request.user_address
+        )
+        v1_monitor_response = await strategy_service.monitor_positions(v1_monitor_request)
+        
+        # Collect range break alerts if requested
+        range_breaks = []
+        if request.check_range_breaks:
+            for position in v1_monitor_response.positions:
+                if position.range_status and not position.range_status.in_range:
+                    try:
+                        # Check for range break
+                        v1_range_request = RangeBreakRequest(
+                            token_id=position.token_id
+                        )
+                        v1_range_response = await strategy_service.handle_range_break(v1_range_request)
+                        
+                        # Convert to alert
+                        range_breaks.append(RangeBreakAlert(
+                            token_id=position.token_id,
+                            pool_address=position.pool_address,
+                            severity=v1_range_response.risk_metrics.break_severity,
+                            action=v1_range_response.action,
+                            urgency=v1_range_response.urgency,
+                            reversal_probability=v1_range_response.risk_metrics.reversal_probability,
+                            expected_loss_if_reversal=v1_range_response.risk_metrics.expected_loss_if_reversal
+                        ))
+                    except Exception as e:
+                        logger.warning(f"Could not check range break for token {position.token_id}: {e}")
+        
+        # Collect whipsaw alerts if requested
+        whipsaw_detections = []
+        if request.check_whipsaw:
+            for position in v1_monitor_response.positions:
+                try:
+                    # Check for whipsaw
+                    v1_whipsaw_request = WhipsawDetectionRequest(
+                        token_id=position.token_id
+                    )
+                    v1_whipsaw_response = await strategy_service.detect_whipsaw(v1_whipsaw_request)
+                    
+                    if v1_whipsaw_response.whipsaw_detected:
+                        # Convert to alert
+                        whipsaw_detections.append(WhipsawAlert(
+                            token_id=position.token_id,
+                            pool_address=position.pool_address,
+                            whipsaw_detected=v1_whipsaw_response.whipsaw_detected,
+                            severity=v1_whipsaw_response.severity,
+                            pattern=v1_whipsaw_response.pattern,
+                            recommended_action=v1_whipsaw_response.recommended_action
+                        ))
+                except Exception as e:
+                    logger.warning(f"Could not check whipsaw for token {position.token_id}: {e}")
+        
+        # Apply token ID filter if provided
+        positions = v1_monitor_response.positions
+        if request.token_ids:
+            positions = [p for p in positions if p.token_id in request.token_ids]
+            range_breaks = [r for r in range_breaks if r.token_id in request.token_ids]
+            whipsaw_detections = [w for w in whipsaw_detections if w.token_id in request.token_ids]
+        
+        # Calculate summary metrics
+        total_alerts = len(range_breaks) + len(whipsaw_detections)
+        critical_alerts = len([r for r in range_breaks if r.urgency == "critical"])
+        
+        # Collect recommended actions
+        recommended_actions = []
+        for alert in range_breaks:
+            if alert.urgency in ["critical", "high"]:
+                recommended_actions.append(f"Token {alert.token_id}: {alert.action}")
+        for alert in whipsaw_detections:
+            if alert.severity > 70:
+                recommended_actions.append(f"Token {alert.token_id}: {alert.recommended_action}")
+        
+        # Build consolidated response
+        return MonitorResponse(
+            positions=positions,
+            portfolio_metrics=v1_monitor_response.portfolio_metrics,
+            range_breaks=range_breaks,
+            whipsaw_detections=whipsaw_detections,
+            total_alerts=total_alerts,
+            critical_alerts=critical_alerts,
+            recommended_actions=recommended_actions
+        )
+        
     except Exception as e:
         logger.error(f"Error monitoring positions: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": {
-                    "code": "MONITORING_ERROR",
-                    "message": "Failed to monitor positions",
-                    "details": {"error": str(e)}
-                }
-            }
-        )
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post(
-    "/range-break",
-    response_model=RangeBreakResponse,
-    responses={
-        400: {"model": ErrorResponse, "description": "Bad request"},
-        500: {"model": ErrorResponse, "description": "Internal server error"}
-    }
+    "/portfolio",
+    response_model=PortfolioResponse,
+    summary="Portfolio management operations",
+    description="Portfolio-level operations including rebalancing and optimization"
 )
-async def handle_range_break(request: RangeBreakRequest) -> RangeBreakResponse:
+async def manage_portfolio(request: PortfolioRebalanceRequest) -> PortfolioResponse:
     """
-    Get immediate action recommendations when a position breaks its range.
+    Portfolio management endpoint.
     
-    Takes only a token_id and fetches all necessary data internally:
-    - Position details and range
-    - Current pool price
-    - Calculates break type and severity
-    
-    Analyzes:
-    - Break severity (mild to critical)
-    - Reversal probability (70% for upward breaks)
-    - Expected loss if reversal occurs
-    
-    Returns:
-    - Action recommendation (emergency_exit, rebalance, monitor)
-    - Execution parameters (slippage, deadline)
-    - Risk metrics
+    Currently supports:
+    - Rebalancing recommendations
+    - Portfolio optimization
     """
     try:
-        return await strategy_service.handle_range_break(request)
-    except Exception as e:
-        logger.error(f"Error handling range break: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": {
-                    "code": "RANGE_BREAK_ERROR",
-                    "message": "Failed to handle range break",
-                    "details": {"error": str(e)}
-                }
-            }
+        # Call existing rebalance service
+        v1_response = await strategy_service.rebalance_portfolio(request)
+        
+        # Convert to v2 response format
+        return PortfolioResponse(
+            action="rebalance",
+            recommendations=v1_response.recommendations,
+            expected_improvement=v1_response.expected_portfolio_improvement,
+            is_full_rebalance=v1_response.is_full_rebalance
         )
-
-
-@router.post(
-    "/analyze/exit",
-    response_model=ExitAnalysisResponse,
-    responses={
-        400: {"model": ErrorResponse, "description": "Bad request"},
-        500: {"model": ErrorResponse, "description": "Internal server error"}
-    }
-)
-async def analyze_position_exit(request: ExitAnalysisRequest) -> ExitAnalysisResponse:
-    """
-    Analyze whether and how to exit a position.
-    
-    Analyzes:
-    - Exit reason (manual, stop_loss, take_profit, range_break)
-    - Current ROI including fees and rewards
-    - Optimal exit timing
-    - Expected slippage and proceeds
-    
-    Returns exit strategy (immediate, graduated, or wait).
-    """
-    try:
-        return await strategy_service.analyze_exit(request)
+        
     except Exception as e:
-        logger.error(f"Error analyzing exit: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": {
-                    "code": "EXIT_ANALYSIS_ERROR",
-                    "message": "Failed to analyze exit",
-                    "details": {"error": str(e)}
-                }
-            }
-        )
-
-
-@router.post(
-    "/whipsaw/detect",
-    response_model=WhipsawDetectionResponse,
-    responses={
-        400: {"model": ErrorResponse, "description": "Bad request"},
-        500: {"model": ErrorResponse, "description": "Internal server error"}
-    }
-)
-async def detect_whipsaw_pattern(request: WhipsawDetectionRequest) -> WhipsawDetectionResponse:
-    """
-    Detect and analyze whipsaw patterns in positions.
-    
-    Identifies:
-    - High frequency reversals
-    - Expanding volatility patterns
-    - Pattern severity (0-100)
-    
-    Returns recommendations:
-    - Exit, reduce position, or widen range
-    - Alternative strategies
-    """
-    try:
-        return await strategy_service.detect_whipsaw(request)
-    except Exception as e:
-        logger.error(f"Error detecting whipsaw: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": {
-                    "code": "WHIPSAW_DETECTION_ERROR",
-                    "message": "Failed to detect whipsaw",
-                    "details": {"error": str(e)}
-                }
-            }
-        )
-
-
-@router.post(
-    "/portfolio/rebalance",
-    response_model=PortfolioRebalanceResponse,
-    responses={
-        400: {"model": ErrorResponse, "description": "Bad request"},
-        500: {"model": ErrorResponse, "description": "Internal server error"}
-    }
-)
-async def rebalance_portfolio(request: PortfolioRebalanceRequest) -> PortfolioRebalanceResponse:
-    """
-    Get portfolio-level rebalancing recommendations.
-    
-    Analyzes:
-    - Concentration risk
-    - Underperforming positions
-    - Diversification opportunities
-    
-    Returns:
-    - Specific actions (close, reduce, open positions)
-    - Expected portfolio improvements (APR, risk, Sharpe)
-    """
-    try:
-        return await strategy_service.rebalance_portfolio(request)
-    except Exception as e:
-        logger.error(f"Error rebalancing portfolio: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": {
-                    "code": "REBALANCE_ERROR",
-                    "message": "Failed to rebalance portfolio",
-                    "details": {"error": str(e)}
-                }
-            }
-        )
-
-
-@router.post(
-    "/slippage/calculate",
-    response_model=SlippageCalculationResponse,
-    responses={
-        400: {"model": ErrorResponse, "description": "Bad request"},
-        500: {"model": ErrorResponse, "description": "Internal server error"}
-    }
-)
-async def calculate_slippage(request: SlippageCalculationRequest) -> SlippageCalculationResponse:
-    """
-    Calculate dynamic slippage for a specific trade.
-    
-    Factors:
-    - Pair classification (stable, semi-volatile, volatile, memecoin)
-    - Position size impact on TVL
-    - Current volatility
-    - Entry vs exit action
-    
-    Returns breakdown of slippage components and total estimate.
-    """
-    try:
-        return await strategy_service.calculate_slippage(request)
-    except Exception as e:
-        logger.error(f"Error calculating slippage: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": {
-                    "code": "SLIPPAGE_CALCULATION_ERROR",
-                    "message": "Failed to calculate slippage",
-                    "details": {"error": str(e)}
-                }
-            }
-        )
-
-
-@router.get(
-    "/risk/assessment",
-    response_model=RiskAssessmentResponse,
-    responses={
-        500: {"model": ErrorResponse, "description": "Internal server error"}
-    }
-)
-async def get_risk_assessment(
-    user_address: Optional[str] = Query(
-        default=None,
-        description="User address for specific portfolio risk assessment"
-    )
-) -> RiskAssessmentResponse:
-    """
-    Get current portfolio risk metrics and warnings.
-    
-    If user_address is provided, calculates risk for that specific portfolio.
-    Otherwise returns general risk metrics.
-    
-    Provides:
-    - Portfolio VaR (1-day and 7-day at 95% confidence)
-    - Concentration risk metrics
-    - Range break risk assessment
-    - Overall risk score (0-100)
-    - Actionable warnings
-    """
-    try:
-        return await strategy_service.assess_risk(user_address)
-    except Exception as e:
-        logger.error(f"Error assessing risk: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": {
-                    "code": "RISK_ASSESSMENT_ERROR",
-                    "message": "Failed to assess risk",
-                    "details": {"error": str(e)}
-                }
-            }
-        )
-
-
-@router.get(
-    "/performance",
-    response_model=PerformanceAnalyticsResponse,
-    responses={
-        400: {"model": ErrorResponse, "description": "Invalid period"},
-        500: {"model": ErrorResponse, "description": "Internal server error"}
-    }
-)
-async def get_performance_analytics(
-    period: str = Query(
-        default="24h",
-        description="Time period for analytics",
-        regex="^(24h|7d|30d|all)$"
-    ),
-    user_address: Optional[str] = Query(
-        default=None,
-        description="User address to filter by"
-    )
-) -> PerformanceAnalyticsResponse:
-    """
-    Get detailed performance metrics for strategy evaluation.
-    
-    Metrics include:
-    - Returns (PnL, ROI, APR)
-    - Fee breakdown (trading fees, rewards, costs)
-    - Risk metrics (Sharpe ratio, max drawdown, win rate)
-    - Execution quality (avg slippage, success rates)
-    
-    Supports filtering by time period and user address.
-    """
-    try:
-        return await strategy_service.get_performance_analytics(period, user_address)
-    except Exception as e:
-        logger.error(f"Error getting performance analytics: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": {
-                    "code": "PERFORMANCE_ANALYTICS_ERROR",
-                    "message": "Failed to get performance analytics",
-                    "details": {"error": str(e)}
-                }
-            }
-        )
+        logger.error(f"Error managing portfolio: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

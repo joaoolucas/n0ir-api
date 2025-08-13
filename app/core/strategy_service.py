@@ -14,6 +14,7 @@ from app.core.portfolio_analyzer import PortfolioAnalyzer
 from app.core.pools_service import pools_service
 from app.core.positions_service import positions_service
 from app.core.cache import cache_manager
+from app.core.effective_apr_calculator import EffectiveAPRCalculator
 from app.schemas.strategy import (
     OpportunitiesRequest, OpportunitiesResponse, PoolOpportunity,
     AnalyzeEntryRequest, AnalyzeEntryResponse,
@@ -54,6 +55,8 @@ WHITELISTED_POOLS = {
     "0x4796eda5A091B8Ca92EFA7d7Ee6f4De113A626FE",  # LsETH/cbBTC
     "0x98eCc8425cc4C3f30dD4EF02360B05698008a8fc",  # USDC/LsETH
     "0x8782d97C8b25B4d17dBFbaa03f25dC18e51e909D",  # cbADA/cbBTC
+    "0x4e962BB3889Bf030368F56810A9c96B83CB3E778",  # USDC/cbBTC
+    "0x5d4e504EB4c526995E0cC7A6E327FDa75D8B52b5",  # WETH/EURC
 }
 
 
@@ -67,11 +70,37 @@ class StrategyService:
         self.range_detector = RangeBreakDetector()
         self.slippage_calc = SlippageCalculator()
         self.portfolio_analyzer = PortfolioAnalyzer()
+        self.effective_apr_calc = EffectiveAPRCalculator()
         
         # Cache TTLs (in seconds)
         self.CACHE_TTL_OPPORTUNITIES = 300  # 5 minutes
         self.CACHE_TTL_ANALYSIS = 60       # 1 minute
         self.CACHE_TTL_MONITORING = 30     # 30 seconds
+    
+    def _calculate_price_from_sqrt_x96(self, sqrt_price_x96: str, token0_decimals: int = 18, token1_decimals: int = 18) -> float:
+        """Calculate price from sqrtPriceX96.
+        
+        Returns the price of token0 in terms of token1.
+        """
+        try:
+            sqrt_price_x96_int = int(sqrt_price_x96)
+            if sqrt_price_x96_int == 0:
+                return 1.0
+            
+            # Convert from X96 format
+            sqrt_price = sqrt_price_x96_int / (2 ** 96)
+            
+            # Square to get the price
+            price = sqrt_price ** 2
+            
+            # Adjust for decimals difference
+            # Price is token1/token0, so we need to adjust decimals
+            decimal_adjustment = 10 ** (token1_decimals - token0_decimals)
+            adjusted_price = price * decimal_adjustment
+            
+            return adjusted_price
+        except (ValueError, TypeError):
+            return 1.0
     
     async def find_opportunities(
         self,
@@ -125,36 +154,151 @@ class StrategyService:
         # Fetch whitelisted pools
         pools = await self._fetch_whitelisted_pools(exclude_addresses)
         
-        # Score and rank pools
-        opportunities = []
+        # First pass: Calculate safety scores and allocation weights for all pools
+        pool_candidates = []
         for pool in pools:
             # Skip if below minimum thresholds
             if not self._meets_minimum_requirements(pool, risk_profile):
                 continue
             
-            # Calculate score
-            score = self.calculator.calculate_pool_score(pool)
+            # Calculate safety score using the new simplified method
+            safety_score = self.calculator.calculate_simple_safety_score(pool)
             
-            # Skip low-scoring pools
-            if score < 50:
+            # Skip very unsafe pools
+            if safety_score < 20:
                 continue
             
-            # Calculate position sizing
-            recommended_amount, max_amount = self.calculator.calculate_position_size(
-                pool,
-                request.available_capital,
-                risk_profile
+            # Calculate base score for compatibility
+            base_score = self.calculator.calculate_pool_score(pool)
+            
+            # Calculate allocation weight (combines safety and APR)
+            allocation_weight = self.calculator.calculate_allocation_weight(pool, safety_score)
+            
+            pool_candidates.append({
+                'pool': pool,
+                'safety_score': safety_score,
+                'base_score': base_score,
+                'allocation_weight': allocation_weight
+            })
+        
+        # Sort by allocation weight (best opportunities first)
+        pool_candidates.sort(key=lambda x: x['allocation_weight'], reverse=True)
+        
+        # Take only the top N candidates based on optimal position count
+        # This ensures proper capital allocation to selected positions
+        top_candidates = pool_candidates[:max_new_positions]
+        
+        # Calculate total weight ONLY for selected positions
+        total_weight = sum(p['allocation_weight'] for p in top_candidates)
+        
+        # Target 85-90% capital utilization for optimal allocation
+        # Use TOTAL portfolio value to determine utilization rate
+        # Someone with $100 available but $900 in positions should be treated as $1000 portfolio
+        total_portfolio = max_capital  # This includes positions + available
+        
+        if total_portfolio < 10_000:
+            target_utilization = 0.90  # Use 90% for small portfolios
+        elif total_portfolio < 25_000:
+            target_utilization = 0.87  # Use 87% for medium portfolios
+        else:
+            target_utilization = 0.85  # Use 85% for larger portfolios
+        allocatable_capital = request.available_capital * target_utilization
+        
+        # Second pass: Build opportunities with proper allocations
+        opportunities = []
+        allocated_so_far = 0
+        
+        for i, candidate in enumerate(top_candidates):
+            pool = candidate['pool']
+            safety_score = candidate['safety_score']
+            base_score = candidate['base_score']
+            allocation_weight = candidate['allocation_weight']
+            
+            # Calculate allocation for THIS position among selected positions
+            if total_weight > 0:
+                # Allocate based on weight among SELECTED positions only
+                allocation_pct = allocation_weight / total_weight
+            else:
+                # Equal allocation if no weights
+                allocation_pct = 1.0 / len(top_candidates) if top_candidates else 0
+            
+            # Calculate position size from allocatable capital
+            base_amount = allocatable_capital * allocation_pct
+            
+            # Get dynamic position limit based on safety score
+            # Use TOTAL portfolio value (positions + available) for sizing decisions
+            total_portfolio_value = max_capital  # This includes positions + available
+            max_position_pct = self.calculator.calculate_dynamic_position_limit(
+                safety_score, 
+                total_portfolio_value  # Use total portfolio, not just available
             )
+            # But apply percentage only to available capital
+            max_amount = request.available_capital * max_position_pct
+            
+            # Apply dynamic maximum but be more aggressive for small wallets
+            # Small wallets need larger position sizes to be effective
+            # Use total portfolio value for wallet size classification
+            if total_portfolio_value < 5_000:
+                # Very small portfolio: allow up to 45% of available capital
+                aggressive_max = request.available_capital * 0.45
+                max_amount = max(max_amount, aggressive_max)
+            elif total_portfolio_value < 10_000:
+                # Small portfolio: allow up to 40% of available capital
+                aggressive_max = request.available_capital * 0.40
+                max_amount = max(max_amount, aggressive_max)
+            elif total_portfolio_value < 25_000:
+                # Medium portfolio: allow up to 35% of available capital
+                aggressive_max = request.available_capital * 0.35
+                max_amount = max(max_amount, aggressive_max)
+            
+            recommended_amount = min(base_amount, max_amount)
+            
+            # Ensure minimum position size
+            apr = pool.get('apr', 100)
+            min_position = self.calculator.calculate_minimum_position_size(apr)
+            
+            # Skip if we can't meet minimum
+            if recommended_amount < min_position:
+                continue
+            
+            recommended_amount = max(recommended_amount, min_position)
+            
+            # Track allocation
+            allocated_so_far += recommended_amount
             
             # Calculate optimal range
-            current_price = pool.get('current_price', 1.0)
-            volatility = pool.get('volatility_24h', 20)
+            # Get current tick from pool data
+            current_tick = pool.get('current_tick', 0)
+            
+            # Calculate price from sqrtPriceX96 if available
+            if 'sqrt_price_x96' in pool:
+                token0_decimals = pool.get('token0', {}).get('decimals', 18)
+                token1_decimals = pool.get('token1', {}).get('decimals', 18)
+                current_price = self._calculate_price_from_sqrt_x96(
+                    pool['sqrt_price_x96'],
+                    token0_decimals,
+                    token1_decimals
+                )
+            else:
+                current_price = pool.get('current_price', 1.0)
+            
             tick_spacing = pool.get('tick_spacing', 100)  # Default to 100 if not provided
-            lower_tick, upper_tick = self.calculator.calculate_optimal_range(
-                current_price,
+            is_stable = pool.get('is_stable', False)
+            # Calculate volatility based on tick spacing instead of hardcoding
+            volatility = self.calculator.calculate_volatility_from_tick_spacing(tick_spacing, is_stable)
+            base_apr = pool.get('apr', 100)
+            tvl = pool.get('tvl_usd', pool.get('tvl', 1_000_000))
+            volume_24h = pool.get('volume_24h', 500_000)
+            
+            # Calculate range relative to current tick with enhanced parameters
+            lower_tick, upper_tick = self.calculator.calculate_optimal_range_from_tick(
+                current_tick,
                 volatility,
                 risk_profile,
-                tick_spacing
+                tick_spacing,
+                base_apr,
+                tvl,
+                volume_24h
             )
             
             # Calculate slippage estimate
@@ -164,7 +308,48 @@ class StrategyService:
                 'enter'
             )
             
-            # Calculate expected returns
+            # Calculate prices from ticks
+            lower_price = self.calculator._tick_to_price(lower_tick)
+            upper_price = self.calculator._tick_to_price(upper_tick)
+            
+            # Use tick-based price for consistency
+            current_price_from_tick = self.calculator._tick_to_price(current_tick)
+            
+            # Calculate range percentages using tick-based prices for consistency
+            if current_price_from_tick > 0:
+                lower_percentage = ((current_price_from_tick - lower_price) / current_price_from_tick) * 100
+                upper_percentage = ((upper_price - current_price_from_tick) / current_price_from_tick) * 100
+                range_width_percentage = lower_percentage + upper_percentage
+            else:
+                lower_percentage = 0
+                upper_percentage = 0
+                range_width_percentage = 0
+            
+            # Calculate effective APR for the recommended range
+            base_apr = pool.get('apr', 0)
+            effective_apr = self.effective_apr_calc.calculate_effective_apr_from_ticks(
+                base_apr,
+                tick_spacing,
+                lower_tick,
+                upper_tick,
+                current_tick
+            )
+            apr_efficiency = self.effective_apr_calc.calculate_apr_efficiency(base_apr, effective_apr)
+            
+            # Recalculate score using EFFECTIVE APR instead of base APR
+            # This gives more accurate scoring
+            pool_with_effective_apr = pool.copy()
+            pool_with_effective_apr['apr'] = effective_apr  # Use effective APR for scoring
+            
+            # Recalculate pool score with effective APR
+            effective_score = self.calculator.calculate_pool_score(pool_with_effective_apr)
+            
+            # Combine with safety score for final score
+            # 60% effective score, 40% safety score
+            final_score = (effective_score * 0.6) + (safety_score * 0.4)
+            final_score = min(100, max(0, final_score))  # Cap at 0-100
+            
+            # Calculate expected returns using effective APR
             returns = self.calculator.calculate_expected_returns(
                 pool,
                 recommended_amount
@@ -173,28 +358,38 @@ class StrategyService:
             opportunity = PoolOpportunity(
                 pool_address=pool['address'],
                 pair=f"{pool.get('token0', {}).get('symbol', 'TOKEN0')}/{pool.get('token1', {}).get('symbol', 'TOKEN1')}",
-                score=score,
+                score=final_score,
                 expected_apr=returns['annualized_return'],
+                effective_apr=effective_apr,
+                apr_efficiency=apr_efficiency,
                 recommended_amount=recommended_amount,
                 recommended_range=RangeParameters(
                     lower_tick=lower_tick,
-                    upper_tick=upper_tick
+                    upper_tick=upper_tick,
+                    lower_price=lower_price,
+                    upper_price=upper_price,
+                    range_percentage=range_width_percentage,
+                    lower_percentage=lower_percentage,
+                    upper_percentage=upper_percentage
                 ),
                 risk_metrics=RiskMetrics(
                     volatility_24h=volatility,
                     volume_tvl_ratio=pool.get('volume_24h', 0) / max(pool.get('tvl_usd', pool.get('tvl', 1)), 1),
                     slippage_estimate=slippage_breakdown['total_slippage']
                 ),
-                entry_conditions_met=self._check_entry_conditions(pool, score)
+                entry_conditions_met=self._check_entry_conditions(pool, final_score, effective_apr)
             )
             
             opportunities.append(opportunity)
         
-        # Sort by score descending
-        opportunities.sort(key=lambda x: x.score, reverse=True)
+        # Log allocation efficiency
+        if allocated_so_far > 0:
+            allocation_efficiency = allocated_so_far / request.available_capital
+            logger.info(f"Allocation efficiency: {allocation_efficiency:.1%} of capital allocated across {len(opportunities)} positions")
         
-        # Limit to calculated max positions
-        opportunities = opportunities[:max_new_positions]
+        # Already limited to max_new_positions in selection phase
+        # Sort for display
+        opportunities.sort(key=lambda x: x.score, reverse=True)
         
         # Calculate minimum position size for the average APR
         min_position_size = self.calculator.calculate_minimum_position_size(avg_apr)
@@ -251,19 +446,38 @@ class StrategyService:
         volume_24h = pool.get('volume_24h', 0)
         apr = pool.get('apr', 0)
         
+        # Relax APR requirement to include safer pools
+        # High TVL/volume pools can have lower APR
+        if tvl >= 5_000_000:  # $5M+ TVL - very safe pools
+            min_apr = 30
+        elif tvl >= 2_000_000:  # $2M+ TVL - safe pools
+            min_apr = 40
+        elif tvl >= 1_000_000:  # $1M+ TVL - moderate pools
+            min_apr = 50
+        else:
+            min_apr = 80  # Smaller pools need higher APR
+        
         return (
             tvl >= profile['min_tvl'] and
             volume_24h >= profile['min_volume_24h'] and
-            apr >= 80  # Minimum 80% APR from strategy specs
+            apr >= min_apr
         )
     
-    def _check_entry_conditions(self, pool: Dict, score: float) -> bool:
-        """Check if entry conditions are met."""
+    def _check_entry_conditions(self, pool: Dict, score: float, effective_apr: float = None) -> bool:
+        """Check if entry conditions are met - more lenient for smaller wallets."""
+        # Use effective APR if provided, otherwise fall back to base APR
+        apr_to_check = effective_apr if effective_apr is not None else pool.get('apr', 0)
+        
+        # More lenient conditions for entry
+        # Score threshold: 45 instead of 60
+        # TVL threshold: 250k instead of 500k
+        # Volume threshold: 50k instead of 100k
+        # APR threshold: 30% instead of 50%
         return (
-            score >= 60 and
-            pool.get('tvl_usd', 0) >= 500_000 and
-            pool.get('volume_24h', 0) >= 100_000 and
-            pool.get('apr', 0) >= 80
+            score >= 45 and
+            pool.get('tvl_usd', 0) >= 250_000 and
+            pool.get('volume_24h', 0) >= 50_000 and
+            apr_to_check >= 30  # Lower threshold for effective APR
         )
     
     async def analyze_entry(
@@ -278,15 +492,15 @@ class StrategyService:
         if not pool:
             raise ValueError(f"Pool {request.pool_address} not found")
         
-        # Check if pool is whitelisted
-        if request.pool_address not in WHITELISTED_POOLS:
+        # Check if pool is whitelisted (case-insensitive comparison)
+        whitelisted_lower = {addr.lower() for addr in WHITELISTED_POOLS}
+        if request.pool_address.lower() not in whitelisted_lower:
             warnings = ["Pool is not in the whitelist"]
         else:
             warnings = []
         
-        # Calculate confidence score
+        # Calculate base pool score
         pool_score = self.calculator.calculate_pool_score(pool)
-        confidence_score = min(100, pool_score * 1.2)  # Boost for entry analysis
         
         # Calculate slippage
         slippage_breakdown = self.slippage_calc.calculate_slippage_breakdown(
@@ -315,26 +529,99 @@ class StrategyService:
         )
         
         # Always calculate optimal range - this is our proposal to the executor
-        current_price = pool.get('current_price', 1.0)
-        volatility = pool.get('volatility_24h', 20)
+        # Get current tick from pool
+        current_tick = pool.get('current_tick', 0)
+        
+        # Calculate price from sqrtPriceX96 if available
+        if 'sqrt_price_x96' in pool:
+            token0_decimals = pool.get('token0', {}).get('decimals', 18)
+            token1_decimals = pool.get('token1', {}).get('decimals', 18)
+            current_price = self._calculate_price_from_sqrt_x96(
+                pool['sqrt_price_x96'],
+                token0_decimals,
+                token1_decimals
+            )
+        else:
+            current_price = pool.get('current_price', 1.0)
+        
         tick_spacing = pool.get('tick_spacing', 100)  # Default to 100 if not provided
-        lower_tick, upper_tick = self.calculator.calculate_optimal_range(
-            current_price,
+        is_stable = pool.get('is_stable', False)
+        # Calculate volatility based on tick spacing
+        volatility = self.calculator.calculate_volatility_from_tick_spacing(tick_spacing, is_stable)
+        base_apr = pool.get('apr', 100)
+        tvl = pool.get('tvl_usd', pool.get('tvl', 1_000_000))
+        volume_24h = pool.get('volume_24h', 500_000)
+        
+        # Calculate range relative to current tick with enhanced parameters
+        lower_tick, upper_tick = self.calculator.calculate_optimal_range_from_tick(
+            current_tick,
             volatility,
             'balanced',  # Use balanced risk profile for all
-            tick_spacing
-        )
-        optimal_range = RangeParameters(
-            lower_tick=lower_tick,
-            upper_tick=upper_tick
+            tick_spacing,
+            base_apr,
+            tvl,
+            volume_24h
         )
         
-        # Determine if should enter
+        # Calculate prices from ticks
+        lower_price = self.calculator._tick_to_price(lower_tick)
+        upper_price = self.calculator._tick_to_price(upper_tick)
+        
+        # Use tick-based price for consistency
+        current_price_from_tick = self.calculator._tick_to_price(current_tick)
+        
+        # Calculate range percentages using tick-based prices for consistency
+        if current_price_from_tick > 0:
+            lower_percentage = ((current_price_from_tick - lower_price) / current_price_from_tick) * 100
+            upper_percentage = ((upper_price - current_price_from_tick) / current_price_from_tick) * 100
+            range_width_percentage = lower_percentage + upper_percentage
+        else:
+            lower_percentage = 0
+            upper_percentage = 0
+            range_width_percentage = 0
+        
+        optimal_range = RangeParameters(
+            lower_tick=lower_tick,
+            upper_tick=upper_tick,
+            lower_price=lower_price,
+            upper_price=upper_price,
+            range_percentage=range_width_percentage,
+            lower_percentage=lower_percentage,
+            upper_percentage=upper_percentage
+        )
+        
+        # Calculate effective APR for the optimal range
+        base_apr = pool.get('apr', 0)
+        effective_apr = self.effective_apr_calc.calculate_effective_apr_from_ticks(
+            base_apr,
+            tick_spacing,
+            lower_tick,
+            upper_tick,
+            current_tick
+        )
+        apr_efficiency = self.effective_apr_calc.calculate_apr_efficiency(base_apr, effective_apr)
+        
+        # Calculate confidence score based on both pool score and effective APR
+        # Weight the score to consider actual returns we'll get
+        base_confidence = pool_score * 0.6  # 60% weight on pool fundamentals
+        apr_confidence = min(100, (effective_apr / 100) * 40)  # 40% weight on effective APR
+        confidence_score = min(100, base_confidence + apr_confidence)
+        
+        # Adjust confidence based on APR efficiency
+        if apr_efficiency < 10:  # Less than 10% efficiency is very poor
+            confidence_score *= 0.5
+        elif apr_efficiency < 20:  # Less than 20% efficiency is poor
+            confidence_score *= 0.75
+        
+        # Determine if should enter based on effective APR
+        # Use effective APR for the entry decision since that's what we'll actually earn
         should_enter = (
             confidence_score >= 70 and
             slippage_breakdown['total_slippage'] <= 2.0 and
-            request.pool_address in WHITELISTED_POOLS and
-            self._check_entry_conditions(pool, pool_score)
+            request.pool_address.lower() in whitelisted_lower and
+            effective_apr >= 50 and  # Minimum 50% effective APR for entry
+            pool.get('tvl_usd', 0) >= 500_000 and
+            pool.get('volume_24h', 0) >= 100_000
         )
         
         # Add warnings for risks
@@ -342,6 +629,8 @@ class StrategyService:
             warnings.append(f"High slippage: {slippage_breakdown['total_slippage']:.2f}%")
         if risk_metrics['concentration_risk']:
             warnings.append("Position would create concentration risk")
+        if effective_apr < 10:
+            warnings.append(f"Low effective APR: {effective_apr:.2f}% (efficiency: {apr_efficiency:.1f}%)")
         
         return AnalyzeEntryResponse(
             should_enter=should_enter,
@@ -349,6 +638,8 @@ class StrategyService:
             slippage=slippage_info,
             risk_analysis=risk_analysis,
             optimal_range=optimal_range,
+            effective_apr=effective_apr,
+            apr_efficiency=apr_efficiency,
             warnings=warnings
         )
     
@@ -375,7 +666,17 @@ class StrategyService:
                 continue
             
             # Check range status
-            current_price = pool.get('current_price', pool.get('token0_price', 1.0))
+            # Calculate price from sqrtPriceX96 if available
+            if 'sqrt_price_x96' in pool:
+                token0_decimals = pool.get('token0', {}).get('decimals', 18)
+                token1_decimals = pool.get('token1', {}).get('decimals', 18)
+                current_price = self._calculate_price_from_sqrt_x96(
+                    pool['sqrt_price_x96'],
+                    token0_decimals,
+                    token1_decimals
+                )
+            else:
+                current_price = pool.get('current_price', pool.get('token0_price', 1.0))
             
             # Build position info for range detection
             position_info = {
@@ -450,7 +751,10 @@ class StrategyService:
             portfolio_positions.append({
                 'current_value': pos.get('total_value_usd', 0),
                 'invested_amount': pos.get('total_value_usd', 0),  # Approximation
-                'volatility_24h': 20,  # Default volatility
+                'volatility_24h': self.calculator.calculate_volatility_from_tick_spacing(
+                    opp.get('tick_spacing', 100),
+                    opp.get('is_stable', False)
+                ),  # Calculate based on tick spacing
                 'current_apr': pool.get('apr', 0) if pool else 0
             })
         
@@ -488,7 +792,17 @@ class StrategyService:
         if not pool:
             raise ValueError(f"Pool {pool_address} not found")
         
-        current_price = pool.get('current_price', pool.get('token0_price', 1.0))
+        # Calculate price from sqrtPriceX96 if available
+        if 'sqrt_price_x96' in pool:
+            token0_decimals = pool.get('token0', {}).get('decimals', 18)
+            token1_decimals = pool.get('token1', {}).get('decimals', 18)
+            current_price = self._calculate_price_from_sqrt_x96(
+                pool['sqrt_price_x96'],
+                token0_decimals,
+                token1_decimals
+            )
+        else:
+            current_price = pool.get('current_price', pool.get('token0_price', 1.0))
         
         # Calculate range boundaries from ticks
         tick_lower = position_data.get('tick_lower', 0)
@@ -906,7 +1220,10 @@ class StrategyService:
         pool = {
             'address': request.pool_address,
             'tvl': pool_data.get('tvl', 1_000_000),
-            'volatility_24h': pool_data.get('volatility_24h', 20),
+            'volatility_24h': self.calculator.calculate_volatility_from_tick_spacing(
+                pool_data.get('tick_spacing', 100),
+                pool_data.get('is_stable', False)
+            ),
             'token0_symbol': pool_data.get('token0_symbol', 'UNKNOWN'),
             'token1_symbol': pool_data.get('token1_symbol', 'UNKNOWN')
         }
