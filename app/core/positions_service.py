@@ -197,6 +197,40 @@ class PositionsService:
                 ],
                 "stateMutability": "view",
                 "type": "function"
+            },
+            {
+                "inputs": [
+                    {"name": "_limit", "type": "uint256"},
+                    {"name": "_offset", "type": "uint256"},
+                    {"name": "_account", "type": "address"}
+                ],
+                "name": "positionsUnstakedConcentrated",
+                "outputs": [
+                    {
+                        "components": [
+                            {"name": "id", "type": "uint256"},
+                            {"name": "lp", "type": "address"},
+                            {"name": "liquidity", "type": "uint256"},
+                            {"name": "staked", "type": "uint256"},
+                            {"name": "amount0", "type": "uint256"},
+                            {"name": "amount1", "type": "uint256"},
+                            {"name": "staked0", "type": "uint256"},
+                            {"name": "staked1", "type": "uint256"},
+                            {"name": "unstaked_earned0", "type": "uint256"},
+                            {"name": "unstaked_earned1", "type": "uint256"},
+                            {"name": "emissions_earned", "type": "uint256"},
+                            {"name": "tick_lower", "type": "int24"},
+                            {"name": "tick_upper", "type": "int24"},
+                            {"name": "sqrt_ratio_lower", "type": "uint160"},
+                            {"name": "sqrt_ratio_upper", "type": "uint160"},
+                            {"name": "alm", "type": "address"}
+                        ],
+                        "name": "",
+                        "type": "tuple[]"
+                    }
+                ],
+                "stateMutability": "view",
+                "type": "function"
             }
         ]
     
@@ -350,13 +384,13 @@ class PositionsService:
                     logger.info(f"Found position {position_id} in Sugar data")
                     
                     if is_unstaked:
-                        # For unstaked positions, we need to calculate value from reserves
-                        # positionsUnstakedConcentrated returns: (id, lp, liquidity, staked0, staked1, unstaked0, unstaked1, ...)
-                        # We need reserve0 and reserve1 which are at indices 5 and 6
+                        # For unstaked positions, we use amount0 and amount1 which represent the token amounts
+                        # positionsUnstakedConcentrated returns same structure as positions
+                        # amount0 and amount1 are at indices 4 and 5
                         return {
                             'id': position[0],
-                            'staked0': position[5] if len(position) > 5 else 0,  # unstaked0 (reserve0)
-                            'staked1': position[6] if len(position) > 6 else 0,  # unstaked1 (reserve1)
+                            'staked0': position[4] if len(position) > 4 else 0,  # amount0 for unstaked positions
+                            'staked1': position[5] if len(position) > 5 else 0,  # amount1 for unstaked positions
                             'emissions_earned': 0,  # No emissions for unstaked positions
                         }
                     else:
