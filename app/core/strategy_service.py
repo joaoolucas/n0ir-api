@@ -154,21 +154,10 @@ class StrategyService:
         
         # First pass: Calculate safety scores and allocation weights for all pools
         pool_candidates = []
-        logger.info(f"Screening {len(pools)} pools for ${request.available_capital} wallet")
-        
-        pools_filtered_requirements = 0
-        pools_filtered_safety = 0
         
         for pool in pools:
-            pool_addr = pool.get('address', 'unknown')
-            pool_tvl = pool.get('tvl_usd', 0)
-            pool_volume = pool.get('volume_24h', 0)
-            pool_apr = pool.get('apr', 0)
-            
             # Skip if below minimum thresholds - pass available_capital for wallet-aware filtering
             if not self._meets_minimum_requirements(pool, risk_profile, request.available_capital):
-                pools_filtered_requirements += 1
-                logger.info(f"Pool {pool_addr} filtered: TVL=${pool_tvl:.0f}, Vol=${pool_volume:.0f}, APR={pool_apr:.1f}%")
                 continue
             
             # Calculate safety score using the new simplified method
@@ -177,8 +166,6 @@ class StrategyService:
             # Skip very unsafe pools - more lenient for small wallets
             min_safety_score = 10 if request.available_capital < 100 else 20
             if safety_score < min_safety_score:
-                pools_filtered_safety += 1
-                logger.info(f"Pool {pool_addr} safety score {safety_score:.1f} < {min_safety_score}")
                 continue
             
             # Calculate base score for compatibility
@@ -194,16 +181,12 @@ class StrategyService:
                 'allocation_weight': allocation_weight
             })
         
-        logger.info(f"Filtering summary: {pools_filtered_requirements} pools failed requirements, {pools_filtered_safety} failed safety, {len(pool_candidates)} passed")
-        
         # Sort by allocation weight (best opportunities first)
         pool_candidates.sort(key=lambda x: x['allocation_weight'], reverse=True)
         
         # Take only the top N candidates based on optimal position count
         # This ensures proper capital allocation to selected positions
         top_candidates = pool_candidates[:max_new_positions]
-        
-        logger.info(f"Selected top {len(top_candidates)} from {len(pool_candidates)} candidates (max new positions: {max_new_positions})")
         
         # Calculate total weight ONLY for selected positions
         total_weight = sum(p['allocation_weight'] for p in top_candidates)
@@ -248,8 +231,6 @@ class StrategyService:
             # For micro wallets with single position, ensure we use full available capital
             if request.available_capital <= 100 and len(top_candidates) == 1:
                 base_amount = allocatable_capital  # Use full allocated capital
-                
-            logger.debug(f"Pool {pool['address']}: allocatable=${allocatable_capital:.2f}, pct={allocation_pct:.2f}, base=${base_amount:.2f}")
             
             # For micro wallets, skip complex position limiting to ensure we can deploy
             if request.available_capital <= 100:
@@ -284,15 +265,12 @@ class StrategyService:
             
             recommended_amount = min(base_amount, max_amount)
             
-            logger.info(f"Pool {pool['address']}: base=${base_amount:.2f}, max=${max_amount:.2f}, recommended=${recommended_amount:.2f}")
-            
             # Ensure minimum position size
             apr = pool.get('apr', 100)
             min_position = self.calculator.calculate_minimum_position_size(apr)
             
             # Skip if we can't meet minimum
             if recommended_amount < min_position:
-                logger.info(f"Pool {pool['address']} skipped: recommended ${recommended_amount:.2f} < min ${min_position:.2f}")
                 continue
             
             recommended_amount = max(recommended_amount, min_position)
@@ -416,10 +394,6 @@ class StrategyService:
             
             opportunities.append(opportunity)
         
-        # Log allocation efficiency
-        if allocated_so_far > 0:
-            allocation_efficiency = allocated_so_far / request.available_capital
-            logger.info(f"Allocation efficiency: {allocation_efficiency:.1%} of capital allocated across {len(opportunities)} positions")
         
         # Already limited to max_new_positions in selection phase
         # Sort for display
