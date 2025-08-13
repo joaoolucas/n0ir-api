@@ -1024,6 +1024,22 @@ class StrategyService:
             logger.error(f"Error fetching position {request.token_id}: {e}")
             raise ValueError(f"Position {request.token_id} not found")
         
+        # Check if position is unstaked - exit immediately without value calculations
+        if hasattr(position_data, 'staked') and not position_data.staked:
+            logger.info(f"Position {request.token_id} is unstaked - recommending immediate exit")
+            return ExitAnalysisResponse(
+                should_exit=True,
+                exit_strategy='immediate',
+                optimal_timing=OptimalTiming(
+                    execute_now=True,
+                    wait_minutes=0
+                ),
+                slippage_estimate=2.0,  # Conservative 2% for unstaked positions
+                expected_proceeds=0,  # Unknown for unstaked positions
+                roi_percentage=0,  # Return 0 instead of None to avoid type errors
+                tax_implications=None
+            )
+        
         # Build position object from fetched data
         # Safely extract position values
         if hasattr(position_data, 'current_value_usd'):
@@ -1047,14 +1063,18 @@ class StrategyService:
             'entry_timestamp': datetime.utcnow()  # Would need to track separately
         }
         
-        # Calculate ROI
-        roi = ((position['current_value'] - position['invested_amount']) / 
-               position['invested_amount'] * 100) if position['invested_amount'] > 0 else 0
-        
-        # Calculate total returns including fees and rewards
-        total_returns = (position['current_value'] - position['invested_amount'] + 
-                        position['accumulated_fees'] + position['accumulated_rewards'])
-        roi_with_fees = (total_returns / position['invested_amount'] * 100) if position['invested_amount'] > 0 else 0
+        # Calculate ROI with None checks
+        if position['invested_amount'] and position['invested_amount'] > 0:
+            roi = ((position['current_value'] - position['invested_amount']) / 
+                   position['invested_amount'] * 100)
+            
+            # Calculate total returns including fees and rewards
+            total_returns = (position['current_value'] - position['invested_amount'] + 
+                            position['accumulated_fees'] + position['accumulated_rewards'])
+            roi_with_fees = (total_returns / position['invested_amount'] * 100)
+        else:
+            roi = 0
+            roi_with_fees = 0
         
         # Determine exit strategy based on reason
         if request.exit_reason == 'range_break':
@@ -1078,8 +1098,11 @@ class StrategyService:
         # We don't have pool data here, so use conservative estimate
         slippage_estimate = 1.0  # 1% conservative estimate
         
-        # Calculate expected proceeds
-        expected_proceeds = position['current_value'] * (1 - slippage_estimate / 100)
+        # Calculate expected proceeds with None check
+        if position['current_value'] and position['current_value'] > 0:
+            expected_proceeds = position['current_value'] * (1 - slippage_estimate / 100)
+        else:
+            expected_proceeds = 0  # Unknown value
         
         return ExitAnalysisResponse(
             should_exit=should_exit,
