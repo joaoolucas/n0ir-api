@@ -419,7 +419,7 @@ class RangeBreakDetector:
     
     def _tick_to_price(self, tick: int) -> float:
         """Convert tick to price (simplified)."""
-        return (1.0001 ** tick) ** 2
+        return 1.0001 ** tick
     
     def calculate_new_range_after_break(
         self,

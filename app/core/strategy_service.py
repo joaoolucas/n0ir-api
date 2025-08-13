@@ -719,41 +719,40 @@ class StrategyService:
             if not pool:
                 continue
             
-            # Check range status
-            # Calculate price from sqrtPriceX96 if available
-            if 'sqrt_price_x96' in pool:
-                token0_decimals = pool.get('token0', {}).get('decimals', 18)
-                token1_decimals = pool.get('token1', {}).get('decimals', 18)
-                current_price = self._calculate_price_from_sqrt_x96(
-                    pool['sqrt_price_x96'],
-                    token0_decimals,
-                    token1_decimals
-                )
+            # Check range status using tick-based comparison for accuracy
+            current_tick = pool.get('current_tick')
+            
+            if current_tick is not None:
+                # Use tick-based comparison like positions_service does
+                in_range = position_data.tick_lower <= current_tick < position_data.tick_upper
+                
+                # Calculate range break severity if out of range
+                if not in_range:
+                    if current_tick < position_data.tick_lower:
+                        # Below range
+                        distance = (position_data.tick_lower - current_tick) / abs(position_data.tick_lower) if position_data.tick_lower != 0 else 0
+                        range_break_severity = min(100, distance * 100 * 2)  # Scale to 0-100
+                        price_position = 0  # Below range
+                    else:
+                        # Above range
+                        distance = (current_tick - position_data.tick_upper) / abs(position_data.tick_upper) if position_data.tick_upper != 0 else 0
+                        range_break_severity = min(100, distance * 100 * 2)  # Scale to 0-100
+                        price_position = 1  # Above range
+                    status = 'critical' if range_break_severity > 70 else 'out_of_range'
+                else:
+                    # In range
+                    range_break_severity = 0
+                    # Calculate position within range (0 = at lower bound, 1 = at upper bound)
+                    range_width = position_data.tick_upper - position_data.tick_lower
+                    if range_width > 0:
+                        price_position = (current_tick - position_data.tick_lower) / range_width
+                    else:
+                        price_position = 0.5
+                    status = 'in_range'
             else:
-                current_price = pool.get('current_price', pool.get('token0_price', 1.0))
-            
-            # Build position info for range detection
-            position_info = {
-                'current_range': {
-                    'lower_tick': position_data.tick_lower,
-                    'upper_tick': position_data.tick_upper
-                }
-            }
-            
-            range_break = self.range_detector.detect_range_break(
-                position_info,
-                current_price
-            )
-            
-            if range_break:
-                in_range = False
-                price_position = 0 if range_break['break_type'] == 'downward' else 1
-                range_break_severity = range_break.get('severity', 0)
-                status = 'critical' if range_break_severity and range_break_severity > 70 else 'out_of_range'
-            else:
+                # Fallback to position data if current_tick not available
                 in_range = position_data.in_range
-                # Simplified price position calculation
-                price_position = 0.5  # Default to middle if we can't calculate
+                price_position = 0.5
                 range_break_severity = 0
                 status = 'in_range' if in_range else 'out_of_range'
             
@@ -873,8 +872,8 @@ class StrategyService:
         tick_upper = position_data.tick_upper if hasattr(position_data, 'tick_upper') else position_data.get('tick_upper', 0) if isinstance(position_data, dict) else 0
         
         # Simple tick to price conversion (simplified)
-        lower_price = (1.0001 ** tick_lower) ** 2
-        upper_price = (1.0001 ** tick_upper) ** 2
+        lower_price = 1.0001 ** tick_lower
+        upper_price = 1.0001 ** tick_upper
         
         # Determine break type
         if current_price > upper_price:
