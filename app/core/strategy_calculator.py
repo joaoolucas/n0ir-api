@@ -393,6 +393,42 @@ class StrategyCalculator:
         # Never less than 5% to ensure some flexibility
         return max(0.05, min(0.30, max_range))
     
+    def calculate_volatility_from_tick_spacing(
+        self,
+        tick_spacing: int,
+        is_stable: bool = False
+    ) -> float:
+        """
+        Estimate volatility based on tick spacing.
+        Pools with different tick spacings are designed for different volatility levels.
+        
+        Returns:
+            Estimated 24h volatility as a percentage
+        """
+        # Map tick spacing to expected volatility
+        # Lower tick spacing = stable pairs, higher tick spacing = volatile pairs
+        volatility_map = {
+            1: 0.5,      # Ultra-stable (e.g., USDC/USDbC)
+            10: 1.0,     # Very stable 
+            50: 2.0,     # Stable
+            100: 5.0,    # Medium volatility (e.g., WETH/USDC)
+            200: 10.0,   # High volatility
+            2000: 20.0   # Very high volatility
+        }
+        
+        # Use mapped value or estimate based on tick spacing
+        if tick_spacing in volatility_map:
+            base_volatility = volatility_map[tick_spacing]
+        else:
+            # Linear interpolation for unknown tick spacings
+            base_volatility = min(20, max(0.5, tick_spacing / 100))
+        
+        # Adjust for stable pools (typically lower volatility)
+        if is_stable:
+            base_volatility *= 0.5
+        
+        return base_volatility
+    
     def calculate_simple_safety_score(self, pool_data: Dict) -> float:
         """
         Calculate simple safety score using only existing data.

@@ -56,7 +56,6 @@ WHITELISTED_POOLS = {
     "0x98eCc8425cc4C3f30dD4EF02360B05698008a8fc",  # USDC/LsETH
     "0x8782d97C8b25B4d17dBFbaa03f25dC18e51e909D",  # cbADA/cbBTC
     "0x4e962BB3889Bf030368F56810A9c96B83CB3E778",  # USDC/cbBTC
-    "0xE846373C1a92B167b4E9cd5d8E4d6B1Db9E90EC7",  # EURC/USDC
     "0x5d4e504EB4c526995E0cC7A6E327FDa75D8B52b5",  # WETH/EURC
 }
 
@@ -283,8 +282,10 @@ class StrategyService:
             else:
                 current_price = pool.get('current_price', 1.0)
             
-            volatility = pool.get('volatility_24h', 20)
             tick_spacing = pool.get('tick_spacing', 100)  # Default to 100 if not provided
+            is_stable = pool.get('is_stable', False)
+            # Calculate volatility based on tick spacing instead of hardcoding
+            volatility = self.calculator.calculate_volatility_from_tick_spacing(tick_spacing, is_stable)
             base_apr = pool.get('apr', 100)
             tvl = pool.get('tvl_usd', pool.get('tvl', 1_000_000))
             volume_24h = pool.get('volume_24h', 500_000)
@@ -543,8 +544,10 @@ class StrategyService:
         else:
             current_price = pool.get('current_price', 1.0)
         
-        volatility = pool.get('volatility_24h', 20)
         tick_spacing = pool.get('tick_spacing', 100)  # Default to 100 if not provided
+        is_stable = pool.get('is_stable', False)
+        # Calculate volatility based on tick spacing
+        volatility = self.calculator.calculate_volatility_from_tick_spacing(tick_spacing, is_stable)
         base_apr = pool.get('apr', 100)
         tvl = pool.get('tvl_usd', pool.get('tvl', 1_000_000))
         volume_24h = pool.get('volume_24h', 500_000)
@@ -748,7 +751,10 @@ class StrategyService:
             portfolio_positions.append({
                 'current_value': pos.get('total_value_usd', 0),
                 'invested_amount': pos.get('total_value_usd', 0),  # Approximation
-                'volatility_24h': 20,  # Default volatility
+                'volatility_24h': self.calculator.calculate_volatility_from_tick_spacing(
+                    opp.get('tick_spacing', 100),
+                    opp.get('is_stable', False)
+                ),  # Calculate based on tick spacing
                 'current_apr': pool.get('apr', 0) if pool else 0
             })
         
@@ -1214,7 +1220,10 @@ class StrategyService:
         pool = {
             'address': request.pool_address,
             'tvl': pool_data.get('tvl', 1_000_000),
-            'volatility_24h': pool_data.get('volatility_24h', 20),
+            'volatility_24h': self.calculator.calculate_volatility_from_tick_spacing(
+                pool_data.get('tick_spacing', 100),
+                pool_data.get('is_stable', False)
+            ),
             'token0_symbol': pool_data.get('token0_symbol', 'UNKNOWN'),
             'token1_symbol': pool_data.get('token1_symbol', 'UNKNOWN')
         }
