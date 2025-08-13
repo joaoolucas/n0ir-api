@@ -342,7 +342,8 @@ class PositionsService:
         
         try:
             # Try to get decimals from contract
-            token_contract = self.web3.eth.contract(
+            w3 = self._get_w3()
+            token_contract = w3.eth.contract(
                 address=Web3.to_checksum_address(token_address),
                 abi=[{"constant": True, "inputs": [], "name": "decimals", "outputs": [{"name": "", "type": "uint8"}], "type": "function"}]
             )
