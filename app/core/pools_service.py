@@ -2,9 +2,9 @@ import hashlib
 from typing import Dict, List, Optional, Any
 from web3 import Web3
 
-# Import from local SDK copy
-from app.core.sdk_pools import PoolsClient, PoolFilters, PoolAPRData, TokenInfo
-from app.core.sdk_pools.utils import fetch_token_prices
+# Import from n0ir SDK
+from n0ir_sdk import PoolsClient, PoolFilters, PoolAPRData, TokenInfo
+from n0ir_sdk.pools.utils import fetch_token_prices
 
 from app.core.config import settings
 from app.core.cache import cache_manager
