@@ -100,8 +100,18 @@ class StrategyCalculator:
         if apr <= 0:
             return 0
         
-        # Target APR of 50% gets maximum score
-        apr_score = min(100, (apr / 50) * 100)
+        # Use more reasonable APR targets for scoring
+        # 100% APR = score 60, 200% = 80, 500% = 100
+        if apr >= 500:
+            apr_score = 100
+        elif apr >= 200:
+            apr_score = 80 + (apr - 200) / 300 * 20
+        elif apr >= 100:
+            apr_score = 60 + (apr - 100) / 100 * 20
+        elif apr >= 50:
+            apr_score = 40 + (apr - 50) / 50 * 20
+        else:
+            apr_score = apr / 50 * 40
         
         # Lower fee tiers are better for entry/exit
         fee_score = 100 * (1 - min(1, fee_tier / 0.01))  # 1% max fee
@@ -109,33 +119,37 @@ class StrategyCalculator:
         return (apr_score * 0.7 + fee_score * 0.3)
     
     def _calculate_volume_consistency_score(self, volume_tvl_ratio: float) -> float:
-        """Calculate volume consistency score."""
-        # Optimal ratio around 0.5 (50% daily volume relative to TVL)
+        """Calculate volume consistency score - more forgiving for high volume."""
+        # High volume is generally good for liquidity and price discovery
         if volume_tvl_ratio <= 0:
             return 0
         elif volume_tvl_ratio <= 0.1:
-            return volume_tvl_ratio * 200  # Linear up to 20
+            return volume_tvl_ratio * 300  # Up to 30 (was 20)
         elif volume_tvl_ratio <= 0.5:
-            return 20 + (volume_tvl_ratio - 0.1) * 200  # Linear 20-100
+            return 30 + (volume_tvl_ratio - 0.1) * 125  # 30-80 (was 20-100)
         elif volume_tvl_ratio <= 1.0:
-            return 100 - (volume_tvl_ratio - 0.5) * 40  # Decline 100-80
+            return 80 + (volume_tvl_ratio - 0.5) * 20  # 80-90 (was 100-80)
+        elif volume_tvl_ratio <= 5.0:
+            return 90 - (volume_tvl_ratio - 1.0) * 5  # 90-70 gradual decline
         else:
-            return max(0, 80 - (volume_tvl_ratio - 1.0) * 20)  # Further decline
+            return max(50, 70 - (volume_tvl_ratio - 5.0) * 2)  # Floor at 50
     
     def _calculate_liquidity_depth_score(self, tvl: float) -> float:
-        """Calculate liquidity depth score."""
+        """Calculate liquidity depth score - more generous for smaller pools."""
         if tvl <= 0:
             return 0
         elif tvl < 100_000:
-            return tvl / 100_000 * 20  # Up to 20 for small pools
+            return tvl / 100_000 * 30  # Up to 30 for small pools (was 20)
         elif tvl < 500_000:
-            return 20 + (tvl - 100_000) / 400_000 * 30  # 20-50
+            return 30 + (tvl - 100_000) / 400_000 * 20  # 30-50 (was 20-50)
+        elif tvl < 1_000_000:
+            return 50 + (tvl - 500_000) / 500_000 * 15  # 50-65
         elif tvl < 2_000_000:
-            return 50 + (tvl - 500_000) / 1_500_000 * 30  # 50-80
-        elif tvl < 10_000_000:
-            return 80 + (tvl - 2_000_000) / 8_000_000 * 20  # 80-100
+            return 65 + (tvl - 1_000_000) / 1_000_000 * 15  # 65-80
+        elif tvl < 5_000_000:
+            return 80 + (tvl - 2_000_000) / 3_000_000 * 15  # 80-95
         else:
-            return 100
+            return 95 + min(5, (tvl - 5_000_000) / 5_000_000 * 5)  # 95-100
     
     def _calculate_execution_quality_score(self, tick_spacing: int, tvl: float) -> float:
         """Calculate execution quality score based on tick spacing and liquidity."""

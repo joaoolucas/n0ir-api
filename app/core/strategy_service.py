@@ -328,17 +328,18 @@ class StrategyService:
             )
             apr_efficiency = self.effective_apr_calc.calculate_apr_efficiency(base_apr, effective_apr)
             
-            # Use the base score adjusted by APR efficiency  
-            # The allocation weight already considers safety and APR balance
-            if apr_efficiency < 10:  # Less than 10% efficiency
-                final_score = base_score * 0.5
-            elif apr_efficiency < 20:  # Less than 20% efficiency
-                final_score = base_score * 0.75
-            else:
-                # Good efficiency, might even boost score slightly
-                final_score = base_score * (1 + (apr_efficiency / 200))  # Small boost for high efficiency
+            # Recalculate score using EFFECTIVE APR instead of base APR
+            # This gives more accurate scoring
+            pool_with_effective_apr = pool.copy()
+            pool_with_effective_apr['apr'] = effective_apr  # Use effective APR for scoring
             
-            final_score = min(100, final_score)  # Cap at 100
+            # Recalculate pool score with effective APR
+            effective_score = self.calculator.calculate_pool_score(pool_with_effective_apr)
+            
+            # Combine with safety score for final score
+            # 60% effective score, 40% safety score
+            final_score = (effective_score * 0.6) + (safety_score * 0.4)
+            final_score = min(100, max(0, final_score))  # Cap at 0-100
             
             # Calculate expected returns using effective APR
             returns = self.calculator.calculate_expected_returns(
@@ -455,15 +456,20 @@ class StrategyService:
         )
     
     def _check_entry_conditions(self, pool: Dict, score: float, effective_apr: float = None) -> bool:
-        """Check if entry conditions are met."""
+        """Check if entry conditions are met - more lenient for smaller wallets."""
         # Use effective APR if provided, otherwise fall back to base APR
         apr_to_check = effective_apr if effective_apr is not None else pool.get('apr', 0)
         
+        # More lenient conditions for entry
+        # Score threshold: 45 instead of 60
+        # TVL threshold: 250k instead of 500k
+        # Volume threshold: 50k instead of 100k
+        # APR threshold: 30% instead of 50%
         return (
-            score >= 60 and
-            pool.get('tvl_usd', 0) >= 500_000 and
-            pool.get('volume_24h', 0) >= 100_000 and
-            apr_to_check >= 50  # Lower threshold for effective APR (50% instead of 80%)
+            score >= 45 and
+            pool.get('tvl_usd', 0) >= 250_000 and
+            pool.get('volume_24h', 0) >= 50_000 and
+            apr_to_check >= 30  # Lower threshold for effective APR
         )
     
     async def analyze_entry(
