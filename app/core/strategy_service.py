@@ -763,7 +763,12 @@ class StrategyService:
             health_score = max(0, health_score)
             
             # Determine recommended action
-            if range_break_severity > 85:
+            # IMPORTANT: Check if position is unstaked first
+            if hasattr(position_data, 'staked') and not position_data.staked:
+                recommended_action = 'exit'
+                action_details = {'urgency': 'high', 'reason': 'Position is unstaked - close to avoid losing rewards'}
+                health_score = 0  # Set health score to 0 for unstaked positions
+            elif range_break_severity > 85:
                 recommended_action = 'exit'
                 action_details = {'urgency': 'high', 'reason': 'Severe range break'}
             elif range_break_severity > 70:
@@ -843,7 +848,7 @@ class StrategyService:
             raise ValueError(f"Position {request.token_id} not found")
         
         # Fetch pool data to get current price
-        pool_address = position_data.get('pool_address')
+        pool_address = position_data.pool_address if hasattr(position_data, 'pool_address') else position_data.get('pool_address', '') if isinstance(position_data, dict) else ''
         pool = await pools_service.get_pool(pool_address)
         if not pool:
             raise ValueError(f"Pool {pool_address} not found")
@@ -861,8 +866,8 @@ class StrategyService:
             current_price = pool.get('current_price', pool.get('token0_price', 1.0))
         
         # Calculate range boundaries from ticks
-        tick_lower = position_data.get('tick_lower', 0)
-        tick_upper = position_data.get('tick_upper', 0)
+        tick_lower = position_data.tick_lower if hasattr(position_data, 'tick_lower') else position_data.get('tick_lower', 0) if isinstance(position_data, dict) else 0
+        tick_upper = position_data.tick_upper if hasattr(position_data, 'tick_upper') else position_data.get('tick_upper', 0) if isinstance(position_data, dict) else 0
         
         # Simple tick to price conversion (simplified)
         lower_price = (1.0001 ** tick_lower) ** 2
@@ -927,7 +932,7 @@ class StrategyService:
         )
         
         # Get invested amount from position
-        invested_amount = position_data.get('total_value_usd', 0)
+        invested_amount = position_data.current_value_usd if hasattr(position_data, 'current_value_usd') else position_data.get('total_value_usd', 0) if isinstance(position_data, dict) else 0
         
         # Determine action based on break type and severity
         if break_type == 'upward':
@@ -1012,9 +1017,9 @@ class StrategyService:
         
         # Build position object from fetched data
         position = {
-            'current_value': position_data.get('total_value_usd', 0),
-            'invested_amount': position_data.get('total_value_usd', 0),  # Approximation
-            'accumulated_fees': position_data.get('uncollected_fees_usd', 0),
+            'current_value': position_data.current_value_usd if hasattr(position_data, 'current_value_usd') else position_data.get('total_value_usd', 0) if isinstance(position_data, dict) else 0,
+            'invested_amount': position_data.current_value_usd if hasattr(position_data, 'current_value_usd') else position_data.get('total_value_usd', 0) if isinstance(position_data, dict) else 0,  # Approximation
+            'accumulated_fees': position_data.unclaimed_fees_usd if hasattr(position_data, 'unclaimed_fees_usd') else position_data.get('uncollected_fees_usd', 0) if isinstance(position_data, dict) else 0,
             'accumulated_rewards': 0,  # Would need to track separately
             'entry_timestamp': datetime.utcnow()  # Would need to track separately
         }
