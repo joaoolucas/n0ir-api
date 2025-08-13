@@ -319,32 +319,54 @@ class PositionsService:
             logger.warning(f"Failed to get decimals for {token_address}, defaulting to 18: {str(e)}")
             return 18  # Default to 18 decimals
     
-    async def _fetch_position_from_sugar(self, position_id: int, owner_address: str) -> Optional[Dict]:
+    async def _fetch_position_from_sugar(self, position_id: int, owner_address: str, is_unstaked: bool = False) -> Optional[Dict]:
         """Fetch position details from Sugar contract."""
         try:
             sugar = await self._get_sugar()
             
-            logger.info(f"Fetching position {position_id} from Sugar contract for owner {owner_address}...")
+            logger.info(f"Fetching {'unstaked' if is_unstaked else 'staked'} position {position_id} from Sugar contract for owner {owner_address}...")
             
-            # Fetch positions for the owner address
-            positions_data = sugar.functions.positions(
-                100000,  # limit
-                0,       # offset
-                Web3.to_checksum_address(owner_address)  # account (owner address)
-            ).call()
+            # Use different method based on staking status
+            if is_unstaked:
+                # Use positionsUnstakedConcentrated for unstaked positions
+                positions_data = sugar.functions.positionsUnstakedConcentrated(
+                    500,  # _limit
+                    0,    # _offset
+                    Web3.to_checksum_address(owner_address)  # _account (wallet address)
+                ).call()
+            else:
+                # Use regular positions for staked positions
+                positions_data = sugar.functions.positions(
+                    100000,  # limit
+                    0,       # offset
+                    Web3.to_checksum_address(owner_address)  # account (owner address)
+                ).call()
             
-            logger.info(f"Sugar returned {len(positions_data)} positions for owner {owner_address}")
+            logger.info(f"Sugar returned {len(positions_data)} {'unstaked' if is_unstaked else 'staked'} positions for owner {owner_address}")
             
             # Find the position with matching ID
             for position in positions_data:
                 if position[0] == position_id:  # First element is position ID
                     logger.info(f"Found position {position_id} in Sugar data")
-                    return {
-                        'id': position[0],
-                        'staked0': position[6] if len(position) > 6 else 0,  # staked0 (index 6)
-                        'staked1': position[7] if len(position) > 7 else 0,  # staked1 (index 7)
-                        'emissions_earned': position[10] if len(position) > 10 else 0,  # emissions_earned (index 10)
-                    }
+                    
+                    if is_unstaked:
+                        # For unstaked positions, we need to calculate value from reserves
+                        # positionsUnstakedConcentrated returns: (id, lp, liquidity, staked0, staked1, unstaked0, unstaked1, ...)
+                        # We need reserve0 and reserve1 which are at indices 5 and 6
+                        return {
+                            'id': position[0],
+                            'staked0': position[5] if len(position) > 5 else 0,  # unstaked0 (reserve0)
+                            'staked1': position[6] if len(position) > 6 else 0,  # unstaked1 (reserve1)
+                            'emissions_earned': 0,  # No emissions for unstaked positions
+                        }
+                    else:
+                        # For staked positions, use the regular indices
+                        return {
+                            'id': position[0],
+                            'staked0': position[6] if len(position) > 6 else 0,  # staked0 (index 6)
+                            'staked1': position[7] if len(position) > 7 else 0,  # staked1 (index 7)
+                            'emissions_earned': position[10] if len(position) > 10 else 0,  # emissions_earned (index 10)
+                        }
             
             logger.warning(f"Position {position_id} not found in Sugar data for owner {owner_address}")
             return None
@@ -432,7 +454,8 @@ class PositionsService:
             current_value_usd = None
             unclaimed_fees_usd = None
             
-            sugar_position = await self._fetch_position_from_sugar(token_id, owner)
+            # Pass staking status to fetch the correct data
+            sugar_position = await self._fetch_position_from_sugar(token_id, owner, is_unstaked=not staked)
             logger.info(f"Position {token_id} - Sugar data: {sugar_position}")
             
             if sugar_position:

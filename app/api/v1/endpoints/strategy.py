@@ -190,7 +190,9 @@ async def analyze_trade(request: AnalyzeRequest) -> AnalyzeResponse:
     except HTTPException:
         raise
     except Exception as e:
+        import traceback
         logger.error(f"Error analyzing trade: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

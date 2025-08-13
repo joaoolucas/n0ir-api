@@ -123,8 +123,9 @@ class StrategyService:
             
             # Calculate total value of current positions
             for pos in executor_positions:
-                if pos.get('current_value_usd'):
-                    total_position_value += pos['current_value_usd']
+                current_val = pos.get('current_value_usd')
+                if current_val is not None and current_val > 0:
+                    total_position_value += current_val
             
             logger.info(f"Executor has {len(executor_positions)} positions in {len(exclude_addresses)} unique pools, total value: ${total_position_value}")
         except Exception as e:
@@ -338,7 +339,7 @@ class StrategyService:
                 range_width_percentage = 0
             
             # Calculate effective APR for the recommended range
-            base_apr = pool.get('apr', 0)
+            base_apr = pool.get('apr', 0) or 0  # Ensure base_apr is never None
             effective_apr = self.effective_apr_calc.calculate_effective_apr_from_ticks(
                 base_apr,
                 tick_spacing,
@@ -642,7 +643,7 @@ class StrategyService:
         )
         
         # Calculate effective APR for the optimal range
-        base_apr = pool.get('apr', 0)
+        base_apr = pool.get('apr', 0) or 0  # Ensure base_apr is never None
         effective_apr = self.effective_apr_calc.calculate_effective_apr_from_ticks(
             base_apr,
             tick_spacing,
@@ -659,10 +660,11 @@ class StrategyService:
         confidence_score = min(100, base_confidence + apr_confidence)
         
         # Adjust confidence based on APR efficiency
-        if apr_efficiency < 10:  # Less than 10% efficiency is very poor
-            confidence_score *= 0.5
-        elif apr_efficiency < 20:  # Less than 20% efficiency is poor
-            confidence_score *= 0.75
+        if apr_efficiency is not None:
+            if apr_efficiency < 10:  # Less than 10% efficiency is very poor
+                confidence_score *= 0.5
+            elif apr_efficiency < 20:  # Less than 20% efficiency is poor
+                confidence_score *= 0.75
         
         # Determine if should enter based on effective APR
         # Use effective APR for the entry decision since that's what we'll actually earn
@@ -680,8 +682,9 @@ class StrategyService:
             warnings.append(f"High slippage: {slippage_breakdown['total_slippage']:.2f}%")
         if risk_metrics['concentration_risk']:
             warnings.append("Position would create concentration risk")
-        if effective_apr < 10:
-            warnings.append(f"Low effective APR: {effective_apr:.2f}% (efficiency: {apr_efficiency:.1f}%)")
+        if effective_apr is not None and effective_apr < 10:
+            efficiency_str = f"{apr_efficiency:.1f}" if apr_efficiency is not None else "N/A"
+            warnings.append(f"Low effective APR: {effective_apr:.2f}% (efficiency: {efficiency_str}%)")
         
         return AnalyzeEntryResponse(
             should_enter=should_enter,
@@ -810,8 +813,8 @@ class StrategyService:
                 current_apr = position_statuses[i].current_apr
             
             portfolio_positions.append({
-                'current_value': pos.current_value_usd or 0,
-                'invested_amount': pos.current_value_usd or 0,  # Approximation
+                'current_value': pos.current_value_usd if pos.current_value_usd is not None else 0,
+                'invested_amount': pos.current_value_usd if pos.current_value_usd is not None else 0,  # Approximation
                 'volatility_24h': self.calculator.calculate_volatility_from_tick_spacing(
                     pos.tick_spacing or 100,
                     False  # is_stable not available in PositionInfo, default to False
@@ -933,7 +936,12 @@ class StrategyService:
         )
         
         # Get invested amount from position
-        invested_amount = position_data.current_value_usd if hasattr(position_data, 'current_value_usd') else position_data.get('total_value_usd', 0) if isinstance(position_data, dict) else 0
+        if hasattr(position_data, 'current_value_usd'):
+            invested_amount = position_data.current_value_usd if position_data.current_value_usd is not None else 0
+        elif isinstance(position_data, dict):
+            invested_amount = position_data.get('total_value_usd', 0) or 0
+        else:
+            invested_amount = 0
         
         # Determine action based on break type and severity
         if break_type == 'upward':
@@ -1017,10 +1025,24 @@ class StrategyService:
             raise ValueError(f"Position {request.token_id} not found")
         
         # Build position object from fetched data
+        # Safely extract position values
+        if hasattr(position_data, 'current_value_usd'):
+            current_value = position_data.current_value_usd if position_data.current_value_usd is not None else 0
+            invested_amount = position_data.current_value_usd if position_data.current_value_usd is not None else 0
+            accumulated_fees = position_data.unclaimed_fees_usd if position_data.unclaimed_fees_usd is not None else 0
+        elif isinstance(position_data, dict):
+            current_value = position_data.get('total_value_usd', 0) or 0
+            invested_amount = position_data.get('total_value_usd', 0) or 0
+            accumulated_fees = position_data.get('uncollected_fees_usd', 0) or 0
+        else:
+            current_value = 0
+            invested_amount = 0
+            accumulated_fees = 0
+            
         position = {
-            'current_value': position_data.current_value_usd if hasattr(position_data, 'current_value_usd') else position_data.get('total_value_usd', 0) if isinstance(position_data, dict) else 0,
-            'invested_amount': position_data.current_value_usd if hasattr(position_data, 'current_value_usd') else position_data.get('total_value_usd', 0) if isinstance(position_data, dict) else 0,  # Approximation
-            'accumulated_fees': position_data.unclaimed_fees_usd if hasattr(position_data, 'unclaimed_fees_usd') else position_data.get('uncollected_fees_usd', 0) if isinstance(position_data, dict) else 0,
+            'current_value': current_value,
+            'invested_amount': invested_amount,  # Approximation
+            'accumulated_fees': accumulated_fees,
             'accumulated_rewards': 0,  # Would need to track separately
             'entry_timestamp': datetime.utcnow()  # Would need to track separately
         }
