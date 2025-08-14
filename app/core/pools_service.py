@@ -285,14 +285,14 @@ class PoolsService:
         # Batch fetch all token prices at once
         prices = {}
         if token_addresses:
-            # Use our own price fetching utility
-            prices = await self._fetch_token_prices_from_dexscreener(list(token_addresses))
+            # Use get_token_prices which checks cache first, then fetches missing prices
+            prices = await self.get_token_prices(list(token_addresses))
         
         # Get AERO price for APR calculation
         aero_price = prices.get(settings.aero_token_address.lower(), 0)
         if aero_price == 0:
             # Fetch AERO price separately if not in batch
-            aero_prices = await self._fetch_token_prices_from_dexscreener([settings.aero_token_address])
+            aero_prices = await self.get_token_prices([settings.aero_token_address])
             aero_price = aero_prices.get(settings.aero_token_address.lower(), 50)  # Default to $50 if failed
         
         # Batch fetch volume data for all pools
@@ -651,7 +651,7 @@ class PoolsService:
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as response:
                     if response.status == 200:
                         data = await response.json()
-                        if data and 'pairs' in data and len(data['pairs']) > 0:
+                        if data and 'pairs' in data and data['pairs'] and len(data['pairs']) > 0:
                             # Get price from the most liquid Base network pair
                             base_pairs = [p for p in data['pairs'] if p.get('chainId') == 'base']
                             if base_pairs:

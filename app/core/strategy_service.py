@@ -1355,8 +1355,8 @@ class StrategyService:
                         # Get top performing whitelisted pools
                         from app.core.pools_service import pools_service
                         
-                        # Fetch top pools by APR
-                        pools_response = await pools_service.get_pools(
+                        # Fetch top pools by APR - use get_pools_full to get actual APR/TVL data
+                        pools_response = await pools_service.get_pools_full(
                             limit=20,
                             offset=0,
                             sort_by='apr',
