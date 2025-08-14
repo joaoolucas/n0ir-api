@@ -159,6 +159,31 @@ async def analyze_trade(request: AnalyzeRequest) -> AnalyzeResponse:
                 )
             )
             
+        elif request.action == "switch":
+            if not request.switch_data:
+                raise HTTPException(400, "switch_data required for switch analysis")
+            
+            # Call new switch analysis method
+            switch_result = await strategy_service.analyze_position_switches(
+                user_address=request.switch_data.user_address,
+                token_ids=request.switch_data.token_ids
+            )
+            
+            # Import the response model
+            from app.schemas.strategy_v2 import AnalyzeSwitchResponse
+            
+            # Build v2 response
+            return AnalyzeResponse(
+                action="switch",
+                switch_response=AnalyzeSwitchResponse(
+                    recommendations=switch_result['recommendations'],
+                    total_positions_analyzed=switch_result['total_positions_analyzed'],
+                    positions_recommended_for_switch=switch_result['positions_recommended_for_switch'],
+                    total_expected_apr_improvement=switch_result['total_expected_apr_improvement'],
+                    estimated_total_gas_cost=switch_result['estimated_total_gas_cost']
+                )
+            )
+            
         elif request.action == "slippage":
             if not request.slippage_data:
                 raise HTTPException(400, "slippage_data required for slippage analysis")

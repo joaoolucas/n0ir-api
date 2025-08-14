@@ -1263,6 +1263,173 @@ class StrategyService:
             alternative_strategies=alternatives
         )
     
+    async def analyze_position_switches(
+        self,
+        user_address: str,
+        token_ids: List[int]
+    ) -> Dict:
+        """
+        Analyze specific positions for potential switching opportunities.
+        
+        This method:
+        1. Fetches user positions for given token_ids
+        2. Retrieves candidate pools from whitelisted top performers
+        3. Evaluates each position for switching opportunities
+        4. Returns detailed switch recommendations
+        
+        Args:
+            user_address: User wallet address
+            token_ids: List of NFT token IDs to analyze
+            
+        Returns:
+            Dictionary with switch recommendations and analysis
+        """
+        from app.schemas.strategy_v2 import SwitchRecommendation
+        
+        logger.info(f"Analyzing switch opportunities for {len(token_ids)} positions")
+        
+        # Fetch user positions
+        positions_list = []
+        for token_id in token_ids:
+            try:
+                position = await positions_service.get_position_by_id(token_id)
+                # Verify ownership
+                if position.get('owner', '').lower() == user_address.lower():
+                    positions_list.append(position)
+                else:
+                    logger.warning(f"Token {token_id} not owned by {user_address}")
+            except Exception as e:
+                logger.warning(f"Could not fetch position {token_id}: {e}")
+        
+        if not positions_list:
+            return {
+                'recommendations': [],
+                'total_positions_analyzed': 0,
+                'positions_recommended_for_switch': 0,
+                'total_expected_apr_improvement': 0,
+                'estimated_total_gas_cost': 0
+            }
+        
+        # Calculate wallet size for dynamic thresholds
+        wallet_size = sum(p.get('current_value', 0) for p in positions_list)
+        
+        # Fetch candidate pools for switching evaluation
+        candidate_pools = []
+        try:
+            # Get top performing whitelisted pools
+            from app.core.pools_service import pools_service
+            
+            # Fetch top pools by APR
+            pools_response = await pools_service.get_pools_full(
+                limit=20,
+                offset=0,
+                sort_by='apr',
+                sort_order='desc',
+                min_tvl=100000,  # Only liquid pools
+                min_volume_24h=10000  # Active pools
+            )
+            
+            # Extract pool data and add safety scores
+            for pool in pools_response.get('pools', []):
+                safety_score = self.calculator.calculate_simple_safety_score(pool)
+                apr_value = pool.get('apr', 0)
+                
+                candidate_pools.append({
+                    'address': pool.get('address'),
+                    'apr': apr_value,
+                    'safety_score': safety_score,
+                    'tvl': pool.get('tvl_usd', 0),
+                    'volume_24h': pool.get('volume_24h', 0),
+                    'pair': pool.get('symbol', '')
+                })
+            
+            logger.info(f"Fetched {len(candidate_pools)} candidate pools for switching evaluation")
+                
+        except Exception as e:
+            logger.warning(f"Could not fetch candidate pools for switching: {e}")
+            candidate_pools = []
+        
+        # Analyze each position for switching opportunities
+        recommendations = []
+        total_gas_cost = 0
+        gas_price_gwei = 30  # Default gas price
+        
+        for position in positions_list:
+            # Prepare position data for analysis
+            position_data = {
+                'current_value': position.get('current_value', 0),
+                'current_apr': position.get('apr', 0),
+                'safety_score': self.calculator.calculate_simple_safety_score({
+                    'tvl_usd': position.get('pool_tvl', 1_000_000),
+                    'volume_24h': position.get('volume_24h', 100_000),
+                    'token0': {'price_usd': position.get('token0_price', 1)},
+                    'token1': {'price_usd': position.get('token1_price', 1)}
+                }),
+                'pool_address': position.get('pool_address'),
+                'age_days': position.get('age_days', 0)
+            }
+            
+            # Evaluate against each candidate pool
+            best_switch = None
+            best_benefit = 0
+            
+            for candidate in candidate_pools:
+                should_switch, reason = self.portfolio_analyzer.should_recommend_switch(
+                    position_data,
+                    candidate,
+                    wallet_size,
+                    gas_price_gwei
+                )
+                
+                if should_switch:
+                    expected_benefit = candidate['apr'] - position_data['current_apr']
+                    if expected_benefit > best_benefit:
+                        # Estimate gas cost (exit + enter new position)
+                        gas_cost_usd = 100  # Rough estimate, should be calculated properly
+                        
+                        # Calculate breakeven days
+                        daily_benefit = (expected_benefit / 100 / 365) * position_data['current_value']
+                        breakeven_days = gas_cost_usd / daily_benefit if daily_benefit > 0 else float('inf')
+                        
+                        best_switch = {
+                            'token_id': position.get('token_id'),
+                            'current_pool_address': position.get('pool_address'),
+                            'current_apr': position_data['current_apr'],
+                            'current_value': position_data['current_value'],
+                            'target_pool_address': candidate['address'],
+                            'target_pool_symbol': candidate['pair'],
+                            'target_apr': candidate['apr'],
+                            'target_safety_score': candidate['safety_score'],
+                            'should_switch': True,
+                            'reason': reason,
+                            'expected_benefit': expected_benefit,
+                            'breakeven_days': breakeven_days,
+                            'estimated_gas_cost': gas_cost_usd
+                        }
+                        best_benefit = expected_benefit
+            
+            if best_switch:
+                recommendations.append(SwitchRecommendation(**best_switch))
+                total_gas_cost += best_switch['estimated_gas_cost']
+        
+        # Calculate weighted average APR improvement
+        total_value = sum(p.get('current_value', 0) for p in positions_list)
+        if total_value > 0 and recommendations:
+            weighted_improvement = sum(
+                r.expected_benefit * r.current_value / total_value 
+                for r in recommendations
+            )
+        else:
+            weighted_improvement = 0
+        
+        return {
+            'recommendations': recommendations,
+            'total_positions_analyzed': len(positions_list),
+            'positions_recommended_for_switch': len(recommendations),
+            'total_expected_apr_improvement': weighted_improvement,
+            'estimated_total_gas_cost': total_gas_cost
+        }
+    
     async def rebalance_portfolio(
         self,
         request: PortfolioRebalanceRequest
@@ -1373,104 +1540,19 @@ class StrategyService:
                         )
                         recommendations.append(recommendation)
             else:
-                # Standard rebalancing logic
-                # Fetch candidate pools for switching evaluation
-                candidate_pools = None
-                if getattr(request, 'check_switches', True):  # Default to checking switches
-                    try:
-                        # Get top performing whitelisted pools
-                        from app.core.pools_service import pools_service
-                        
-                        # Fetch top pools by APR - use get_pools_full to get actual APR/TVL data
-                        pools_response = await pools_service.get_pools_full(
-                            limit=20,
-                            offset=0,
-                            sort_by='apr',
-                            sort_order='desc',
-                            min_tvl=100000,  # Only liquid pools
-                            min_volume_24h=10000  # Active pools
-                        )
-                        
-                        # Extract pool data and add safety scores
-                        candidate_pools = []
-                        
-                        # DEBUG: Add some hardcoded test pools to verify switching logic
-                        test_pools = [
-                            {
-                                'address': '0xTEST0001',
-                                'apr': 120,  # 120% APR (20% better than position)
-                                'tvl_usd': 500000,
-                                'volume_24h': 50000,
-                                'symbol': 'TEST/USDC'
-                            },
-                            {
-                                'address': '0xTEST0002',
-                                'apr': 150,  # 150% APR (50% better)
-                                'tvl_usd': 1000000,
-                                'volume_24h': 100000,
-                                'symbol': 'TEST2/USDC'
-                            }
-                        ]
-                        
-                        # Add test pools first
-                        for test_pool in test_pools:
-                            safety_score = 70  # Good safety score
-                            candidate_pools.append({
-                                'address': test_pool['address'],
-                                'apr': test_pool['apr'],
-                                'safety_score': safety_score,
-                                'tvl': test_pool['tvl_usd'],
-                                'volume_24h': test_pool['volume_24h'],
-                                'pair': test_pool['symbol']
-                            })
-                        
-                        logger.info(f"Added {len(test_pools)} test pools to candidates")
-                        
-                        # Then add real pools (currently not working properly)
-                        for i, pool in enumerate(pools_response.get('pools', [])):
-                            # Calculate safety score for each candidate
-                            safety_score = self.calculator.calculate_simple_safety_score(pool)
-                            apr_value = pool.get('apr', 0)
-                            
-                            # Log first few pools for debugging
-                            if i < 3:
-                                logger.info(f"Candidate pool {i}: address={pool.get('address')[:10]}... apr={apr_value:.2f}% tvl=${pool.get('tvl_usd', 0):,.0f}")
-                            
-                            candidate_pools.append({
-                                'address': pool.get('address'),
-                                'apr': apr_value,
-                                'safety_score': safety_score,
-                                'tvl': pool.get('tvl_usd', 0),
-                                'volume_24h': pool.get('volume_24h', 0),
-                                'pair': pool.get('symbol', '')
-                            })
-                        
-                        logger.info(f"Fetched {len(candidate_pools)} candidate pools for switching evaluation")
-                            
-                    except Exception as e:
-                        logger.warning(f"Could not fetch candidate pools for switching: {e}")
-                        candidate_pools = None
+                # Standard rebalancing logic - focus on portfolio-level operations
+                # No longer checking for switches here - that's handled by analyze_position_switches
                 
                 raw_recommendations = self.portfolio_analyzer.generate_rebalancing_recommendations(
                     positions_list,
                     request.available_capital,
                     'balanced',
-                    candidate_pools=candidate_pools
+                    candidate_pools=None  # No candidate pools for switching
                 )
                 
                 for rec in raw_recommendations:
-                    if rec['action'] == 'switch':
-                        # Handle switch recommendations differently
-                        recommendation = RebalanceRecommendation(
-                            action='switch',
-                            token_id=rec.get('token_id'),
-                            pool_address=rec.get('target_pool_address'),  # Target pool for switch
-                            target_percentage=None,
-                            suggested_amount=None,
-                            reason=rec['reason']
-                        )
-                    else:
-                        # Standard recommendation
+                    # Only handle portfolio-level actions (no switches)
+                    if rec['action'] != 'switch':
                         recommendation = RebalanceRecommendation(
                             action=rec['action'],
                             token_id=rec.get('token_id'),
@@ -1479,7 +1561,7 @@ class StrategyService:
                             suggested_amount=rec.get('suggested_amount'),
                             reason=rec['reason']
                         )
-                    recommendations.append(recommendation)
+                        recommendations.append(recommendation)
         
         # Calculate expected improvement
         current_metrics = self.portfolio_analyzer.calculate_portfolio_metrics(positions_list)

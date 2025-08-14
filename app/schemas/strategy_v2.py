@@ -47,14 +47,21 @@ class AnalyzeSlippageData(BaseModel):
     amount_usdc: float = Field(..., gt=0)
 
 
+class AnalyzeSwitchData(BaseModel):
+    """Switch position analysis data."""
+    user_address: str = Field(..., description="User wallet address")
+    token_ids: List[int] = Field(..., description="NFT token IDs of positions to analyze for switching")
+
+
 class AnalyzeRequest(BaseModel):
     """Unified request for trade analysis."""
-    action: Literal["entry", "exit", "slippage"] = Field(..., description="Type of analysis to perform")
+    action: Literal["entry", "exit", "slippage", "switch"] = Field(..., description="Type of analysis to perform")
     
     # Action-specific data
     entry_data: Optional[AnalyzeEntryData] = None
     exit_data: Optional[AnalyzeExitData] = None
     slippage_data: Optional[AnalyzeSlippageData] = None
+    switch_data: Optional[AnalyzeSwitchData] = None
     
     @property
     def pool_address(self) -> Optional[str]:
@@ -108,15 +115,42 @@ class AnalyzeSlippageResponse(BaseModel):
     pair_classification: Literal["stable", "semi-volatile", "volatile", "memecoin"]
 
 
+class SwitchRecommendation(BaseModel):
+    """Individual switch recommendation for a position."""
+    token_id: int = Field(..., description="NFT token ID of the position")
+    current_pool_address: str
+    current_apr: float
+    current_value: float
+    target_pool_address: str
+    target_pool_symbol: str
+    target_apr: float
+    target_safety_score: float
+    should_switch: bool
+    reason: str
+    expected_benefit: float = Field(..., description="Expected APR improvement percentage")
+    breakeven_days: float = Field(..., description="Days to breakeven on gas costs")
+    estimated_gas_cost: float
+
+
+class AnalyzeSwitchResponse(BaseModel):
+    """Response for switch position analysis."""
+    recommendations: List[SwitchRecommendation]
+    total_positions_analyzed: int
+    positions_recommended_for_switch: int
+    total_expected_apr_improvement: float = Field(..., description="Weighted average APR improvement across all positions")
+    estimated_total_gas_cost: float
+
+
 class AnalyzeResponse(BaseModel):
     """Unified response for trade analysis."""
-    action: Literal["entry", "exit", "slippage"]
+    action: Literal["entry", "exit", "slippage", "switch"]
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     
     # Action-specific responses
     entry_response: Optional[AnalyzeEntryResponse] = None
     exit_response: Optional[AnalyzeExitResponse] = None
     slippage_response: Optional[AnalyzeSlippageResponse] = None
+    switch_response: Optional[AnalyzeSwitchResponse] = None
 
 
 # ============= Enhanced Monitor Models =============
@@ -197,7 +231,6 @@ class PortfolioRebalanceRequest(BaseModel):
     """Request for portfolio rebalancing."""
     user_address: str = Field(..., description="User wallet address")
     available_capital: float = Field(default=0, ge=0)
-    check_switches: bool = Field(default=True, description="Check for pool switching opportunities")
 
 
 class PortfolioResponse(BaseModel):
