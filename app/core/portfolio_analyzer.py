@@ -424,21 +424,25 @@ class PortfolioAnalyzer:
                 positions_with_actions.add(position.get('token_id'))
         
         # PRIORITY 2: Check for overconcentration
-        for pool_address, pct in concentration['pool_concentration'].items():
-            if pct > self.RISK_THRESHOLDS['max_pool_concentration'] * 100:
-                # Find the position
-                for position in positions:
-                    if (position.get('pool_address') == pool_address and 
-                        position.get('token_id') not in positions_with_actions):
-                        recommendations.append({
-                            'action': 'reduce',
-                            'token_id': position.get('token_id'),
-                            'pool_address': pool_address,
-                            'target_percentage': 50,  # Reduce by half
-                            'reason': f'Overconcentration: {pct:.1f}% of portfolio'
-                        })
-                        positions_with_actions.add(position.get('token_id'))
-                        break
+        # Skip concentration checks for tiny portfolios or single positions
+        total_value = sum(p.get('current_value', p.get('invested_amount', 0)) for p in positions)
+        
+        if total_value > 100 and len(positions) > 1:  # Only check concentration for portfolios > $100 with multiple positions
+            for pool_address, pct in concentration['pool_concentration'].items():
+                if pct > self.RISK_THRESHOLDS['max_pool_concentration'] * 100:
+                    # Find the position
+                    for position in positions:
+                        if (position.get('pool_address') == pool_address and 
+                            position.get('token_id') not in positions_with_actions):
+                            recommendations.append({
+                                'action': 'reduce',
+                                'token_id': position.get('token_id'),
+                                'pool_address': pool_address,
+                                'target_percentage': 50,  # Reduce by half
+                                'reason': f'Overconcentration: {pct:.1f}% of portfolio'
+                            })
+                            positions_with_actions.add(position.get('token_id'))
+                            break
         
         # PRIORITY 3: Check for severely underperforming positions
         avg_apr = metrics['current_apr']
@@ -473,11 +477,20 @@ class PortfolioAnalyzer:
                 positions_with_actions.add(position.get('token_id'))
         
         # PRIORITY 5: Suggest new positions if capital available
-        if available_capital > 1000 and len(positions) < 10:
+        # Only suggest new positions if we have meaningful capital
+        if available_capital > 100 and len(positions) < 10:
+            # For very small capital amounts, suggest using most of it
+            if available_capital < 500:
+                suggested_amount = available_capital * 0.8  # Use 80% of available
+            elif available_capital < 1000:
+                suggested_amount = available_capital * 0.5  # Use 50% of available
+            else:
+                suggested_amount = min(available_capital * 0.2, 5000)  # Use 20% up to $5k
+            
             recommendations.append({
                 'action': 'open',
-                'suggested_amount': min(available_capital * 0.2, 5000),
-                'reason': 'Diversification opportunity'
+                'suggested_amount': suggested_amount,
+                'reason': 'Capital available for new position'
             })
         
         return recommendations
