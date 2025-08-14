@@ -796,17 +796,33 @@ class StrategyService:
             # IMPORTANT: Check if position is unstaked first
             if hasattr(position_data, 'staked') and not position_data.staked:
                 recommended_action = 'exit'
-                action_details = {'urgency': 'high', 'reason': 'Position is unstaked - close to avoid losing rewards'}
+                action_details = {
+                    'urgency': 'high', 
+                    'reason': 'Position is unstaked - exit to avoid losing rewards',
+                    'next_step': 'Use /api/v1/strategy/screen endpoint to find new opportunities'
+                }
                 health_score = 0  # Set health score to 0 for unstaked positions
+            elif not in_range:
+                # Out of range positions should be exited
+                recommended_action = 'exit'
+                action_details = {
+                    'urgency': 'high', 
+                    'reason': 'Position is out of range - exit and find new opportunities',
+                    'next_step': 'Use /api/v1/strategy/screen endpoint to find better opportunities'
+                }
             elif range_break_severity and range_break_severity > 85:
                 recommended_action = 'exit'
-                action_details = {'urgency': 'high', 'reason': 'Severe range break'}
+                action_details = {
+                    'urgency': 'high', 
+                    'reason': 'Severe range break - exit and find new opportunities',
+                    'next_step': 'Use /api/v1/strategy/screen endpoint to find better opportunities'
+                }
             elif range_break_severity and range_break_severity > 70:
                 recommended_action = 'rebalance'
-                action_details = {'urgency': 'medium', 'reason': 'Range break detected'}
+                action_details = {'urgency': 'medium', 'reason': 'Range break detected - consider rebalancing'}
             elif health_score < 50:
                 recommended_action = 'monitor'
-                action_details = {'frequency': 'high', 'reason': 'Low health score'}
+                action_details = {'frequency': 'high', 'reason': 'Low health score - monitor closely'}
             else:
                 recommended_action = 'hold'
                 action_details = None
@@ -992,15 +1008,21 @@ class StrategyService:
                 max_slippage = 1.0
         else:  # downward
             if break_info.get('severity', 0) >= 85:
-                action = 'rebalance'
+                action = 'emergency_exit'
                 urgency = 'high'
-                reasoning = "Severe downward break - consider rebalancing"
+                reasoning = "Severe downward break - exit and find new opportunities"
+                exit_percentage = 100
+                max_slippage = 1.5
+            elif break_info.get('severity', 0) >= 70:
+                action = 'rebalance'
+                urgency = 'medium'
+                reasoning = "Moderate downward break - consider rebalancing"
                 exit_percentage = 0
                 max_slippage = 1.0
             else:
                 action = 'monitor'
                 urgency = 'low'
-                reasoning = "Downward break - monitor for opportunities"
+                reasoning = "Mild downward break - monitor for opportunities"
                 exit_percentage = 0
                 max_slippage = 0.5
         
