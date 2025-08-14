@@ -110,6 +110,10 @@ class Settings(BaseSettings):
     cdp_api_key_secret: Optional[str] = Field(default=None, env="CDP_API_KEY_SECRET")
     cdp_wallet_secret: Optional[str] = Field(default=None, env="CDP_WALLET_SECRET")
     
+    # Etherscan API Configuration
+    etherscan_api_key: Optional[str] = Field(default=None, env="ETHERSCAN_API_KEY")
+    base_chain_id: int = Field(default=8453, env="BASE_CHAIN_ID")  # Base mainnet chain ID
+    
     @property
     def get_database_url(self) -> Optional[str]:
         """Get the appropriate database URL for Railway."""
