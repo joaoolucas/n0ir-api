@@ -90,6 +90,7 @@ class PortfolioRebalanceRequest(BaseModel):
     """Request for portfolio rebalancing."""
     user_address: str = Field(..., description="User wallet address")
     available_capital: float = Field(default=0, ge=0)
+    check_switches: bool = Field(default=True, description="Check for pool switching opportunities")
 
 
 class SlippageCalculationRequest(BaseModel):
@@ -236,7 +237,7 @@ class WhipsawDetectionResponse(BaseModel):
 
 class RebalanceRecommendation(BaseModel):
     """Rebalancing recommendation."""
-    action: Literal["close", "reduce", "open", "increase"]
+    action: Literal["close", "reduce", "open", "increase", "switch", "rebalance"]
     token_id: Optional[int] = None
     pool_address: Optional[str] = None
     target_percentage: Optional[float] = None
