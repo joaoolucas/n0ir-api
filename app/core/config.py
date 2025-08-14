@@ -1,4 +1,4 @@
-from typing import List, Union
+from typing import List, Union, Optional
 from pydantic_settings import BaseSettings
 from pydantic import Field
 import json
@@ -96,6 +96,25 @@ class Settings(BaseSettings):
     strategy_upward_break_reversal_prob: float = Field(default=0.70, env="STRATEGY_UPWARD_BREAK_REVERSAL_PROB")
     strategy_cache_ttl_opportunities: int = Field(default=300, env="STRATEGY_CACHE_TTL_OPPORTUNITIES")
     strategy_cache_ttl_analysis: int = Field(default=60, env="STRATEGY_CACHE_TTL_ANALYSIS")
+    
+    # Database Configuration
+    database_url: Optional[str] = Field(default=None, env="DATABASE_URL")
+    database_private_url: Optional[str] = Field(default=None, env="DATABASE_PRIVATE_URL")
+    database_public_url: Optional[str] = Field(default=None, env="DATABASE_PUBLIC_URL")
+    database_pool_size: int = Field(default=20, env="DATABASE_POOL_SIZE")
+    database_pool_overflow: int = Field(default=0, env="DATABASE_POOL_OVERFLOW")
+    database_echo: bool = Field(default=False, env="DATABASE_ECHO")
+    
+    # CDP Integration Configuration
+    cdp_api_key_id: Optional[str] = Field(default=None, env="CDP_API_KEY_ID")
+    cdp_api_key_secret: Optional[str] = Field(default=None, env="CDP_API_KEY_SECRET")
+    cdp_wallet_secret: Optional[str] = Field(default=None, env="CDP_WALLET_SECRET")
+    
+    @property
+    def get_database_url(self) -> Optional[str]:
+        """Get the appropriate database URL for Railway."""
+        # Use private URL for internal Railway connections (faster, free)
+        return self.database_private_url or self.database_url
     
     class Config:
         env_file = ".env"

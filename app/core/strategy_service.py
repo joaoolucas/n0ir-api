@@ -41,7 +41,6 @@ WHITELISTED_POOLS = {
     "0x363d1607b8DA83d6B6EA76D017CeEcf1316BB08A",  # cbBTC/cbDOGE
     "0xFd4F716cb3c493aFDDd40C67d3f42426aEb2d902",  # WETH/uLINK
     "0x56b92E5B391DbFb8b8028AC95A4b97f52ffEB416",  # WETH/KAITO
-    "0xe077DdFb9E9d9403A8eC42D3023D17e8417ee399",  # GIZA/USDC
     "0x68a5aEA4DE3D938a755D85d1868Fe79A9C7B6ae1",  # WETH/DEGEN
     "0x22A52bB644f855ebD5ca2edB643FF70222D70C31",  # WETH/AIXBT
     "0x4e829F8A5213c42535AB84AA40BD4aDCCE9cBa02",  # WETH/BRETT
@@ -797,17 +796,33 @@ class StrategyService:
             # IMPORTANT: Check if position is unstaked first
             if hasattr(position_data, 'staked') and not position_data.staked:
                 recommended_action = 'exit'
-                action_details = {'urgency': 'high', 'reason': 'Position is unstaked - close to avoid losing rewards'}
+                action_details = {
+                    'urgency': 'high', 
+                    'reason': 'Position is unstaked - exit to avoid losing rewards',
+                    'next_step': 'Use /api/v1/strategy/screen endpoint to find new opportunities'
+                }
                 health_score = 0  # Set health score to 0 for unstaked positions
+            elif not in_range:
+                # Out of range positions should be exited
+                recommended_action = 'exit'
+                action_details = {
+                    'urgency': 'high', 
+                    'reason': 'Position is out of range - exit and find new opportunities',
+                    'next_step': 'Use /api/v1/strategy/screen endpoint to find better opportunities'
+                }
             elif range_break_severity and range_break_severity > 85:
                 recommended_action = 'exit'
-                action_details = {'urgency': 'high', 'reason': 'Severe range break'}
+                action_details = {
+                    'urgency': 'high', 
+                    'reason': 'Severe range break - exit and find new opportunities',
+                    'next_step': 'Use /api/v1/strategy/screen endpoint to find better opportunities'
+                }
             elif range_break_severity and range_break_severity > 70:
                 recommended_action = 'rebalance'
-                action_details = {'urgency': 'medium', 'reason': 'Range break detected'}
+                action_details = {'urgency': 'medium', 'reason': 'Range break detected - consider rebalancing'}
             elif health_score < 50:
                 recommended_action = 'monitor'
-                action_details = {'frequency': 'high', 'reason': 'Low health score'}
+                action_details = {'frequency': 'high', 'reason': 'Low health score - monitor closely'}
             else:
                 recommended_action = 'hold'
                 action_details = None
@@ -993,15 +1008,21 @@ class StrategyService:
                 max_slippage = 1.0
         else:  # downward
             if break_info.get('severity', 0) >= 85:
-                action = 'rebalance'
+                action = 'emergency_exit'
                 urgency = 'high'
-                reasoning = "Severe downward break - consider rebalancing"
+                reasoning = "Severe downward break - exit and find new opportunities"
+                exit_percentage = 100
+                max_slippage = 1.5
+            elif break_info.get('severity', 0) >= 70:
+                action = 'rebalance'
+                urgency = 'medium'
+                reasoning = "Moderate downward break - consider rebalancing"
                 exit_percentage = 0
                 max_slippage = 1.0
             else:
                 action = 'monitor'
                 urgency = 'low'
-                reasoning = "Downward break - monitor for opportunities"
+                reasoning = "Mild downward break - monitor for opportunities"
                 exit_percentage = 0
                 max_slippage = 0.5
         

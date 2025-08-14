@@ -60,8 +60,21 @@ async def startup_event():
     logger.info(f"📚 Documentation available at /docs")
     logger.info(f"🔗 Connected to RPC: {settings.rpc_url[:30]}...")
     logger.info(f"📁 Logging to: {settings.log_dir}/" if settings.enable_file_logging else "📝 File logging disabled")
+    
+    # Initialize database connection
+    from app.database.session import init_db
+    init_db()
+    
+    if settings.get_database_url:
+        logger.info("🗄️  Database connection initialized")
+    else:
+        logger.warning("⚠️  No database configured - user management features disabled")
 
 # Shutdown event
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info(f"👋 {settings.api_title} shutting down...")
+    
+    # Close database connection
+    from app.database.session import close_db
+    await close_db()

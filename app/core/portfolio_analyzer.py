@@ -454,7 +454,7 @@ class PortfolioAnalyzer:
             # Only close if severely underperforming and no better switch found
             if pos_apr < avg_apr * 0.3:  # Less than 30% of average (more strict)
                 recommendations.append({
-                    'action': 'close',
+                    'action': 'exit',
                     'token_id': position.get('token_id'),
                     'pool_address': position.get('pool_address'),
                     'reason': f'Severely underperforming: {pos_apr:.1f}% APR vs {avg_apr:.1f}% average'
