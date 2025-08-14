@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from sqlalchemy import Column, String, DateTime, ForeignKey, Index, Numeric, Boolean
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, Mapped
 import uuid
 
 from app.database.base import Base
@@ -36,8 +36,8 @@ class ProtocolFee(Base):
     collected_at = Column(DateTime(timezone=True), nullable=True)
     
     # Relationships
-    user: "User" = relationship("User", back_populates="protocol_fees")
-    position: "Position" = relationship("Position", back_populates="protocol_fee", uselist=False)
+    user: Mapped["User"] = relationship("User", back_populates="protocol_fees")
+    position: Mapped["Position"] = relationship("Position", back_populates="protocol_fee", uselist=False)
     
     # Indexes
     __table_args__ = (

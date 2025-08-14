@@ -5,7 +5,7 @@ import uuid
 import json
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, and_, or_, func
+from sqlalchemy import select, update, and_, or_, func, case
 from sqlalchemy.orm import selectinload
 
 from app.database.models import User, Transaction, Position, ProtocolFee
@@ -103,7 +103,7 @@ class UserService:
             amount_usdc=amount_usdc,
             tx_hash=tx_hash,
             status=TransactionStatus.PENDING,
-            metadata=json.dumps(metadata) if metadata else None
+            tx_metadata=json.dumps(metadata) if metadata else None
         )
         
         self.db.add(transaction)
@@ -149,7 +149,7 @@ class UserService:
         """Calculate user's current USDC balance from transactions."""
         stmt = select(
             func.sum(
-                func.case(
+                case(
                     (Transaction.transaction_type.in_([
                         TransactionType.DEPOSIT,
                         TransactionType.POSITION_EXIT

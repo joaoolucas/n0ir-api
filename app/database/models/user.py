@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, TYPE_CHECKING
 from sqlalchemy import Column, String, DateTime, Enum as SQLEnum, Index
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, Mapped
 import enum
 from app.database.base import Base
 
@@ -39,21 +39,21 @@ class User(Base):
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     
     # Relationships
-    transactions: List["Transaction"] = relationship(
+    transactions: Mapped[List["Transaction"]] = relationship(
         "Transaction",
         back_populates="user",
         cascade="all, delete-orphan",
         lazy="select"
     )
     
-    positions: List["Position"] = relationship(
+    positions: Mapped[List["Position"]] = relationship(
         "Position",
         back_populates="user",
         cascade="all, delete-orphan",
         lazy="select"
     )
     
-    protocol_fees: List["ProtocolFee"] = relationship(
+    protocol_fees: Mapped[List["ProtocolFee"]] = relationship(
         "ProtocolFee",
         back_populates="user",
         cascade="all, delete-orphan",

@@ -16,9 +16,23 @@ def init_db():
         logger.warning("No database URL configured. Database features will be disabled.")
         return
     
+    # Get database URL and ensure it uses asyncpg
+    db_url = settings.get_database_url
+    
+    # Convert postgresql:// or postgres:// to postgresql+asyncpg://
+    if db_url.startswith("postgresql://"):
+        db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    elif db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql+asyncpg://", 1)
+    elif "postgresql+" in db_url and not db_url.startswith("postgresql+asyncpg://"):
+        # If it's using a different driver, replace it
+        parts = db_url.split("://", 1)
+        if len(parts) == 2:
+            db_url = f"postgresql+asyncpg://{parts[1]}"
+    
     # Create async engine with connection pooling
     engine = create_async_engine(
-        settings.get_database_url,
+        db_url,
         echo=settings.database_echo,
         pool_size=settings.database_pool_size,
         max_overflow=settings.database_pool_overflow,

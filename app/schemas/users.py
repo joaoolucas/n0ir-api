@@ -120,7 +120,7 @@ class TransactionResponse(BaseModel):
     gas_used: Optional[int]
     gas_price: Optional[Decimal]
     status: TransactionStatus
-    metadata: Optional[str]
+    tx_metadata: Optional[str]
     created_at: datetime
     confirmed_at: Optional[datetime]
 

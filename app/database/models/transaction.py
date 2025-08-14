@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from sqlalchemy import Column, String, DateTime, Enum as SQLEnum, ForeignKey, Index, Numeric, Integer
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, Mapped
 import enum
 import uuid
 
@@ -50,14 +50,14 @@ class Transaction(Base):
     status = Column(SQLEnum(TransactionStatus), default=TransactionStatus.PENDING, nullable=False)
     
     # Additional metadata (JSON field for flexibility)
-    metadata = Column(String, nullable=True)  # Store as JSON string
+    tx_metadata = Column(String, nullable=True)  # Store as JSON string
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     confirmed_at = Column(DateTime(timezone=True), nullable=True)
     
     # Relationships
-    user: "User" = relationship("User", back_populates="transactions")
+    user: Mapped["User"] = relationship("User", back_populates="transactions")
     
     # Indexes
     __table_args__ = (

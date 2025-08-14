@@ -15,7 +15,10 @@ from app.core.config import settings
 from app.database.base import Base
 
 # Import all models to register them with SQLAlchemy
-from app.database.models import user, transaction, position, fee
+from app.database.models import (
+    user, transaction, position, fee,
+    pool_metrics, executor_stats, strategy_decision, daily_metrics
+)
 
 config = context.config
 
@@ -27,8 +30,23 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 def get_url():
-    """Get database URL from settings."""
-    return settings.get_database_url or os.getenv("DATABASE_URL", "")
+    """Get database URL from settings and ensure it uses asyncpg."""
+    url = settings.get_database_url or os.getenv("DATABASE_URL", "")
+    
+    # Convert postgresql:// or postgres:// to postgresql+asyncpg://
+    if url:
+        if url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        elif url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif not url.startswith("postgresql+asyncpg://"):
+            # If it's already using a different driver, replace it
+            if "postgresql+" in url:
+                parts = url.split("://", 1)
+                if len(parts) == 2:
+                    url = f"postgresql+asyncpg://{parts[1]}"
+    
+    return url
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""

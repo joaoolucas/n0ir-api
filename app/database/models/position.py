@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional, TYPE_CHECKING
 from sqlalchemy import Column, String, DateTime, Enum as SQLEnum, ForeignKey, Index, Numeric, Integer, Boolean
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, Mapped
 import enum
 import uuid
 
@@ -69,8 +69,8 @@ class Position(Base):
     last_updated = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     
     # Relationships
-    user: "User" = relationship("User", back_populates="positions")
-    protocol_fee: Optional["ProtocolFee"] = relationship(
+    user: Mapped["User"] = relationship("User", back_populates="positions")
+    protocol_fee: Mapped[Optional["ProtocolFee"]] = relationship(
         "ProtocolFee",
         back_populates="position",
         uselist=False,
