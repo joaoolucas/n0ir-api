@@ -15,6 +15,7 @@ from app.core.pools_service import pools_service
 from app.core.positions_service import positions_service
 from app.core.cache import cache_manager
 from app.core.effective_apr_calculator import EffectiveAPRCalculator
+from app.core.cooldown_manager import cooldown_manager
 from app.schemas.strategy import (
     OpportunitiesRequest, OpportunitiesResponse, PoolOpportunity,
     AnalyzeEntryRequest, AnalyzeEntryResponse,
@@ -39,7 +40,6 @@ from app.schemas.strategy import (
 WHITELISTED_POOLS = {
     "0x3f53f1Fd5b7723DDf38D93a584D280B9b94C3111",  # ZORA/USDC
     "0x363d1607b8DA83d6B6EA76D017CeEcf1316BB08A",  # cbBTC/cbDOGE
-    "0xFd4F716cb3c493aFDDd40C67d3f42426aEb2d902",  # WETH/uLINK
     "0x56b92E5B391DbFb8b8028AC95A4b97f52ffEB416",  # WETH/KAITO
     "0x68a5aEA4DE3D938a755D85d1868Fe79A9C7B6ae1",  # WETH/DEGEN
     "0x22A52bB644f855ebD5ca2edB643FF70222D70C31",  # WETH/AIXBT
@@ -130,6 +130,13 @@ class StrategyService:
         except Exception as e:
             logger.warning(f"Could not fetch executor positions: {e}")
             executor_positions = []
+        
+        # Add pools on cooldown to exclusion list
+        cooldown_pools = await cooldown_manager.get_pools_on_cooldown(request.executor_address)
+        if cooldown_pools:
+            logger.info(f"Excluding {len(cooldown_pools)} pools on cooldown for {request.executor_address[:8]}...")
+            exclude_addresses.extend(cooldown_pools)
+            exclude_addresses = list(set(exclude_addresses))  # Remove duplicates
         
         # Calculate max_capital as available_capital + total position value
         max_capital = request.available_capital + total_position_value
@@ -1049,6 +1056,27 @@ class StrategyService:
             expected_loss_if_reversal=reversal_analysis['expected_loss_if_reversal'],
             break_severity=break_info.get('severity', 0)
         )
+        
+        # Add cooldown if recommending exit
+        if action in ['emergency_exit', 'partial_exit'] and exit_percentage >= 75:
+            # Get user address from position data
+            user_address = None
+            if hasattr(position_data, 'owner'):
+                user_address = position_data.owner
+            elif isinstance(position_data, dict):
+                user_address = position_data.get('owner')
+            
+            if user_address and pool_address:
+                # Add cooldown for this pool
+                await cooldown_manager.add_cooldown(
+                    user_address=user_address,
+                    pool_address=pool_address,
+                    break_type=break_type,
+                    severity=break_info['severity_level'],
+                    exit_price=current_price,
+                    exit_value_usd=invested_amount
+                )
+                logger.info(f"Added cooldown for {user_address[:8]}... on pool {pool_address[:8]}... due to {break_info['severity_level']} {break_type} break")
         
         return RangeBreakResponse(
             action=action,

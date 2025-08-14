@@ -38,6 +38,7 @@ from app.schemas.strategy import (
 
 from app.core.strategy_service import strategy_service
 from app.core.logger import logger
+from app.core.cooldown_manager import cooldown_manager
 
 router = APIRouter(
     prefix="/strategy",
@@ -361,4 +362,31 @@ async def manage_portfolio(request: PortfolioRebalanceRequest) -> PortfolioRespo
         
     except Exception as e:
         logger.error(f"Error managing portfolio: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/cooldowns/{user_address}",
+    summary="Get active cooldowns for a user",
+    description="Returns all active range break cooldowns preventing re-entry to pools"
+)
+async def get_cooldowns(user_address: str):
+    """
+    Get all active cooldowns for a user.
+    
+    Returns information about pools that are temporarily restricted
+    due to recent range break exits.
+    """
+    try:
+        cooldowns = await cooldown_manager.get_user_cooldowns(user_address)
+        
+        return {
+            "user_address": user_address,
+            "active_cooldowns": cooldowns,
+            "total_cooldowns": len(cooldowns),
+            "pools_restricted": [c['pool_address'] for c in cooldowns]
+        }
+        
+    except Exception as e:
+        logger.error(f"Error fetching cooldowns: {e}")
         raise HTTPException(status_code=500, detail=str(e))
