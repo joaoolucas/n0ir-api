@@ -177,7 +177,12 @@ class StrategyService:
             base_score = self.calculator.calculate_pool_score(pool)
             
             # Calculate allocation weight (combines safety and APR)
-            allocation_weight = self.calculator.calculate_allocation_weight(pool, safety_score)
+            # Pass available_capital for wallet-size-aware weighting
+            allocation_weight = self.calculator.calculate_allocation_weight(
+                pool, 
+                safety_score,
+                request.available_capital
+            )
             
             pool_candidates.append({
                 'pool': pool,
@@ -1329,21 +1334,35 @@ class StrategyService:
                 min_volume_24h=10000  # Active pools
             )
             
-            # Extract pool data and add safety scores
+            # Extract pool data and add safety scores and allocation weights
             for pool in pools_response.get('pools', []):
                 safety_score = self.calculator.calculate_simple_safety_score(pool)
                 apr_value = pool.get('apr', 0)
+                
+                # Calculate allocation weight using wallet size for consistent prioritization
+                allocation_weight = self.calculator.calculate_allocation_weight(
+                    pool,
+                    safety_score,
+                    wallet_size  # Use wallet size for weight calculation
+                )
                 
                 candidate_pools.append({
                     'address': pool.get('address'),
                     'apr': apr_value,
                     'safety_score': safety_score,
+                    'allocation_weight': allocation_weight,
                     'tvl': pool.get('tvl_usd', 0),
                     'volume_24h': pool.get('volume_24h', 0),
                     'pair': pool.get('symbol', '')
                 })
             
-            logger.info(f"Fetched {len(candidate_pools)} candidate pools for switching evaluation")
+            # Sort by allocation weight to prioritize evaluation (highest weight first)
+            # This ensures consistency with the screen endpoint's ranking
+            candidate_pools.sort(key=lambda x: x['allocation_weight'], reverse=True)
+            
+            logger.info(f"Fetched {len(candidate_pools)} candidate pools for switching evaluation, "
+                       f"top pool: {candidate_pools[0]['pair'] if candidate_pools else 'none'} "
+                       f"with weight {candidate_pools[0]['allocation_weight']:.1f if candidate_pools else 0}")
                 
         except Exception as e:
             logger.warning(f"Could not fetch candidate pools for switching: {e}")
@@ -1371,9 +1390,13 @@ class StrategyService:
             
             # Evaluate against each candidate pool
             best_switch = None
-            best_benefit = 0
+            best_score = 0
             
-            for candidate in candidate_pools:
+            # Only evaluate top candidates based on allocation weight (for performance)
+            # This ensures we prioritize pools that match the wallet's risk profile
+            candidates_to_evaluate = candidate_pools[:10] if len(candidate_pools) > 10 else candidate_pools
+            
+            for candidate in candidates_to_evaluate:
                 should_switch, reason = self.portfolio_analyzer.should_recommend_switch(
                     position_data,
                     candidate,
@@ -1383,14 +1406,21 @@ class StrategyService:
                 
                 if should_switch:
                     expected_benefit = candidate['apr'] - position_data['current_apr']
-                    if expected_benefit > best_benefit:
-                        # Estimate gas cost (exit + enter new position)
-                        gas_cost_usd = 100  # Rough estimate, should be calculated properly
-                        
-                        # Calculate breakeven days
-                        daily_benefit = (expected_benefit / 100 / 365) * position_data['current_value']
-                        breakeven_days = gas_cost_usd / daily_benefit if daily_benefit > 0 else float('inf')
-                        
+                    
+                    # Estimate gas cost (exit + enter new position)
+                    gas_cost_usd = 100  # Rough estimate, should be calculated properly
+                    
+                    # Calculate breakeven days
+                    daily_benefit = (expected_benefit / 100 / 365) * position_data['current_value']
+                    breakeven_days = gas_cost_usd / daily_benefit if daily_benefit > 0 else float('inf')
+                    
+                    # Use composite score that considers both APR benefit and allocation weight
+                    # This ensures consistency with the screen endpoint's logic
+                    # Normalize expected_benefit (0-100 scale) and combine with allocation weight
+                    benefit_score = min(100, expected_benefit)  # Cap at 100
+                    composite_score = (benefit_score * 0.5) + (candidate['allocation_weight'] * 0.5)
+                    
+                    if composite_score > best_score:
                         best_switch = {
                             'token_id': position.get('token_id'),
                             'current_pool_address': position.get('pool_address'),
@@ -1400,13 +1430,14 @@ class StrategyService:
                             'target_pool_symbol': candidate['pair'],
                             'target_apr': candidate['apr'],
                             'target_safety_score': candidate['safety_score'],
+                            'target_allocation_weight': candidate['allocation_weight'],
                             'should_switch': True,
                             'reason': reason,
                             'expected_benefit': expected_benefit,
                             'breakeven_days': breakeven_days,
                             'estimated_gas_cost': gas_cost_usd
                         }
-                        best_benefit = expected_benefit
+                        best_score = composite_score
             
             if best_switch:
                 recommendations.append(SwitchRecommendation(**best_switch))

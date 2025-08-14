@@ -547,43 +547,96 @@ class StrategyCalculator:
         
         return base_limit * wallet_multiplier
     
-    def calculate_allocation_weight(self, pool_data: Dict, safety_score: float) -> float:
+    def calculate_allocation_weight(self, pool_data: Dict, safety_score: float, wallet_size: float = None) -> float:
         """
         Calculate allocation weight balancing safety and APR.
-        More balanced approach to include safer pools.
+        Dynamically adjusts weight ratios based on wallet size - smaller wallets
+        prioritize APR more aggressively to enable growth.
+        
+        Args:
+            pool_data: Pool information including APR
+            safety_score: Calculated safety score (0-100)
+            wallet_size: Total wallet value in USD (for dynamic weighting)
         
         Returns: Allocation weight (higher = more allocation)
         """
         # Get effective APR (already calculated)
         apr = pool_data.get('effective_apr', pool_data.get('apr', 0))
         
-        # APR Score (0-100): More generous scoring for moderate APRs
-        if apr >= 200:
-            apr_score = 100
+        # APR Score (0-100): Progressive scoring that rewards higher APRs
+        if apr >= 500:
+            apr_score = 100  # Max score for extreme APRs
+        elif apr >= 400:
+            apr_score = 95
+        elif apr >= 300:
+            apr_score = 90
+        elif apr >= 200:
+            apr_score = 85  # High APR tier
         elif apr >= 150:
-            apr_score = 90  # Was 85
+            apr_score = 80
         elif apr >= 100:
-            apr_score = 80  # Was 70
+            apr_score = 75
         elif apr >= 75:
-            apr_score = 70  # Was 55
+            apr_score = 70
         elif apr >= 50:
-            apr_score = 60  # Was 40 - big boost for 50%+ APR
+            apr_score = 60
         elif apr >= 30:
-            apr_score = 45  # New tier for lower APR pools
+            apr_score = 45
         else:
-            apr_score = max(0, (apr / 30) * 45)  # More generous base
+            apr_score = max(0, (apr / 30) * 45)  # Linear for low APRs
         
-        # For high safety pools, give more weight to safety
-        # This helps USDC/WETH type pools compete
-        if safety_score >= 80:
-            # Very safe pools: 70% safety, 30% APR
-            allocation_weight = (safety_score * 0.7) + (apr_score * 0.3)
-        elif safety_score >= 65:
-            # Safe pools: balanced 50/50
-            allocation_weight = (safety_score * 0.5) + (apr_score * 0.5)
+        # Determine weight ratios based on wallet size
+        # Smaller wallets can tolerate more risk for higher returns
+        if wallet_size is not None and wallet_size < 500:
+            # Micro wallets (<$500): ULTRA aggressive APR focus - almost ignore safety
+            if safety_score >= 80:
+                # Even very safe pools are evaluated almost purely on APR
+                safety_weight, apr_weight = 0.02, 0.98  # 98% APR focus even for safe pools
+            elif safety_score >= 65:
+                # Safe pools: pure APR focus
+                safety_weight, apr_weight = 0.01, 0.99  # 99% APR focus
+            else:
+                # Riskier pools: pure APR optimization
+                safety_weight, apr_weight = 0.01, 0.99  # 99% APR focus
+                
+        elif wallet_size is not None and wallet_size < 1_000:
+            # Small wallets ($500-$1k): EXTREMELY aggressive APR focus
+            if safety_score >= 80:
+                # Even very safe pools should be evaluated mostly on APR
+                safety_weight, apr_weight = 0.05, 0.95  # 95% APR focus
+            elif safety_score >= 65:
+                # Safe pools: near-pure APR focus
+                safety_weight, apr_weight = 0.03, 0.97  # 97% APR focus
+            else:
+                # Riskier pools: pure APR optimization
+                safety_weight, apr_weight = 0.02, 0.98  # 98% APR focus
+                
+        elif wallet_size is not None and wallet_size < 10_000:
+            # Medium wallets ($1k-$10k): Moderate risk tolerance
+            if safety_score >= 80:
+                # Very safe pools: slight APR boost
+                safety_weight, apr_weight = 0.6, 0.4  # was 0.7, 0.3
+            elif safety_score >= 65:
+                # Safe pools: balanced with APR preference
+                safety_weight, apr_weight = 0.4, 0.6  # was 0.5, 0.5
+            else:
+                # Riskier pools: favor APR
+                safety_weight, apr_weight = 0.3, 0.7  # was 0.4, 0.6
+                
         else:
-            # Riskier pools: favor APR more (40% safety, 60% APR)
-            allocation_weight = (safety_score * 0.4) + (apr_score * 0.6)
+            # Large wallets (≥$10k) or unknown size: Conservative approach
+            if safety_score >= 80:
+                # Very safe pools: prioritize safety
+                safety_weight, apr_weight = 0.7, 0.3  # original
+            elif safety_score >= 65:
+                # Safe pools: balanced
+                safety_weight, apr_weight = 0.5, 0.5  # original
+            else:
+                # Riskier pools: still favor APR but cautiously
+                safety_weight, apr_weight = 0.4, 0.6  # original
+        
+        # Calculate weighted allocation score
+        allocation_weight = (safety_score * safety_weight) + (apr_score * apr_weight)
         
         return allocation_weight
     
@@ -727,7 +780,8 @@ class StrategyCalculator:
         max_position_pct = self.calculate_dynamic_position_limit(safety_score, available_capital)
         
         # Calculate allocation weight (combination of safety and APR)
-        allocation_weight = self.calculate_allocation_weight(pool_stats, safety_score)
+        # Pass available_capital for wallet-size-aware weighting
+        allocation_weight = self.calculate_allocation_weight(pool_stats, safety_score, available_capital)
         
         # Get APR for minimum position calculation
         apr = pool_stats.get('apr', 100)  # Default 100% APR

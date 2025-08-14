@@ -125,6 +125,7 @@ class SwitchRecommendation(BaseModel):
     target_pool_symbol: str
     target_apr: float
     target_safety_score: float
+    target_allocation_weight: float = Field(default=0, description="Target pool's allocation weight (0-100)")
     should_switch: bool
     reason: str
     expected_benefit: float = Field(..., description="Expected APR improvement percentage")
