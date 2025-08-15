@@ -111,12 +111,12 @@ async def analyze_position_switches_working(
         position_id = position.get('token_id', position.get('id'))
         
         # Check if position is in cooldown
-        is_in_cooldown = await cooldown_manager.is_in_cooldown(
+        cooldown_info = await cooldown_manager.check_cooldown(
             user_address=user_address,
             pool_address=current_pool
         )
         
-        if is_in_cooldown:
+        if cooldown_info:
             logger.info(f"Position {position_id} is in cooldown for pool {current_pool} - skipping switch recommendation")
             continue
         
