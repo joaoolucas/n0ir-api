@@ -180,7 +180,7 @@ class MonitorPositionsResponse(BaseModel):
 
 class AlternativeAction(BaseModel):
     """Alternative action for range breaks."""
-    type: Literal["rebalance", "partial_exit", "hold"]
+    type: Literal["rebalance", "hold"]
     new_range: Optional[RangeParameters] = None
     expected_cost: float
 
@@ -194,7 +194,7 @@ class RangeBreakMetrics(BaseModel):
 
 class RangeBreakResponse(BaseModel):
     """Response for range break handling."""
-    action: Literal["emergency_exit", "partial_exit", "rebalance", "monitor"]
+    action: Literal["emergency_exit", "rebalance", "monitor"]
     urgency: Literal["low", "medium", "high", "critical"]
     reasoning: str
     execution_params: ExecutionParams

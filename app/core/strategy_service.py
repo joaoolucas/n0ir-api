@@ -998,18 +998,12 @@ class StrategyService:
         
         # Determine action based on break type and severity
         if break_type == 'upward':
-            if break_info.get('severity', 0) >= 70:
+            if break_info.get('severity', 0) >= 50:
                 action = 'emergency_exit'
                 urgency = 'critical'
                 reasoning = f"Upward break with {reversal_analysis['reversal_probability']*100:.0f}% reversal probability"
                 exit_percentage = 100
                 max_slippage = 2.0
-            elif break_info.get('severity', 0) >= 40:
-                action = 'partial_exit'
-                urgency = 'high'
-                reasoning = "Moderate upward break - reduce exposure"
-                exit_percentage = 75
-                max_slippage = 1.5
             else:
                 action = 'monitor'
                 urgency = 'medium'
@@ -1061,7 +1055,7 @@ class StrategyService:
         )
         
         # Add cooldown if recommending exit
-        if action in ['emergency_exit', 'partial_exit'] and exit_percentage >= 75:
+        if action == 'emergency_exit' and exit_percentage >= 75:
             # Get user address from position data
             user_address = None
             if hasattr(position_data, 'owner'):
