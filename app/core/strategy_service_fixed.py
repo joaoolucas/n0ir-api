@@ -16,19 +16,26 @@ async def analyze_position_switches_working(
     
     calculator = StrategyCalculator()
     
-    # Mock position data for testing
+    # Fetch actual position data
     positions_list = []
     for token_id in token_ids:
-        position_dict = {
-            'id': token_id,
-            'token_id': token_id,
-            'owner': user_address,
-            'pool_address': '0xb2cc224c1c9feE385f8ad6a55b4d94E92359DC59',  # WETH/USDC
-            'current_value_usd': 500,  # Small wallet
-            'current_value': 500,
-            'in_range': True
-        }
-        positions_list.append(position_dict)
+        try:
+            # Try to fetch real position
+            from app.core.positions_service import positions_service
+            position = await positions_service.get_position_by_id(token_id)
+            position_dict = position.dict() if hasattr(position, 'dict') else position
+            
+            # Map fields correctly
+            if 'id' in position_dict:
+                position_dict['token_id'] = position_dict['id']
+            if 'current_value_usd' in position_dict:
+                position_dict['current_value'] = position_dict['current_value_usd']
+            
+            positions_list.append(position_dict)
+            logger.info(f"Fetched position {token_id} with value ${position_dict.get('current_value_usd', 0):.2f}")
+        except Exception as e:
+            logger.error(f"Failed to fetch position {token_id}: {e}")
+            # Don't add to list if we can't fetch the position
     
     if not positions_list:
         return {
