@@ -133,8 +133,23 @@ class SwitchRecommendation(BaseModel):
     estimated_gas_cost: float
 
 
+class PortfolioSummary(BaseModel):
+    """Portfolio-level summary metrics."""
+    total_value_usd: float = Field(..., description="Total portfolio value in USD")
+    total_positions: int = Field(..., description="Number of active positions")
+    total_pnl_usd: float = Field(..., description="Total profit/loss in USD")
+    total_pnl_percentage: float = Field(..., description="Total profit/loss as percentage")
+    weighted_apr: float = Field(..., description="Portfolio-weighted average APR")
+    total_emissions_value_usd: float = Field(..., description="Total value of unclaimed emissions")
+    risk_score: float = Field(..., ge=0, le=100, description="Overall portfolio risk score")
+    concentration_risk: Dict[str, float] = Field(default_factory=dict, description="Token concentration percentages")
+    top_performers: List[Dict[str, Any]] = Field(default_factory=list, description="Top 3 performing positions")
+    underperformers: List[Dict[str, Any]] = Field(default_factory=list, description="Bottom 3 performing positions")
+
+
 class AnalyzeSwitchResponse(BaseModel):
     """Response for switch position analysis."""
+    portfolio_summary: PortfolioSummary
     recommendations: List[SwitchRecommendation]
     total_positions_analyzed: int
     positions_recommended_for_switch: int

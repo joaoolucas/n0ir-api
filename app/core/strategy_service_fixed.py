@@ -135,7 +135,87 @@ async def analyze_position_switches_working(
     total_apr_improvement = sum(r.expected_benefit for r in recommendations)
     total_gas_cost = sum(r.estimated_gas_cost for r in recommendations)
     
+    # Calculate portfolio summary
+    from app.schemas.strategy_v2 import PortfolioSummary
+    
+    total_value = sum(p.get('current_value_usd', p.get('current_value', 0)) for p in positions_list)
+    total_pnl = sum(p.get('pnl_usd', 0) for p in positions_list)
+    total_emissions = sum(p.get('emissions_value_usd', 0) for p in positions_list)
+    
+    # Calculate weighted APR
+    weighted_apr = 0
+    for p in positions_list:
+        value = p.get('current_value_usd', p.get('current_value', 0))
+        apr = p.get('current_apr', 50)  # Default APR
+        if total_value > 0:
+            weighted_apr += (value / total_value) * apr
+    
+    # Calculate concentration risk
+    token_values = {}
+    for p in positions_list:
+        pool_info = p.get('pool_info', {})
+        token0 = pool_info.get('token0_symbol', 'UNKNOWN')
+        token1 = pool_info.get('token1_symbol', 'UNKNOWN')
+        value = p.get('current_value_usd', p.get('current_value', 0))
+        
+        # Simplified: assume 50/50 split
+        token_values[token0] = token_values.get(token0, 0) + value * 0.5
+        token_values[token1] = token_values.get(token1, 0) + value * 0.5
+    
+    concentration_risk = {}
+    if total_value > 0:
+        concentration_risk = {token: (value / total_value) * 100 
+                            for token, value in token_values.items()}
+    
+    # Identify top and under performers
+    sorted_positions = sorted(positions_list, 
+                            key=lambda x: x.get('pnl_percentage', 0), 
+                            reverse=True)
+    
+    top_performers = []
+    for p in sorted_positions[:3]:
+        top_performers.append({
+            'token_id': p.get('token_id', p.get('id')),
+            'pool': p.get('pool_info', {}).get('symbol', 'Unknown'),
+            'pnl_percentage': p.get('pnl_percentage', 0),
+            'value_usd': p.get('current_value_usd', p.get('current_value', 0))
+        })
+    
+    underperformers = []
+    for p in sorted_positions[-3:] if len(sorted_positions) > 3 else []:
+        underperformers.append({
+            'token_id': p.get('token_id', p.get('id')),
+            'pool': p.get('pool_info', {}).get('symbol', 'Unknown'),
+            'pnl_percentage': p.get('pnl_percentage', 0),
+            'value_usd': p.get('current_value_usd', p.get('current_value', 0))
+        })
+    
+    # Calculate risk score (simplified)
+    risk_score = 50.0  # Base score
+    # Increase risk if highly concentrated
+    max_concentration = max(concentration_risk.values()) if concentration_risk else 0
+    if max_concentration > 40:
+        risk_score += (max_concentration - 40) * 0.5
+    # Decrease risk for diversification
+    if len(positions_list) > 5:
+        risk_score -= 10
+    risk_score = max(0, min(100, risk_score))
+    
+    portfolio_summary = PortfolioSummary(
+        total_value_usd=total_value,
+        total_positions=len(positions_list),
+        total_pnl_usd=total_pnl,
+        total_pnl_percentage=(total_pnl / total_value * 100) if total_value > 0 else 0,
+        weighted_apr=weighted_apr,
+        total_emissions_value_usd=total_emissions,
+        risk_score=risk_score,
+        concentration_risk=concentration_risk,
+        top_performers=top_performers,
+        underperformers=underperformers
+    )
+    
     return {
+        'portfolio_summary': portfolio_summary,
         'recommendations': recommendations,
         'total_positions_analyzed': len(positions_list),
         'positions_recommended_for_switch': len(recommendations),

@@ -172,10 +172,11 @@ async def analyze_trade(request: AnalyzeRequest) -> AnalyzeResponse:
             # Import the response model
             from app.schemas.strategy_v2 import AnalyzeSwitchResponse
             
-            # Build v2 response
+            # Build v2 response with portfolio summary
             return AnalyzeResponse(
                 action="switch",
                 switch_response=AnalyzeSwitchResponse(
+                    portfolio_summary=switch_result['portfolio_summary'],
                     recommendations=switch_result['recommendations'],
                     total_positions_analyzed=switch_result['total_positions_analyzed'],
                     positions_recommended_for_switch=switch_result['positions_recommended_for_switch'],
