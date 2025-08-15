@@ -241,8 +241,8 @@ class RangeBreakDetector:
         if break_type == 'upward':
             if severity_level in ['severe', 'critical']:
                 return 'emergency_exit'
-            elif severity_level == 'moderate' and reversal_prob > 0.6:
-                return 'partial_exit'
+            elif severity_level == 'moderate' and reversal_prob > 0.7:
+                return 'emergency_exit'
             elif reversal_prob > 0.7:
                 return 'prepare_exit'
             else:

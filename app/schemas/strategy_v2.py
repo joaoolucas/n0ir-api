@@ -161,7 +161,7 @@ class RangeBreakAlert(BaseModel):
     token_id: int
     pool_address: str
     severity: float = Field(..., ge=0, le=100)
-    action: Literal["emergency_exit", "partial_exit", "rebalance", "monitor"]
+    action: Literal["emergency_exit", "rebalance", "monitor"]
     urgency: Literal["low", "medium", "high", "critical"]
     reversal_probability: float = Field(..., ge=0, le=1)
     expected_loss_if_reversal: float
