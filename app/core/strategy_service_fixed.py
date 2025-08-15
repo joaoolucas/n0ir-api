@@ -103,11 +103,39 @@ async def analyze_position_switches_working(
     # Analyze each position
     recommendations = []
     
+    # Import cooldown manager
+    from app.core.cooldown_manager import cooldown_manager
+    
     for position in positions_list:
         current_pool = position.get('pool_address', '').lower()
         position_id = position.get('token_id', position.get('id'))
-        # Use defaults for current pool
-        current_apr = 50  # WETH/USDC typical APR
+        
+        # Check if position is in cooldown
+        is_in_cooldown = await cooldown_manager.is_in_cooldown(
+            user_address=user_address,
+            pool_address=current_pool
+        )
+        
+        if is_in_cooldown:
+            logger.info(f"Position {position_id} is in cooldown for pool {current_pool} - skipping switch recommendation")
+            continue
+        
+        # Get BASE APR from pool data (not effective APR which is user-specific)
+        current_apr = 0
+        if current_pool:
+            try:
+                from app.core.pools_service import pools_service
+                pool_data = await pools_service.get_pool(current_pool)
+                # Use base APR, not effective APR
+                current_apr = pool_data.get('apr', pool_data.get('base_apr', 50))
+                logger.info(f"Fetched current pool BASE APR: {current_apr}% for {current_pool}")
+            except Exception as e:
+                logger.warning(f"Could not fetch APR for current pool {current_pool}: {e}")
+                # Try to get from position data as fallback
+                pool_info = position.get('pool_info', {})
+                current_apr = pool_info.get('apr', pool_info.get('base_apr', 50))
+        
+        logger.info(f"Position {position_id} current BASE APR: {current_apr}%")
         
         # Track if we found any valid switch
         found_switch = False
@@ -121,10 +149,19 @@ async def analyze_position_switches_working(
                 logger.info(f"Skipping same pool: {candidate['pair']} for position {position_id}")
                 continue
             
-            apr_improvement = (candidate['apr'] - current_apr) / current_apr if current_apr > 0 else 10
+            # Calculate actual APR improvement
+            apr_difference = candidate['apr'] - current_apr
+            apr_improvement = (apr_difference / current_apr) if current_apr > 0 else (apr_difference / 100)
             
-            # For small wallets, very low threshold
-            if wallet_size < 1000 and apr_improvement > 0.1:  # 10% improvement
+            # Only recommend if there's a meaningful improvement
+            min_improvement_threshold = 0.2 if wallet_size < 1000 else 0.5  # 20% for small, 50% for larger wallets
+            
+            # Skip if candidate APR is lower or improvement is too small
+            if apr_difference <= 0:
+                logger.info(f"Skipping {candidate['pair']} - APR ({candidate['apr']}%) not better than current ({current_apr}%)")
+                continue
+            
+            if apr_improvement > min_improvement_threshold:
                 recommendation = SwitchRecommendation(
                     token_id=position_id,
                     current_pool_address=position['pool_address'],
@@ -136,8 +173,8 @@ async def analyze_position_switches_working(
                     target_safety_score=candidate['safety_score'],
                     target_allocation_weight=candidate['allocation_weight'],
                     should_switch=True,
-                    reason=f"Switch recommended: {apr_improvement*100:.0f}% APR improvement for small wallet",
-                    expected_benefit=candidate['apr'] - current_apr,
+                    reason=f"Switch from {current_apr:.0f}% to {candidate['apr']:.0f}% APR ({apr_improvement*100:.0f}% improvement)",
+                    expected_benefit=apr_difference,
                     breakeven_days=2.0,  # Rough estimate
                     estimated_gas_cost=100.0
                 )
