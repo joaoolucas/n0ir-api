@@ -104,17 +104,29 @@ async def analyze_position_switches_working(
     recommendations = []
     
     for position in positions_list:
+        current_pool = position.get('pool_address', '').lower()
+        position_id = position.get('token_id', position.get('id'))
         # Use defaults for current pool
         current_apr = 50  # WETH/USDC typical APR
         
+        # Track if we found any valid switch
+        found_switch = False
+        
         # Find best switch
         for candidate in candidate_pools[:3]:  # Check top 3
+            candidate_pool = candidate['address'].lower()
+            
+            # CRITICAL: Skip if it's the same pool
+            if current_pool == candidate_pool:
+                logger.info(f"Skipping same pool: {candidate['pair']} for position {position_id}")
+                continue
+            
             apr_improvement = (candidate['apr'] - current_apr) / current_apr if current_apr > 0 else 10
             
             # For small wallets, very low threshold
             if wallet_size < 1000 and apr_improvement > 0.1:  # 10% improvement
                 recommendation = SwitchRecommendation(
-                    token_id=position['token_id'],
+                    token_id=position_id,
                     current_pool_address=position['pool_address'],
                     current_apr=current_apr,
                     current_value=position.get('current_value', 500),
@@ -130,7 +142,11 @@ async def analyze_position_switches_working(
                     estimated_gas_cost=100.0
                 )
                 recommendations.append(recommendation)
+                found_switch = True
                 break  # Only one recommendation per position
+        
+        if not found_switch:
+            logger.info(f"No valid switch found for position {position_id} - already in optimal pool or no better alternatives")
     
     total_apr_improvement = sum(r.expected_benefit for r in recommendations)
     total_gas_cost = sum(r.estimated_gas_cost for r in recommendations)
