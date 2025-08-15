@@ -8,9 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.session import get_db
 from app.services.user_service import UserService
 from app.schemas.users import (
-    CreateUserRequest, UpdateUserRequest, UserResponse,
+    CreateUserRequest, UserResponse,
     DepositRequest, WithdrawRequest, BalanceResponse,
-    CreatePositionRequest, UpdatePositionRequest, ClosePositionRequest,
+    CreatePositionRequest, ClosePositionRequest,
     PositionResponse, PositionListResponse,
     TransactionResponse, TransactionListResponse,
     PnLResponse, PerformanceResponse,
@@ -63,26 +63,6 @@ async def get_user(
     return UserResponse.model_validate(user)
 
 
-@router.put("/{user_id}", response_model=UserResponse)
-async def update_user(
-    user_id: str = Path(..., description="User ID"),
-    request: UpdateUserRequest = ...,
-    db: AsyncSession = Depends(get_db)
-):
-    """Update user settings."""
-    service = UserService(db)
-    
-    if request.status:
-        from app.database.models.user import UserStatus as DBUserStatus
-        db_status = DBUserStatus(request.status.value)
-        user = await service.update_user_status(user_id, db_status)
-        
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-        
-        return UserResponse.model_validate(user)
-    
-    raise HTTPException(status_code=400, detail="No updates provided")
 
 
 # Wallet Operations
@@ -228,23 +208,6 @@ async def get_user_transactions(
     )
 
 
-@router.get("/{user_id}/transactions/{transaction_id}", response_model=TransactionResponse)
-async def get_transaction(
-    user_id: str = Path(..., description="User ID"),
-    transaction_id: UUID = Path(..., description="Transaction ID"),
-    db: AsyncSession = Depends(get_db)
-):
-    """Get individual transaction details."""
-    service = UserService(db)
-    
-    # Get all user transactions and find the specific one
-    transactions = await service.get_user_transactions(user_id)
-    transaction = next((t for t in transactions if t.transaction_id == transaction_id), None)
-    
-    if not transaction:
-        raise HTTPException(status_code=404, detail="Transaction not found")
-    
-    return TransactionResponse.model_validate(transaction)
 
 
 # Position Management
@@ -329,53 +292,8 @@ async def get_user_positions(
     )
 
 
-@router.get("/{user_id}/positions/{position_id}", response_model=PositionResponse)
-async def get_position(
-    user_id: str = Path(..., description="User ID"),
-    position_id: UUID = Path(..., description="Position ID"),
-    db: AsyncSession = Depends(get_db)
-):
-    """Get individual position details."""
-    service = UserService(db)
-    
-    # Get user positions and find the specific one
-    positions = await service.get_user_positions(user_id)
-    position = next((p for p in positions if p.position_id == position_id), None)
-    
-    if not position:
-        raise HTTPException(status_code=404, detail="Position not found")
-    
-    return PositionResponse.model_validate(position)
 
 
-@router.put("/{user_id}/positions/{position_id}", response_model=PositionResponse)
-async def update_position(
-    user_id: str = Path(..., description="User ID"),
-    position_id: UUID = Path(..., description="Position ID"),
-    request: UpdatePositionRequest = ...,
-    db: AsyncSession = Depends(get_db)
-):
-    """Update position value and metrics."""
-    service = UserService(db)
-    
-    # Verify position belongs to user
-    positions = await service.get_user_positions(user_id)
-    if not any(p.position_id == position_id for p in positions):
-        raise HTTPException(status_code=404, detail="Position not found")
-    
-    # Update position
-    position = await service.update_position_value(
-        position_id=position_id,
-        current_value_usdc=request.current_value_usdc,
-        unrealized_pnl_usdc=request.unrealized_pnl_usdc,
-        fees_earned_usdc=request.fees_earned_usdc,
-        rewards_earned_usdc=request.rewards_earned_usdc
-    )
-    
-    if not position:
-        raise HTTPException(status_code=404, detail="Position not found")
-    
-    return PositionResponse.model_validate(position)
 
 
 @router.delete("/{user_id}/positions/{position_id}", response_model=PositionResponse)

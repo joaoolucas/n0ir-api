@@ -24,6 +24,9 @@ class PositionInfo(BaseModel):
     token0: Optional[str] = Field(None, description="Token0 address")
     token1: Optional[str] = Field(None, description="Token1 address")
     tick_spacing: Optional[int] = Field(None, description="Pool tick spacing")
+    
+    # User tracking field (from database)
+    user_id: Optional[str] = Field(None, description="User ID if position is tracked in database")
 
     class Config:
         json_schema_extra = {
