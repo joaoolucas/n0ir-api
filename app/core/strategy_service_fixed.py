@@ -50,30 +50,61 @@ async def analyze_position_switches_working(
     wallet_size = sum(p.get('current_value', 0) for p in positions_list)
     logger.info(f"Wallet size: ${wallet_size}")
     
-    # Hardcoded candidate pools from whitelist
-    test_pools = [
-        {
-            'address': '0x3f53f1Fd5b7723DDf38D93a584D280B9b94C3111',  # ZORA/USDC
-            'symbol': 'ZORA/USDC',
-            'apr': 200,  # High APR pool
-            'tvl_usd': 500_000,
-            'volume_24h': 100_000
-        },
-        {
-            'address': '0x3f0296BF652e19bca772EC3dF08b32732F93014A',  # VIRTUAL/WETH
-            'symbol': 'VIRTUAL/WETH',
-            'apr': 150,
-            'tvl_usd': 1_000_000,
-            'volume_24h': 200_000
-        },
-        {
-            'address': '0x4e829F8A5213c42535AB84AA40BD4aDCCE9cBa02',  # WETH/BRETT
-            'symbol': 'WETH/BRETT',
-            'apr': 180,
-            'tvl_usd': 300_000,
-            'volume_24h': 80_000
+    # Fetch real pool data from the whitelist using batch endpoint
+    from app.core.pools_service import pools_service
+    
+    # Import whitelisted pools from main strategy service
+    from app.core.strategy_service import WHITELISTED_POOLS
+    
+    # Convert set to list for batch fetch
+    whitelist_addresses = list(WHITELISTED_POOLS)
+    
+    # Fetch all whitelisted pools in batch with real APRs
+    test_pools = []
+    try:
+        # Use the batch fetch method to get all pools at once
+        batch_pools = await pools_service.get_pools_batch(whitelist_addresses)
+        
+        for pool_data in batch_pools:
+            if pool_data:
+                # Use the real APR from pool data (base_apr is the pool's actual APR)
+                apr = pool_data.get('apr', pool_data.get('base_apr', 0))
+                test_pools.append({
+                    'address': pool_data.get('address', ''),
+                    'symbol': pool_data.get('symbol', 'Unknown'),
+                    'apr': apr,  # Real APR from chain
+                    'tvl_usd': pool_data.get('tvl_usd', 0),
+                    'volume_24h': pool_data.get('volume_24h', 0)
+                })
+                logger.info(f"Fetched pool {pool_data.get('symbol')} with real APR: {apr}%")
+    except Exception as e:
+        logger.error(f"Failed to fetch batch pool data: {e}")
+        # Try individual fetches as fallback
+        for pool_address in whitelist_addresses[:5]:  # Limit to first 5 for performance
+            try:
+                pool_data = await pools_service.get_pool(pool_address)
+                if pool_data:
+                    apr = pool_data.get('apr', pool_data.get('base_apr', 0))
+                    test_pools.append({
+                        'address': pool_address,
+                        'symbol': pool_data.get('symbol', 'Unknown'),
+                        'apr': apr,
+                        'tvl_usd': pool_data.get('tvl_usd', 0),
+                        'volume_24h': pool_data.get('volume_24h', 0)
+                    })
+                    logger.info(f"Fetched pool {pool_data.get('symbol')} with real APR: {apr}%")
+            except Exception as e2:
+                logger.error(f"Failed to fetch pool data for {pool_address}: {e2}")
+    
+    if not test_pools:
+        logger.warning("No pools fetched from whitelist")
+        return {
+            'recommendations': [],
+            'total_positions_analyzed': len(positions_list),
+            'positions_recommended_for_switch': 0,
+            'total_expected_apr_improvement': 0,
+            'estimated_total_gas_cost': 0
         }
-    ]
     
     # Calculate allocation weights for candidate pools
     candidate_pools = []
