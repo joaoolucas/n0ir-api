@@ -18,6 +18,7 @@ class PositionInfo(BaseModel):
     staked: bool = Field(..., description="Whether position is staked in gauge")
     current_value_usd: Optional[float] = Field(None, description="Current staked position value in USD")
     unclaimed_fees_usd: Optional[float] = Field(None, description="Unclaimed emissions (AERO rewards) in USD")
+    unclaimed_rewards_aero: Optional[float] = Field(None, description="Unclaimed emissions in AERO tokens")
     gauge_address: Optional[str] = Field(None, description="Gauge address if staked")
     
     # Additional fields from position manager
