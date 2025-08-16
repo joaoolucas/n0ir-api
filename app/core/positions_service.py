@@ -488,6 +488,7 @@ class PositionsService:
             # Calculate USD values from Sugar contract
             current_value_usd = None
             unclaimed_fees_usd = None
+            unclaimed_rewards_aero = None
             
             # Pass staking status to fetch the correct data
             sugar_position = await self._fetch_position_from_sugar(token_id, owner, is_unstaked=not staked)
@@ -519,6 +520,7 @@ class PositionsService:
                 # Calculate unclaimed fees USD (emissions_earned * aero_price)
                 emissions_amount = sugar_position['emissions_earned'] / 1e18  # Assuming 18 decimals
                 unclaimed_fees_usd = emissions_amount * aero_price
+                unclaimed_rewards_aero = emissions_amount  # Store AERO amount
                 
                 logger.info(f"Position {token_id} - Emissions: {emissions_amount} AERO = ${unclaimed_fees_usd}")
             else:
@@ -536,6 +538,7 @@ class PositionsService:
                 staked=staked,
                 current_value_usd=current_value_usd,
                 unclaimed_fees_usd=unclaimed_fees_usd,
+                unclaimed_rewards_aero=unclaimed_rewards_aero,
                 gauge_address=gauge_address,
                 token0=token0,
                 token1=token1,

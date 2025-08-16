@@ -1,7 +1,9 @@
 """Positions API endpoints."""
 
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, Path, Query, Request
+from fastapi import APIRouter, HTTPException, Path, Query, Request, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from app.schemas.positions import (
     PositionInfo,
     PositionListResponse,
@@ -10,6 +12,8 @@ from app.schemas.positions import (
 from app.schemas.common import ErrorResponse
 from app.core.positions_service import positions_service
 from app.core.logger import logger
+from app.database.session import get_db
+from app.database.models.position import Position
 
 router = APIRouter()
 
@@ -24,7 +28,8 @@ router = APIRouter()
 )
 async def get_position(
     request: Request,
-    position_id: int = Path(..., description="NFT token ID of the position", ge=1)
+    position_id: int = Path(..., description="NFT token ID of the position", ge=1),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get detailed information about a specific position by its NFT token ID.
@@ -37,12 +42,30 @@ async def get_position(
     - Uncollected fees
     - Whether the position is in range
     - Staking status
+    - User ID (if position is tracked in database)
     """
     logger.info(f"GET /positions/{position_id} - IP: {request.client.host}")
     try:
         position = await positions_service.get_position_by_id(position_id)
+        
+        # Query database to get user_id for this NFT token ID
+        user_id = None
+        try:
+            stmt = select(Position.user_id).where(Position.nft_token_id == position_id)
+            result = await db.execute(stmt)
+            db_user_id = result.scalar_one_or_none()
+            if db_user_id:
+                user_id = db_user_id
+                logger.info(f"Found user_id {user_id} for position {position_id}")
+        except Exception as e:
+            logger.warning(f"Could not fetch user_id for position {position_id}: {e}")
+        
+        # Add user_id to position data if found
+        position_dict = position.dict()
+        position_dict['user_id'] = user_id
+        
         logger.info(f"Successfully fetched position {position_id}")
-        return PositionDetailResponse(position=position)
+        return PositionDetailResponse(position=PositionInfo(**position_dict))
         
     except ValueError as e:
         logger.warning(f"Position not found: {position_id}")

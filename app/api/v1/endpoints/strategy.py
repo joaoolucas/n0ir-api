@@ -18,8 +18,6 @@ from app.schemas.strategy_v2 import (
     MonitorResponse,
     RangeBreakAlert,
     WhipsawAlert,
-    PortfolioRebalanceRequest,
-    PortfolioResponse,
     ErrorResponse,
     ErrorDetail
 )
@@ -31,9 +29,7 @@ from app.schemas.strategy import (
     SlippageCalculationRequest,
     MonitorPositionsRequest,
     RangeBreakRequest,
-    WhipsawDetectionRequest,
-    RebalanceRecommendation,
-    PortfolioImprovement
+    WhipsawDetectionRequest
 )
 
 from app.core.strategy_service import strategy_service
@@ -357,37 +353,6 @@ async def monitor_positions(request: MonitorRequest) -> MonitorResponse:
         
     except Exception as e:
         logger.error(f"Error monitoring positions: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post(
-    "/portfolio",
-    response_model=PortfolioResponse,
-    summary="Portfolio management operations",
-    description="Portfolio-level operations including rebalancing and optimization"
-)
-async def manage_portfolio(request: PortfolioRebalanceRequest) -> PortfolioResponse:
-    """
-    Portfolio management endpoint.
-    
-    Currently supports:
-    - Rebalancing recommendations
-    - Portfolio optimization
-    """
-    try:
-        # Call existing rebalance service
-        v1_response = await strategy_service.rebalance_portfolio(request)
-        
-        # Convert to v2 response format
-        return PortfolioResponse(
-            action="rebalance",
-            recommendations=v1_response.recommendations,
-            expected_improvement=v1_response.expected_portfolio_improvement,
-            is_full_rebalance=v1_response.is_full_rebalance
-        )
-        
-    except Exception as e:
-        logger.error(f"Error managing portfolio: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
