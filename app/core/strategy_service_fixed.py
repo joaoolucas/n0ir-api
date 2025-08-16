@@ -46,12 +46,48 @@ async def analyze_position_switches_working(
             'estimated_total_gas_cost': 0
         }
     
+    # Fetch pool info for each position
+    from app.core.pools_service import pools_service
+    
+    # Fetch pool info for all positions
+    for position in positions_list:
+        pool_address = position.get('pool_address')
+        if pool_address:
+            try:
+                pool_data = await pools_service.get_pool(pool_address, include_effective_apr=False)
+                # Add pool info to position
+                # Extract token symbols from nested objects
+                token0_symbol = 'UNKNOWN'
+                token1_symbol = 'UNKNOWN'
+                if isinstance(pool_data.get('token0'), dict):
+                    token0_symbol = pool_data['token0'].get('symbol', 'UNKNOWN')
+                if isinstance(pool_data.get('token1'), dict):
+                    token1_symbol = pool_data['token1'].get('symbol', 'UNKNOWN')
+                
+                position['pool_info'] = {
+                    'symbol': pool_data.get('symbol', 'Unknown'),
+                    'token0_symbol': token0_symbol,
+                    'token1_symbol': token1_symbol,
+                    'apr': pool_data.get('apr', pool_data.get('base_apr', 0)),
+                    'base_apr': pool_data.get('base_apr', 0),
+                    'tvl_usd': pool_data.get('tvl_usd', 0)
+                }
+                logger.info(f"Added pool info for position {position.get('token_id')}: {position['pool_info']['symbol']}")
+            except Exception as e:
+                logger.warning(f"Failed to fetch pool info for position {position.get('token_id')}: {e}")
+                # Add default pool_info if fetch fails
+                position['pool_info'] = {
+                    'symbol': 'Unknown',
+                    'token0_symbol': 'UNKNOWN',
+                    'token1_symbol': 'UNKNOWN',
+                    'apr': 50,
+                    'base_apr': 50,
+                    'tvl_usd': 0
+                }
+    
     # Calculate wallet size
     wallet_size = sum(p.get('current_value', 0) for p in positions_list)
     logger.info(f"Wallet size: ${wallet_size}")
-    
-    # Fetch real pool data from the whitelist using batch endpoint
-    from app.core.pools_service import pools_service
     
     # Import whitelisted pools from main strategy service
     from app.core.strategy_service import WHITELISTED_POOLS
