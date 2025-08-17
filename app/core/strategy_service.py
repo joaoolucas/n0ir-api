@@ -15,7 +15,6 @@ from app.core.pools_service import pools_service
 from app.core.positions_service import positions_service
 from app.core.cache import cache_manager
 from app.core.effective_apr_calculator import EffectiveAPRCalculator
-from app.core.cooldown_manager import cooldown_manager
 from app.schemas.strategy import (
     OpportunitiesRequest, OpportunitiesResponse, PoolOpportunity,
     AnalyzeEntryRequest, AnalyzeEntryResponse,
@@ -39,6 +38,7 @@ from app.schemas.strategy import (
 # Whitelisted pools from specs/whitelist.md
 WHITELISTED_POOLS = {
     "0x3f53f1Fd5b7723DDf38D93a584D280B9b94C3111",  # ZORA/USDC
+    "0xAdB8Fb846DBD3Bd6A23335CEe65Bb610C1cf0ea3",  # ZORA/WETH
     "0x363d1607b8DA83d6B6EA76D017CeEcf1316BB08A",  # cbBTC/cbDOGE
     "0x4e829F8A5213c42535AB84AA40BD4aDCCE9cBa02",  # WETH/BRETT
     "0x3f0296BF652e19bca772EC3dF08b32732F93014A",  # VIRTUAL/WETH
@@ -129,13 +129,6 @@ class StrategyService:
         except Exception as e:
             logger.warning(f"Could not fetch executor positions: {e}")
             executor_positions = []
-        
-        # Add pools on cooldown to exclusion list
-        cooldown_pools = await cooldown_manager.get_pools_on_cooldown(request.executor_address)
-        if cooldown_pools:
-            logger.info(f"Excluding {len(cooldown_pools)} pools on cooldown for {request.executor_address[:8]}...")
-            exclude_addresses.extend(cooldown_pools)
-            exclude_addresses = list(set(exclude_addresses))  # Remove duplicates
         
         # Calculate max_capital as available_capital + total position value
         max_capital = request.available_capital + total_position_value
@@ -998,38 +991,25 @@ class StrategyService:
             invested_amount = 0
         
         # Determine action based on break type and severity
-        if break_type == 'upward':
-            if break_info.get('severity', 0) >= 50:
-                action = 'emergency_exit'
-                urgency = 'critical'
-                reasoning = f"Upward break with {reversal_analysis['reversal_probability']*100:.0f}% reversal probability"
-                exit_percentage = 100
-                max_slippage = 2.0
+        # Use consistent 50% threshold for both upward and downward breaks
+        if break_info.get('severity', 0) >= 50:
+            action = 'emergency_exit'
+            urgency = 'high'
+            if break_type == 'upward':
+                reasoning = f"Upward break with {reversal_analysis['reversal_probability']*100:.0f}% reversal probability - exit and find new opportunities"
             else:
-                action = 'monitor'
-                urgency = 'medium'
+                reasoning = "Downward break exceeded 50% severity - exit and find new opportunities"
+            exit_percentage = 100
+            max_slippage = 2.0
+        else:
+            action = 'monitor'
+            urgency = 'medium'
+            if break_type == 'upward':
                 reasoning = "Mild upward break - monitor closely"
-                exit_percentage = 0
-                max_slippage = 1.0
-        else:  # downward
-            if break_info.get('severity', 0) >= 85:
-                action = 'emergency_exit'
-                urgency = 'high'
-                reasoning = "Severe downward break - exit and find new opportunities"
-                exit_percentage = 100
-                max_slippage = 1.5
-            elif break_info.get('severity', 0) >= 70:
-                action = 'rebalance'
-                urgency = 'medium'
-                reasoning = "Moderate downward break - consider rebalancing"
-                exit_percentage = 0
-                max_slippage = 1.0
             else:
-                action = 'monitor'
-                urgency = 'low'
                 reasoning = "Mild downward break - monitor for opportunities"
-                exit_percentage = 0
-                max_slippage = 0.5
+            exit_percentage = 0
+            max_slippage = 1.0
         
         execution_params = ExecutionParams(
             exit_percentage=exit_percentage,
@@ -1054,27 +1034,6 @@ class StrategyService:
             expected_loss_if_reversal=reversal_analysis['expected_loss_if_reversal'],
             break_severity=break_info.get('severity', 0)
         )
-        
-        # Add cooldown if recommending exit
-        if action == 'emergency_exit' and exit_percentage >= 75:
-            # Get user address from position data
-            user_address = None
-            if hasattr(position_data, 'owner'):
-                user_address = position_data.owner
-            elif isinstance(position_data, dict):
-                user_address = position_data.get('owner')
-            
-            if user_address and pool_address:
-                # Add cooldown for this pool
-                await cooldown_manager.add_cooldown(
-                    user_address=user_address,
-                    pool_address=pool_address,
-                    break_type=break_type,
-                    severity=break_info['severity_level'],
-                    exit_price=current_price,
-                    exit_value_usd=invested_amount
-                )
-                logger.info(f"Added cooldown for {user_address[:8]}... on pool {pool_address[:8]}... due to {break_info['severity_level']} {break_type} break")
         
         return RangeBreakResponse(
             action=action,

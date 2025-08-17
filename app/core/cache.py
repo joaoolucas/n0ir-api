@@ -111,7 +111,7 @@ class CacheManager:
     
     # User-specific cache methods
     async def get_user_context(self, user_address: str) -> Optional[Any]:
-        """Get cached user context (positions, cooldowns, etc)."""
+        """Get cached user context (positions, etc)."""
         key = f"user:context:{user_address.lower()}"
         return await self.cache.get(key)
     

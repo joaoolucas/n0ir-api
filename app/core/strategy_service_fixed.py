@@ -170,22 +170,9 @@ async def analyze_position_switches_working(
     # Analyze each position
     recommendations = []
     
-    # Import cooldown manager
-    from app.core.cooldown_manager import cooldown_manager
-    
     for position in positions_list:
         current_pool = position.get('pool_address', '').lower()
         position_id = position.get('token_id', position.get('id'))
-        
-        # Check if position is in cooldown
-        cooldown_info = await cooldown_manager.check_cooldown(
-            user_address=user_address,
-            pool_address=current_pool
-        )
-        
-        if cooldown_info:
-            logger.info(f"Position {position_id} is in cooldown for pool {current_pool} - skipping switch recommendation")
-            continue
         
         # Get BASE APR from pool data (not effective APR which is user-specific)
         current_apr = 0
