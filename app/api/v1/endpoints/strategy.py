@@ -26,7 +26,6 @@ from app.schemas.strategy import (
 
 from app.core.strategy_service import strategy_service
 from app.core.logger import logger
-from app.core.cooldown_manager import cooldown_manager
 
 # Initialize orchestrator after imports to avoid circular import
 from app.core.strategy_orchestrator import StrategyOrchestrator
@@ -53,14 +52,14 @@ async def screen_opportunities(request: ScreenRequest):
     Enhanced screening endpoint with comprehensive analysis.
     
     This endpoint now provides:
-    - Pool opportunities filtered by cooldowns
+    - Pool opportunities
     - Pre-computed entry analyses for top opportunities
     - Exit recommendations for current positions
     - Switch recommendations for portfolio optimization
     - Decision matrix with prioritized actions
     - Risk alerts for portfolio health
     
-    Always respects cooldowns and includes full analysis automatically.
+    Includes full analysis automatically.
     """
     try:
         # Use comprehensive analysis through strategy service
@@ -89,8 +88,7 @@ async def screen_opportunities(request: ScreenRequest):
             available_capital=result.get('user_context', {}).get('available_capital', request.available_capital),
             positions_value=result.get('user_context', {}).get('positions_value', 0),
             total_portfolio_value=result.get('user_context', {}).get('total_portfolio_value', request.available_capital),
-            active_positions=result.get('user_context', {}).get('active_positions', 0),
-            pools_on_cooldown=result.get('user_context', {}).get('pools_on_cooldown', [])
+            active_positions=result.get('user_context', {}).get('active_positions', 0)
         )
         
         # Convert entry analyses
@@ -345,28 +343,3 @@ async def monitor_positions(request: MonitorRequest) -> MonitorResponse:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get(
-    "/cooldowns/{user_address}",
-    summary="Get active cooldowns for a user",
-    description="Returns all active range break cooldowns preventing re-entry to pools"
-)
-async def get_cooldowns(user_address: str):
-    """
-    Get all active cooldowns for a user.
-    
-    Returns information about pools that are temporarily restricted
-    due to recent range break exits.
-    """
-    try:
-        cooldowns = await cooldown_manager.get_user_cooldowns(user_address)
-        
-        return {
-            "user_address": user_address,
-            "active_cooldowns": cooldowns,
-            "total_cooldowns": len(cooldowns),
-            "pools_restricted": [c['pool_address'] for c in cooldowns]
-        }
-        
-    except Exception as e:
-        logger.error(f"Error fetching cooldowns: {e}")
-        raise HTTPException(status_code=500, detail=str(e))

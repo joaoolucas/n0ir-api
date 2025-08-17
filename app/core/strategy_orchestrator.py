@@ -9,7 +9,6 @@ import time
 
 from app.core.logger import logger
 from app.core.cache import cache_manager
-from app.core.cooldown_manager import cooldown_manager
 from app.core.positions_service import positions_service
 from app.core.pools_service import pools_service
 from app.core.rebalancing_config import RebalancingStrategy, RebalancingThresholds
@@ -35,7 +34,6 @@ class StrategyOrchestrator:
         """Initialize orchestrator with strategy service and rebalancing strategy."""
         self.strategy_service = strategy_service
         self.cache_manager = cache_manager
-        self.cooldown_manager = cooldown_manager
         self.positions_service = positions_service
         self.pools_service = pools_service
         self.rebalancing_strategy = rebalancing_strategy or RebalancingStrategy()
@@ -72,11 +70,8 @@ class StrategyOrchestrator:
             # Get screening opportunities (existing logic)
             opportunities = await self._get_base_opportunities(executor_address, available_capital)
             
-            # Filter opportunities by cooldowns
-            valid_opportunities = await self._filter_by_cooldowns(
-                opportunities, 
-                user_context['cooldowns']
-            )
+            # No longer filtering by cooldowns
+            valid_opportunities = opportunities
             
             # Run parallel analyses
             analyses = await self._run_parallel_analyses(
@@ -154,11 +149,10 @@ class StrategyOrchestrator:
         """
         Fetch all user data in parallel.
         
-        Returns dict with positions, cooldowns, and calculated values.
+        Returns dict with positions and calculated values.
         """
         tasks = [
-            self.positions_service.get_positions_by_owner(executor_address),
-            self.cooldown_manager.get_user_cooldowns(executor_address),
+            self.positions_service.get_positions_by_owner(executor_address)
         ]
         
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -175,20 +169,10 @@ class StrategyOrchestrator:
         else:
             logger.warning(f"Failed to fetch positions: {results[0]}")
         
-        # Handle cooldowns
-        cooldowns = []
-        cooldown_pools = []
-        if not isinstance(results[1], Exception):
-            cooldowns = results[1]
-            cooldown_pools = [c['pool_address'] for c in cooldowns]
-        else:
-            logger.warning(f"Failed to fetch cooldowns: {results[1]}")
         
         return {
             'positions': positions,
-            'positions_value': positions_value,
-            'cooldowns': cooldowns,
-            'cooldown_pools': cooldown_pools
+            'positions_value': positions_value
         }
     
     async def _get_base_opportunities(
@@ -204,34 +188,6 @@ class StrategyOrchestrator:
         response = await self.strategy_service.find_opportunities(request)
         return response.opportunities
     
-    async def _filter_by_cooldowns(
-        self,
-        opportunities: List[Any],
-        cooldowns: List[Dict]
-    ) -> List[Any]:
-        """Filter opportunities to exclude pools on cooldown."""
-        if not cooldowns:
-            return opportunities
-        
-        cooldown_pools = {c['pool_address'].lower() for c in cooldowns}
-        filtered = []
-        for opp in opportunities:
-            # Handle both dict and object types
-            if hasattr(opp, 'pool_address'):
-                pool_address = opp.pool_address
-            else:
-                pool_address = opp['pool_address']
-            
-            if pool_address.lower() not in cooldown_pools:
-                filtered.append(opp)
-        
-        if len(filtered) < len(opportunities):
-            logger.info(
-                f"Filtered {len(opportunities) - len(filtered)} opportunities "
-                f"due to cooldowns"
-            )
-        
-        return filtered
     
     async def _run_parallel_analyses(
         self,

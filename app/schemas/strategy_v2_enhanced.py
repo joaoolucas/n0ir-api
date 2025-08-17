@@ -34,7 +34,6 @@ class UserContext(BaseModel):
     positions_value: float
     total_portfolio_value: float
     active_positions: int
-    pools_on_cooldown: List[str] = Field(default_factory=list)
 
 
 class EntryAnalysis(BaseModel):
