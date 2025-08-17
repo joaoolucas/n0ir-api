@@ -99,6 +99,14 @@ class StrategyOrchestrator:
                 available_capital
             )
             
+            # Convert opportunities to dicts if they're objects
+            opportunities_as_dicts = []
+            for opp in valid_opportunities:
+                if hasattr(opp, 'dict'):
+                    opportunities_as_dicts.append(opp.dict())
+                else:
+                    opportunities_as_dicts.append(opp)
+            
             # Build comprehensive response
             response = {
                 'user_context': {
@@ -109,7 +117,7 @@ class StrategyOrchestrator:
                     'active_positions': len(user_context['positions']),
                     'pools_on_cooldown': user_context['cooldown_pools']
                 },
-                'opportunities': valid_opportunities,
+                'opportunities': opportunities_as_dicts,
                 'entry_analyses': analyses['entries'],
                 'exit_recommendations': analyses['exits'],
                 'switch_recommendations': analyses['switches'],
@@ -198,18 +206,24 @@ class StrategyOrchestrator:
     
     async def _filter_by_cooldowns(
         self,
-        opportunities: List[Dict],
+        opportunities: List[Any],
         cooldowns: List[Dict]
-    ) -> List[Dict]:
+    ) -> List[Any]:
         """Filter opportunities to exclude pools on cooldown."""
         if not cooldowns:
             return opportunities
         
         cooldown_pools = {c['pool_address'].lower() for c in cooldowns}
-        filtered = [
-            opp for opp in opportunities
-            if opp['pool_address'].lower() not in cooldown_pools
-        ]
+        filtered = []
+        for opp in opportunities:
+            # Handle both dict and object types
+            if hasattr(opp, 'pool_address'):
+                pool_address = opp.pool_address
+            else:
+                pool_address = opp['pool_address']
+            
+            if pool_address.lower() not in cooldown_pools:
+                filtered.append(opp)
         
         if len(filtered) < len(opportunities):
             logger.info(
