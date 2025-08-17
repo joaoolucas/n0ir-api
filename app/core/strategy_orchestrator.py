@@ -109,8 +109,7 @@ class StrategyOrchestrator:
                     'available_capital': available_capital,
                     'positions_value': user_context['positions_value'],
                     'total_portfolio_value': available_capital + user_context['positions_value'],
-                    'active_positions': len(user_context['positions']),
-                    'pools_on_cooldown': user_context['cooldown_pools']
+                    'active_positions': len(user_context['positions'])
                 },
                 'opportunities': opportunities_as_dicts,
                 'entry_analyses': analyses['entries'],
