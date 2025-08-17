@@ -12,6 +12,7 @@ from app.core.cache import cache_manager
 from app.core.cooldown_manager import cooldown_manager
 from app.core.positions_service import positions_service
 from app.core.pools_service import pools_service
+from app.core.rebalancing_config import RebalancingStrategy, RebalancingThresholds
 from app.schemas.strategy import (
     AnalyzeEntryRequest,
     ExitAnalysisRequest,
@@ -30,13 +31,14 @@ class StrategyOrchestrator:
     USER_CONTEXT_TTL = 10  # 10 seconds for user-specific data
     ANALYSIS_TTL = 5       # 5 seconds for analysis results
     
-    def __init__(self, strategy_service):
-        """Initialize orchestrator with strategy service."""
+    def __init__(self, strategy_service, rebalancing_strategy: RebalancingStrategy = None):
+        """Initialize orchestrator with strategy service and rebalancing strategy."""
         self.strategy_service = strategy_service
         self.cache_manager = cache_manager
         self.cooldown_manager = cooldown_manager
         self.positions_service = positions_service
         self.pools_service = pools_service
+        self.rebalancing_strategy = rebalancing_strategy or RebalancingStrategy()
     
     async def comprehensive_screen(
         self,
@@ -414,11 +416,18 @@ class StrategyOrchestrator:
         available_capital: float,
         active_positions: int
     ) -> Dict:
-        """Build decision matrix from analyses."""
+        """Build decision matrix from analyses with smart rebalancing thresholds."""
         immediate_actions = []
         scheduled_actions = []
         
-        # Priority 1: Urgent exits
+        # REBALANCING THRESHOLDS - Prevent unnecessary churn
+        MIN_CONFIDENCE_FOR_ENTRY = 75  # Only enter if confidence > 75%
+        MIN_APR_IMPROVEMENT_FOR_SWITCH = 20  # Switch only if APR improves by 20%+
+        MIN_NET_BENEFIT_FOR_SWITCH = 250  # Switch only if net benefit > $250
+        MIN_ALLOCATION_SIZE = 1000  # Don't create positions < $1000
+        MAX_GAS_COST_RATIO = 0.02  # Gas shouldn't exceed 2% of position value
+        
+        # Priority 1: Urgent exits (always execute these)
         for exit in analyses['exits']:
             if exit['urgency'] in ['critical', 'high']:
                 immediate_actions.append({
@@ -428,26 +437,56 @@ class StrategyOrchestrator:
                     'reason': exit['reason']
                 })
         
-        # Priority 2: High confidence entries
+        # Priority 2: High confidence entries (using rebalancing strategy)
+        rejected_count = {'low_confidence': 0, 'low_apr': 0, 'gas_cost': 0, 'small_size': 0}
+        
         for entry in sorted(analyses['entries'], 
                           key=lambda x: x['confidence_score'], 
-                          reverse=True)[:3]:
-            if entry['confidence_score'] > 70:
+                          reverse=True)[:5]:  # Check top 5
+            
+            # Use rebalancing strategy to determine if we should enter
+            should_enter, reason = self.rebalancing_strategy.should_enter_position(
+                confidence=entry['confidence_score'],
+                expected_apr=entry['expected_apr'],
+                allocation=entry['optimal_allocation'],
+                available_capital=available_capital
+            )
+            
+            if should_enter:
                 immediate_actions.append({
                     'type': 'entry',
                     'pool': entry['pool_address'],
                     'priority': 3,
-                    'allocation': entry['optimal_allocation']
+                    'allocation': entry['optimal_allocation'],
+                    'confidence': entry['confidence_score'],
+                    'expected_apr': entry['expected_apr'],
+                    'reason': reason
                 })
+            else:
+                # Track why entries were rejected
+                if 'Confidence' in reason:
+                    rejected_count['low_confidence'] += 1
+                elif 'APR' in reason:
+                    rejected_count['low_apr'] += 1
+                elif 'Gas' in reason:
+                    rejected_count['gas_cost'] += 1
+                elif 'Allocation' in reason:
+                    rejected_count['small_size'] += 1
+                logger.debug(f"Entry rejected: {reason}")
         
-        # Priority 3: Beneficial switches (scheduled for next day)
+        # Priority 3: Beneficial switches (with strict thresholds)
         for switch in analyses['switches']:
-            if switch['net_benefit_after_costs'] > 100:  # $100 minimum benefit
+            # Apply multiple thresholds to prevent marginal switches
+            if (switch['apr_improvement'] >= MIN_APR_IMPROVEMENT_FOR_SWITCH and
+                switch['net_benefit_after_costs'] > MIN_NET_BENEFIT_FOR_SWITCH and
+                switch.get('confidence', 0) > 70):
+                
                 scheduled_actions.append({
                     'type': 'switch',
                     'schedule': 'tomorrow',
                     'from_token': switch['from_token_id'],
                     'to_pool': switch['to_pool_address'],
+                    'apr_improvement': switch['apr_improvement'],
                     'expected_benefit': switch['net_benefit_after_costs']
                 })
         
