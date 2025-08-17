@@ -63,6 +63,9 @@ class InMemoryCache:
 class CacheManager:
     def __init__(self):
         self.cache = InMemoryCache()
+        # User-specific cache TTLs
+        self.USER_CONTEXT_TTL = 10  # 10 seconds for user context
+        self.USER_ANALYSIS_TTL = 5   # 5 seconds for analysis results
         
     async def get_pool(self, address: str) -> Optional[Any]:
         key = f"pool:{address.lower()}"
@@ -105,6 +108,38 @@ class CacheManager:
     async def set_token_prices(self, prices: Dict[str, float]) -> None:
         for address, price in prices.items():
             await self.set_token_price(address, price)
+    
+    # User-specific cache methods
+    async def get_user_context(self, user_address: str) -> Optional[Any]:
+        """Get cached user context (positions, cooldowns, etc)."""
+        key = f"user:context:{user_address.lower()}"
+        return await self.cache.get(key)
+    
+    async def set_user_context(self, user_address: str, data: Any) -> None:
+        """Cache user context with short TTL."""
+        key = f"user:context:{user_address.lower()}"
+        await self.cache.set(key, data, self.USER_CONTEXT_TTL)
+    
+    async def get_user_analysis(self, user_address: str, capital: float) -> Optional[Any]:
+        """Get cached comprehensive analysis for user."""
+        key = f"user:analysis:{user_address.lower()}:{capital}"
+        return await self.cache.get(key)
+    
+    async def set_user_analysis(self, user_address: str, capital: float, data: Any) -> None:
+        """Cache comprehensive analysis with very short TTL."""
+        key = f"user:analysis:{user_address.lower()}:{capital}"
+        await self.cache.set(key, data, self.USER_ANALYSIS_TTL)
+    
+    def build_user_cache_key(self, user_address: str, capital: float, prefix: str = "screen") -> str:
+        """Build standardized cache key for user-specific data."""
+        return f"{prefix}:{user_address.lower()}:{capital}"
+    
+    async def invalidate_user_cache(self, user_address: str) -> None:
+        """Invalidate all cache entries for a specific user."""
+        # This would need to track user keys or use pattern matching
+        # For now, we'll just clear specific known keys
+        context_key = f"user:context:{user_address.lower()}"
+        await self.cache.delete(context_key)
     
     async def clear_all(self) -> None:
         await self.cache.clear()

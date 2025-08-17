@@ -66,6 +66,7 @@ class StrategyService:
         self.slippage_calc = SlippageCalculator()
         self.portfolio_analyzer = PortfolioAnalyzer()
         self.effective_apr_calc = EffectiveAPRCalculator()
+        self.orchestrator = None  # Will be set after initialization to avoid circular import
         
         # Cache TTLs (in seconds)
         self.CACHE_TTL_OPPORTUNITIES = 300  # 5 minutes
@@ -1640,6 +1641,43 @@ class StrategyService:
         )
         
         return current_count < optimal_count
+    
+    async def comprehensive_analysis(
+        self,
+        executor_address: str,
+        available_capital: float
+    ) -> Dict[str, Any]:
+        """
+        Comprehensive analysis with orchestrator integration.
+        Delegates to orchestrator if available, otherwise falls back to basic screening.
+        """
+        if self.orchestrator:
+            # Use orchestrator for comprehensive analysis
+            return await self.orchestrator.comprehensive_screen(
+                executor_address=executor_address,
+                available_capital=available_capital
+            )
+        else:
+            # Fallback to basic screening
+            from app.schemas.strategy import OpportunitiesRequest
+            request = OpportunitiesRequest(
+                executor_address=executor_address,
+                available_capital=available_capital
+            )
+            response = await self.find_opportunities(request)
+            
+            # Return basic response matching expected structure
+            return {
+                'opportunities': response.opportunities,
+                'optimal_position_count': response.optimal_position_count,
+                'minimum_position_size': response.minimum_position_size,
+                'timestamp': response.timestamp,
+                'entry_analyses': [],
+                'exit_recommendations': [],
+                'switch_recommendations': [],
+                'decision_matrix': None,
+                'risk_alerts': []
+            }
 
 
 # Create singleton instance

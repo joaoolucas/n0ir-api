@@ -3,17 +3,12 @@ Consolidated strategy endpoints.
 Reduces 8 endpoints to 4 logical groups for better API design.
 """
 from typing import Dict, Any
+from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import JSONResponse
 
 from app.schemas.strategy_v2 import (
     ScreenRequest,
-    ScreenResponse,
-    AnalyzeRequest,
-    AnalyzeResponse,
-    AnalyzeEntryResponse,
-    AnalyzeExitResponse,
-    AnalyzeSlippageResponse,
     MonitorRequest,
     MonitorResponse,
     RangeBreakAlert,
@@ -24,9 +19,6 @@ from app.schemas.strategy_v2 import (
 
 from app.schemas.strategy import (
     OpportunitiesRequest,
-    AnalyzeEntryRequest,
-    ExitAnalysisRequest,
-    SlippageCalculationRequest,
     MonitorPositionsRequest,
     RangeBreakRequest,
     WhipsawDetectionRequest
@@ -35,6 +27,11 @@ from app.schemas.strategy import (
 from app.core.strategy_service import strategy_service
 from app.core.logger import logger
 from app.core.cooldown_manager import cooldown_manager
+
+# Initialize orchestrator after imports to avoid circular import
+from app.core.strategy_orchestrator import StrategyOrchestrator
+if not strategy_service.orchestrator:
+    strategy_service.orchestrator = StrategyOrchestrator(strategy_service)
 
 router = APIRouter(
     prefix="/strategy",
@@ -48,175 +45,167 @@ router = APIRouter(
 
 @router.post(
     "/screen",
-    response_model=ScreenResponse,
-    summary="Screen pool opportunities",
-    description="Find and rank pool opportunities based on quantitative scoring model (formerly /opportunities)"
+    summary="Enhanced pool screening with comprehensive analysis",
+    description="Find and rank pool opportunities with full entry/exit/switch analysis"
 )
-async def screen_opportunities(request: ScreenRequest) -> ScreenResponse:
+async def screen_opportunities(request: ScreenRequest):
     """
-    Screen pools for investment opportunities.
+    Enhanced screening endpoint with comprehensive analysis.
     
-    This endpoint:
-    - Fetches whitelisted pools
-    - Calculates safety scores and allocation weights
-    - Excludes pools where user already has positions
-    - Returns ranked opportunities with recommended allocations
+    This endpoint now provides:
+    - Pool opportunities filtered by cooldowns
+    - Pre-computed entry analyses for top opportunities
+    - Exit recommendations for current positions
+    - Switch recommendations for portfolio optimization
+    - Decision matrix with prioritized actions
+    - Risk alerts for portfolio health
+    
+    Always respects cooldowns and includes full analysis automatically.
     """
     try:
-        # Convert to v1 request format
-        v1_request = OpportunitiesRequest(
+        # Use comprehensive analysis through strategy service
+        result = await strategy_service.comprehensive_analysis(
             executor_address=request.executor_address,
             available_capital=request.available_capital
         )
         
-        # Call existing service method
-        v1_response = await strategy_service.find_opportunities(v1_request)
-        
-        # Convert to v2 response format
-        return ScreenResponse(
-            opportunities=v1_response.opportunities,
-            optimal_position_count=v1_response.optimal_position_count,
-            minimum_position_size=v1_response.minimum_position_size,
-            timestamp=v1_response.timestamp
+        # Import enhanced response model
+        from app.schemas.strategy_v2_enhanced import (
+            EnhancedScreenResponse,
+            UserContext,
+            EntryAnalysis,
+            ExitRecommendation,
+            SwitchRecommendation as EnhancedSwitchRecommendation,
+            DecisionMatrix,
+            ImmediateAction,
+            ScheduledAction,
+            CapitalAllocation,
+            RiskAlert
         )
+        
+        # Build user context
+        user_context = UserContext(
+            executor_address=result.get('user_context', {}).get('executor_address', request.executor_address),
+            available_capital=result.get('user_context', {}).get('available_capital', request.available_capital),
+            positions_value=result.get('user_context', {}).get('positions_value', 0),
+            total_portfolio_value=result.get('user_context', {}).get('total_portfolio_value', request.available_capital),
+            active_positions=result.get('user_context', {}).get('active_positions', 0),
+            pools_on_cooldown=result.get('user_context', {}).get('pools_on_cooldown', [])
+        )
+        
+        # Convert entry analyses
+        entry_analyses = []
+        for entry in result.get('entry_analyses', []):
+            entry_analyses.append(EntryAnalysis(
+                pool_address=entry['pool_address'],
+                pool_name=entry.get('pool_name', 'Unknown'),
+                confidence_score=entry['confidence_score'],
+                optimal_allocation=entry['optimal_allocation'],
+                expected_apr=entry['expected_apr'],
+                risk_metrics=entry.get('risk_metrics', {}),
+                optimal_range=entry.get('optimal_range', {})
+            ))
+        
+        # Convert exit recommendations
+        exit_recommendations = []
+        for exit in result.get('exit_recommendations', []):
+            exit_recommendations.append(ExitRecommendation(
+                token_id=exit['token_id'],
+                pool_address=exit['pool_address'],
+                urgency=exit['urgency'],
+                reason=exit['reason'],
+                expected_proceeds=exit['expected_proceeds'],
+                roi_percentage=exit['roi_percentage'],
+                slippage_estimate=exit['slippage_estimate']
+            ))
+        
+        # Convert switch recommendations
+        switch_recommendations = []
+        for switch in result.get('switch_recommendations', []):
+            switch_recommendations.append(EnhancedSwitchRecommendation(
+                from_token_id=switch['from_token_id'],
+                from_pool=switch['from_pool'],
+                to_pool_address=switch['to_pool_address'],
+                to_pool_name=switch.get('to_pool_name', 'Unknown'),
+                apr_improvement=switch['apr_improvement'],
+                net_benefit_after_costs=switch['net_benefit_after_costs'],
+                confidence=switch.get('confidence', 0)
+            ))
+        
+        # Convert decision matrix if present
+        decision_matrix = None
+        if result.get('decision_matrix'):
+            dm = result['decision_matrix']
+            
+            # Convert immediate actions
+            immediate_actions = []
+            for action in dm.get('immediate_actions', []):
+                immediate_actions.append(ImmediateAction(
+                    type=action['type'],
+                    priority=action['priority'],
+                    details=action
+                ))
+            
+            # Convert scheduled actions
+            scheduled_actions = []
+            for action in dm.get('scheduled_actions', []):
+                scheduled_actions.append(ScheduledAction(
+                    type=action['type'],
+                    schedule=action['schedule'],
+                    details=action
+                ))
+            
+            # Build capital allocation
+            ca = dm.get('capital_allocation', {})
+            capital_allocation = CapitalAllocation(
+                recommended_positions=ca.get('recommended_positions', 0),
+                allocation_per_position=ca.get('allocation_per_position', 0),
+                reserve_capital=ca.get('reserve_capital', 0),
+                active_positions=ca.get('active_positions', 0)
+            )
+            
+            decision_matrix = DecisionMatrix(
+                immediate_actions=immediate_actions,
+                scheduled_actions=scheduled_actions,
+                capital_allocation=capital_allocation
+            )
+        
+        # Convert risk alerts
+        risk_alerts = []
+        for alert in result.get('risk_alerts', []):
+            risk_alerts.append(RiskAlert(
+                type=alert['type'],
+                message=alert['message'],
+                severity=alert['severity']
+            ))
+        
+        # Build enhanced response
+        return EnhancedScreenResponse(
+            user_context=user_context,
+            opportunities=result.get('opportunities', []),
+            entry_analyses=entry_analyses,
+            exit_recommendations=exit_recommendations,
+            switch_recommendations=switch_recommendations,
+            decision_matrix=decision_matrix,
+            risk_alerts=risk_alerts,
+            optimal_position_count=result.get('optimal_position_count', 0),
+            minimum_position_size=result.get('minimum_position_size', 10),
+            timestamp=result.get('timestamp', datetime.utcnow()),
+            analysis_timestamp=result.get('analysis_timestamp'),
+            cache_hit=result.get('cache_hit', False),
+            analysis_time_ms=result.get('analysis_time_ms')
+        )
+        
     except Exception as e:
-        logger.error(f"Error screening opportunities: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post(
-    "/analyze",
-    response_model=AnalyzeResponse,
-    summary="Unified trade analysis",
-    description="Analyze entry, exit, or slippage for trading decisions"
-)
-async def analyze_trade(request: AnalyzeRequest) -> AnalyzeResponse:
-    """
-    Unified endpoint for trade analysis.
-    
-    Supports three action types:
-    - entry: Analyze potential position entry
-    - exit: Analyze position exit strategy
-    - slippage: Calculate expected slippage
-    """
-    try:
-        if request.action == "entry":
-            if not request.entry_data:
-                raise HTTPException(400, "entry_data required for entry analysis")
-            
-            # Convert to v1 request
-            v1_request = AnalyzeEntryRequest(
-                pool_address=request.entry_data.pool_address,
-                amount_usdc=request.entry_data.amount_usdc
-            )
-            
-            # Call existing service
-            v1_response = await strategy_service.analyze_entry(v1_request)
-            
-            # Build v2 response
-            return AnalyzeResponse(
-                action="entry",
-                entry_response=AnalyzeEntryResponse(
-                    should_enter=v1_response.should_enter,
-                    confidence_score=v1_response.confidence_score,
-                    slippage=v1_response.slippage,
-                    risk_analysis=v1_response.risk_analysis,
-                    optimal_range=v1_response.optimal_range,
-                    effective_apr=v1_response.effective_apr,
-                    apr_efficiency=v1_response.apr_efficiency,
-                    warnings=v1_response.warnings
-                )
-            )
-            
-        elif request.action == "exit":
-            if not request.exit_data:
-                raise HTTPException(400, "exit_data required for exit analysis")
-            
-            # Convert to v1 request
-            v1_request = ExitAnalysisRequest(
-                token_id=request.exit_data.token_id,
-                exit_reason=request.exit_data.exit_reason
-            )
-            
-            # Call existing service
-            v1_response = await strategy_service.analyze_exit(v1_request)
-            
-            # Build v2 response
-            return AnalyzeResponse(
-                action="exit",
-                exit_response=AnalyzeExitResponse(
-                    should_exit=v1_response.should_exit,
-                    exit_strategy=v1_response.exit_strategy,
-                    optimal_timing=v1_response.optimal_timing,
-                    slippage_estimate=v1_response.slippage_estimate,
-                    expected_proceeds=v1_response.expected_proceeds,
-                    roi_percentage=v1_response.roi_percentage,
-                    tax_implications=v1_response.tax_implications
-                )
-            )
-            
-        elif request.action == "switch":
-            if not request.switch_data:
-                raise HTTPException(400, "switch_data required for switch analysis")
-            
-            # Call new switch analysis method
-            switch_result = await strategy_service.analyze_position_switches(
-                user_address=request.switch_data.user_address,
-                token_ids=request.switch_data.token_ids
-            )
-            
-            # Import the response model
-            from app.schemas.strategy_v2 import AnalyzeSwitchResponse
-            
-            # Build v2 response with portfolio summary
-            return AnalyzeResponse(
-                action="switch",
-                switch_response=AnalyzeSwitchResponse(
-                    portfolio_summary=switch_result['portfolio_summary'],
-                    recommendations=switch_result['recommendations'],
-                    total_positions_analyzed=switch_result['total_positions_analyzed'],
-                    positions_recommended_for_switch=switch_result['positions_recommended_for_switch'],
-                    total_expected_apr_improvement=switch_result['total_expected_apr_improvement'],
-                    estimated_total_gas_cost=switch_result['estimated_total_gas_cost']
-                )
-            )
-            
-        elif request.action == "slippage":
-            if not request.slippage_data:
-                raise HTTPException(400, "slippage_data required for slippage analysis")
-            
-            # Convert to v1 request
-            v1_request = SlippageCalculationRequest(
-                pool_address=request.slippage_data.pool_address,
-                action=request.slippage_data.action,
-                amount_usdc=request.slippage_data.amount_usdc
-            )
-            
-            # Call existing service
-            v1_response = await strategy_service.calculate_slippage(v1_request)
-            
-            # Build v2 response
-            return AnalyzeResponse(
-                action="slippage",
-                slippage_response=AnalyzeSlippageResponse(
-                    base_slippage=v1_response.base_slippage,
-                    size_impact=v1_response.size_impact,
-                    volatility_adjustment=v1_response.volatility_adjustment,
-                    total_slippage=v1_response.total_slippage,
-                    max_recommended=v1_response.max_recommended,
-                    pair_classification=v1_response.pair_classification
-                )
-            )
-        else:
-            raise HTTPException(400, f"Invalid action: {request.action}")
-            
-    except HTTPException:
-        raise
-    except Exception as e:
+        logger.error(f"Error in enhanced screening: {e}")
         import traceback
-        logger.error(f"Error analyzing trade: {e}")
         logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# DEPRECATED: /analyze endpoint has been removed
+# All analysis functionality is now integrated into the /screen endpoint
+# which provides comprehensive analysis in a single call
 
 
 @router.post(
