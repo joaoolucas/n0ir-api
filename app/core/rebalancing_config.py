@@ -26,8 +26,8 @@ class RebalancingThresholds(BaseModel):
     )
     
     min_allocation_size: float = Field(
-        default=1000.0,
-        ge=100,
+        default=10.0,
+        ge=10,
         description="Minimum position size in USDC to avoid dust positions"
     )
     
@@ -136,12 +136,19 @@ class RebalancingStrategy:
             return False, f"Confidence {confidence:.1f}% below threshold {self.thresholds.min_confidence_for_entry}%"
         
         # Dynamic APR threshold based on position size
-        if allocation < 2000:
-            min_apr = 80  # Small positions need high APR to justify gas
+        # For Base L2 with $0.50 gas costs
+        if allocation < 50:
+            min_apr = 500  # Very small positions need very high APR
+        elif allocation < 100:
+            min_apr = 200  # Small positions need high APR to justify gas
+        elif allocation < 500:
+            min_apr = 100  # Medium-small positions
+        elif allocation < 2000:
+            min_apr = 80   # Medium positions
         elif allocation < 5000:
-            min_apr = 60  # Medium positions
+            min_apr = 60   # Large positions
         else:
-            min_apr = 50  # Large positions can accept lower APR
+            min_apr = 50   # Very large positions can accept lower APR
         
         # Check dynamic APR threshold
         if expected_apr < min_apr:

@@ -422,10 +422,10 @@ class StrategyOrchestrator:
         
         # REBALANCING THRESHOLDS - Prevent unnecessary churn
         MIN_CONFIDENCE_FOR_ENTRY = 75  # Only enter if confidence > 75%
-        MIN_APR_IMPROVEMENT_FOR_SWITCH = 20  # Switch only if APR improves by 20%+
-        MIN_NET_BENEFIT_FOR_SWITCH = 250  # Switch only if net benefit > $250
-        MIN_ALLOCATION_SIZE = 1000  # Don't create positions < $1000
-        MAX_GAS_COST_RATIO = 0.02  # Gas shouldn't exceed 2% of position value
+        MIN_APR_IMPROVEMENT_FOR_SWITCH = 35  # Switch only if APR improves by 35%+ (updated from quant analysis)
+        MIN_NET_BENEFIT_FOR_SWITCH = 500  # Switch only if net benefit > $500
+        MIN_ALLOCATION_SIZE = 10  # Minimum position size $10 for testing
+        MAX_GAS_COST_RATIO = 0.05  # Gas can be up to 5% for small test positions
         
         # Priority 1: Urgent exits (always execute these)
         for exit in analyses['exits']:
@@ -548,7 +548,7 @@ class StrategyOrchestrator:
         
         # Check if capital is too fragmented
         if available_capital > 0 and len(analyses['entries']) > 0:
-            min_position = 1000  # $1000 minimum position size
+            min_position = 10  # $10 minimum position size for testing
             if available_capital / len(analyses['entries']) < min_position:
                 alerts.append({
                     'type': 'capital_fragmentation',

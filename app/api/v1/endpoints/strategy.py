@@ -189,7 +189,7 @@ async def screen_opportunities(request: ScreenRequest):
             decision_matrix=decision_matrix,
             risk_alerts=risk_alerts,
             optimal_position_count=result.get('optimal_position_count', 0),
-            minimum_position_size=result.get('minimum_position_size', 1000),
+            minimum_position_size=result.get('minimum_position_size', 10),
             timestamp=result.get('timestamp', datetime.utcnow()),
             analysis_timestamp=result.get('analysis_timestamp'),
             cache_hit=result.get('cache_hit', False),
