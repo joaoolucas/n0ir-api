@@ -466,7 +466,6 @@ class StrategyOrchestrator:
         )
         
         allocation_per_position = available_capital / optimal_positions if optimal_positions > 0 else 0
-        reserve_capital = available_capital * 0.1  # Keep 10% as reserve
         
         return {
             'immediate_actions': sorted(immediate_actions, key=lambda x: x['priority']),
@@ -474,7 +473,6 @@ class StrategyOrchestrator:
             'capital_allocation': {
                 'recommended_positions': optimal_positions,
                 'allocation_per_position': round(allocation_per_position, 2),
-                'reserve_capital': round(reserve_capital, 2),
                 'active_positions': active_positions
             }
         }
@@ -491,11 +489,11 @@ class StrategyOrchestrator:
         # Check portfolio concentration
         if user_context['positions']:
             total_value = user_context['positions_value'] + available_capital
-            if user_context['positions_value'] / total_value > 0.9:
+            if user_context['positions_value'] / total_value > 0.95:
                 alerts.append({
                     'type': 'concentration',
-                    'message': 'Over 90% of capital is deployed, consider keeping reserves',
-                    'severity': 'high'
+                    'message': 'Over 95% of capital is deployed',
+                    'severity': 'medium'
                 })
         
         # Check for multiple urgent exits

@@ -158,7 +158,6 @@ async def screen_opportunities(request: ScreenRequest):
             capital_allocation = CapitalAllocation(
                 recommended_positions=ca.get('recommended_positions', 0),
                 allocation_per_position=ca.get('allocation_per_position', 0),
-                reserve_capital=ca.get('reserve_capital', 0),
                 active_positions=ca.get('active_positions', 0)
             )
             

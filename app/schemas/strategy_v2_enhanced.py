@@ -87,7 +87,6 @@ class CapitalAllocation(BaseModel):
     """Capital allocation recommendations."""
     recommended_positions: int
     allocation_per_position: float
-    reserve_capital: float
     active_positions: int
 
 
