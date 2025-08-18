@@ -38,7 +38,6 @@ from app.schemas.strategy import (
 # Whitelisted pools from specs/whitelist.md
 WHITELISTED_POOLS = {
     "0x3f53f1Fd5b7723DDf38D93a584D280B9b94C3111",  # ZORA/USDC
-    "0xAdB8Fb846DBD3Bd6A23335CEe65Bb610C1cf0ea3",  # ZORA/WETH
 }
 
 
