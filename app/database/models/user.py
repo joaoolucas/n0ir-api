@@ -23,7 +23,7 @@ class User(Base):
     user_id = Column(String, primary_key=True, index=True)
     
     # CDP Wallet information
-    wallet_address = Column(String, unique=True, nullable=False, index=True)
+    cdp_wallet_address = Column(String, unique=True, nullable=False, index=True)
     cdp_wallet_name = Column(String, nullable=False)
     
     # User status
@@ -55,4 +55,4 @@ class User(Base):
     )
     
     def __repr__(self):
-        return f"<User(user_id={self.user_id}, wallet_address={self.wallet_address}, status={self.status})>"
+        return f"<User(user_id={self.user_id}, cdp_wallet_address={self.cdp_wallet_address}, status={self.status})>"

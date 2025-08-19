@@ -88,8 +88,8 @@ class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     
     user_id: str  # The user's EOA wallet address
-    agent_wallet_address: str = Field(..., alias="wallet_address", description="CDP smart wallet managed by agent")
-    agent_wallet_name: str = Field(..., alias="cdp_wallet_name", description="CDP wallet name")
+    cdp_wallet_address: str = Field(..., description="CDP smart wallet managed by agent")
+    cdp_wallet_name: str = Field(..., description="CDP wallet name")
     status: UserStatus
     created_at: datetime
     updated_at: datetime

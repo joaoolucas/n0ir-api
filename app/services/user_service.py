@@ -24,7 +24,7 @@ class UserService:
     async def create_user(
         self,
         user_id: str,
-        wallet_address: str,
+        cdp_wallet_address: str,
         cdp_wallet_name: str
     ) -> User:
         """Create a new user with CDP wallet information."""
@@ -34,17 +34,17 @@ class UserService:
             if existing_user:
                 raise ValueError(f"User with ID {user_id} already exists")
             
-            # Check if wallet address is already registered (unless it's "pending")
-            if wallet_address != "pending":
-                stmt = select(User).where(User.wallet_address == wallet_address)
+            # Check if CDP wallet address is already registered (unless it's "pending")
+            if cdp_wallet_address != "pending":
+                stmt = select(User).where(User.cdp_wallet_address == cdp_wallet_address)
                 result = await self.db.execute(stmt)
                 if result.scalar_one_or_none():
-                    raise ValueError(f"Wallet address {wallet_address} is already registered")
+                    raise ValueError(f"CDP wallet address {cdp_wallet_address} is already registered")
             
             # Create new user
             user = User(
                 user_id=user_id,
-                wallet_address=wallet_address,
+                cdp_wallet_address=cdp_wallet_address,
                 cdp_wallet_name=cdp_wallet_name,
                 status=UserStatus.ACTIVE
             )
@@ -53,7 +53,7 @@ class UserService:
             await self.db.commit()
             await self.db.refresh(user)
             
-            logger.info(f"Created new user: {user_id} with wallet: {wallet_address}")
+            logger.info(f"Created new user: {user_id} with CDP wallet: {cdp_wallet_address}")
             return user
             
         except Exception as e:

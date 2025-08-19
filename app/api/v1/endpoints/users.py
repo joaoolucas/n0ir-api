@@ -61,7 +61,7 @@ async def create_user(
         # user_id IS the owner's wallet address
         user = await user_service.create_user(
             user_id=request.user_id,  # This is the user's EOA address
-            wallet_address="pending",  # CDP smart wallet (will be created if start_agent=true)
+            cdp_wallet_address="pending",  # CDP smart wallet (will be created if start_agent=true)
             cdp_wallet_name=f"n0ir-agent-{request.user_id[:8]}"  # Shortened for readability
         )
         
@@ -76,9 +76,9 @@ async def create_user(
                 if wallet_address:
                     logger.info(f"CDP wallet created for user {request.user_id}: {wallet_address}")
                     # Update user with actual wallet information
-                    user.wallet_address = wallet_address
+                    user.cdp_wallet_address = wallet_address
                 else:
-                    logger.warning(f"Agent started but no wallet address returned for {request.user_id}")
+                    logger.warning(f"Agent started but no CDP wallet address returned for {request.user_id}")
             else:
                 # Log warning but don't fail user creation
                 logger.warning(f"Agent start failed for user {request.user_id}: {agent_result.get('error', 'Unknown error')}")
@@ -104,6 +104,60 @@ async def get_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return UserResponse.model_validate(user)
+
+
+@router.post("/{user_id}/retry-wallet", response_model=UserResponse)
+async def retry_wallet_creation(
+    user_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """Retry CDP wallet creation for an existing user.
+    
+    Use this endpoint when:
+    - User was created but wallet creation timed out
+    - Agent-manager was down during initial user creation
+    - CDP wallet is still 'pending'
+    """
+    service = UserService(db)
+    user = await service.get_user(user_id)
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Check if wallet already exists
+    if user.cdp_wallet_address and user.cdp_wallet_address != "pending":
+        raise HTTPException(
+            status_code=400, 
+            detail=f"User already has CDP wallet: {user.cdp_wallet_address}"
+        )
+    
+    # Try to create wallet via agent
+    agent_service = AgentManagementService()
+    logger.info(f"Retrying CDP wallet creation for user {user_id}")
+    
+    agent_result = await agent_service.start_agent(user_id, wait_for_wallet=True)
+    
+    if agent_result.get('success'):
+        wallet_address = agent_result.get('wallet_address')
+        if wallet_address:
+            logger.info(f"CDP wallet created for user {user_id}: {wallet_address}")
+            
+            # Update user with wallet address
+            user.cdp_wallet_address = wallet_address
+            await db.commit()
+            await db.refresh(user)
+            
+            return UserResponse.model_validate(user)
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail="Agent started but no wallet address returned"
+            )
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Wallet creation failed: {agent_result.get('error', 'Unknown error')}"
+        )
 
 
 # Financial Operations
