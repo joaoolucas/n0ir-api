@@ -541,9 +541,13 @@ class StrategyCalculator:
         elif wallet_size >= 5_000:
             # $5k-10k wallets: allow concentration for efficiency
             wallet_multiplier = 1.3  # 30% boost
-        else:
-            # <$5k wallets: heavy concentration is optimal
+        elif wallet_size >= 500:
+            # $500-5k wallets: heavy concentration is optimal
             wallet_multiplier = 1.5  # 50% boost
+        else:
+            # <$500 wallets: allow full allocation for micro wallets
+            # No point in diversification with such small amounts
+            return 1.0  # 100% allocation allowed
         
         return base_limit * wallet_multiplier
     
