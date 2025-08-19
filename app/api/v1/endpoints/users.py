@@ -61,7 +61,7 @@ async def create_user(
         # user_id IS the owner's wallet address
         user = await user_service.create_user(
             user_id=request.user_id,  # This is the user's EOA address
-            cdp_wallet_address="pending",  # CDP smart wallet (will be created if start_agent=true)
+            cdp_wallet_address=f"pending_{request.user_id}",  # Unique placeholder for CDP smart wallet
             cdp_wallet_name=f"n0ir-agent-{request.user_id[:8]}"  # Shortened for readability
         )
         
@@ -125,7 +125,7 @@ async def retry_wallet_creation(
         raise HTTPException(status_code=404, detail="User not found")
     
     # Check if wallet already exists
-    if user.cdp_wallet_address and user.cdp_wallet_address != "pending":
+    if user.cdp_wallet_address and not user.cdp_wallet_address.startswith("pending_"):
         raise HTTPException(
             status_code=400, 
             detail=f"User already has CDP wallet: {user.cdp_wallet_address}"
