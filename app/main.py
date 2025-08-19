@@ -69,6 +69,15 @@ async def startup_event():
         logger.info("🗄️  Database connection initialized")
     else:
         logger.warning("⚠️  No database configured - user management features disabled")
+    
+    # Initialize agent management service listener
+    try:
+        from app.services.agent_management_service import AgentManagementService
+        agent_service = AgentManagementService()
+        await agent_service.start_listener()
+        logger.info("🤖 Agent management service initialized")
+    except Exception as e:
+        logger.warning(f"⚠️  Could not initialize agent management service: {e}")
 
 # Shutdown event
 @app.on_event("shutdown")

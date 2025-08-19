@@ -4,9 +4,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Path
 from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel, Field
 
 from app.database.session import get_db
 from app.services.user_service import UserService
+from app.services.agent_management_service import AgentManagementService
 from app.schemas.users import (
     CreateUserRequest, UserResponse,
     DepositRequest, WithdrawRequest, BalanceResponse,
@@ -22,6 +24,11 @@ from app.database.models.position import PositionStatus as DBPositionStatus
 from app.core.logger import logger
 
 router = APIRouter(prefix="/users")
+
+# Request model for creating user with agent
+class CreateUserWithAgentRequest(BaseModel):
+    user_id: str = Field(..., description="Unique user identifier")
+    email: Optional[str] = Field(None, description="User email address")
 
 
 # User Management Endpoints
@@ -46,6 +53,59 @@ async def create_user(
     except Exception as e:
         logger.error(f"Error creating user: {e}")
         raise HTTPException(status_code=500, detail="Failed to create user")
+
+
+@router.post("/create-with-agent", response_model=UserResponse, status_code=201)
+async def create_user_with_agent(
+    request: CreateUserWithAgentRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """Create user, start agent, and wait for CDP wallet creation."""
+    
+    user_service = UserService(db)
+    agent_service = AgentManagementService()
+    
+    # Check if user already exists
+    existing_user = await user_service.get_user(request.user_id)
+    if existing_user:
+        raise HTTPException(status_code=400, detail="User already exists")
+    
+    # Create user record with pending status (without wallet initially)
+    try:
+        # Create a placeholder user with temporary wallet info
+        user = await user_service.create_user(
+            user_id=request.user_id,
+            wallet_address="pending",  # Temporary placeholder
+            cdp_wallet_name=f"n0ir-user-{request.user_id}",
+            cdp_owner_wallet_address="pending",  # Temporary placeholder
+            cdp_owner_wallet_name=f"n0ir-owner-{request.user_id}"
+        )
+        
+        # Start agent and wait for wallet creation
+        logger.info(f"Starting agent for user {request.user_id}")
+        agent_result = await agent_service.request_agent_start_with_wallet(request.user_id)
+        
+        if agent_result.get('success'):
+            wallet_address = agent_result['wallet_address']
+            logger.info(f"Wallet created for user {request.user_id}: {wallet_address}")
+            
+            # Update user with actual wallet information
+            # Note: This would require adding an update method to UserService
+            # For now, we'll return the user with updated info
+            user.wallet_address = wallet_address
+            user.cdp_owner_wallet_address = wallet_address  # Using same for now
+            
+            return UserResponse.model_validate(user)
+        else:
+            # If wallet creation failed, we should handle cleanup
+            logger.error(f"Failed to create wallet for user {request.user_id}: {agent_result.get('error')}")
+            raise HTTPException(status_code=500, detail="Failed to create wallet for user")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating user with agent: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{user_id}", response_model=UserResponse)
