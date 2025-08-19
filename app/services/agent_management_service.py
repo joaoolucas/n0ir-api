@@ -69,63 +69,72 @@ class AgentManagementService:
         except Exception as e:
             logger.error(f"Error in wallet creation listener: {e}")
     
-    async def request_agent_start_with_wallet(self, user_id: str) -> Dict:
-        """Request agent start and wait for wallet creation."""
-        if not self.redis_client:
-            logger.warning("Redis not available, cannot start agent with wallet")
-            return {'success': False, 'error': 'Redis not available'}
-            
-        wallet_future = asyncio.Future()
-        self.wallet_callbacks[user_id] = wallet_future
+    async def start_agent(self, user_id: str, wait_for_wallet: bool = True) -> Dict:
+        """Smart agent start - handles wallet creation if needed.
         
-        command = {
-            'action': 'start',
-            'user_id': user_id,
-            'timestamp': datetime.utcnow().isoformat()
-        }
+        Args:
+            user_id: The user's wallet address (used as ID)
+            wait_for_wallet: Whether to wait for CDP wallet creation (default: True)
         
-        self.redis_client.publish('agent_commands', json.dumps(command))
-        
-        try:
-            wallet_data = await asyncio.wait_for(wallet_future, timeout=60)
-            return {
-                'success': True,
-                'user_id': user_id,
-                'wallet_address': wallet_data['wallet_address'],
-                'agent_status': 'running'
-            }
-        except asyncio.TimeoutError:
-            if user_id in self.wallet_callbacks:
-                del self.wallet_callbacks[user_id]
-            return {'success': False, 'error': 'Wallet creation timeout'}
-        except Exception as e:
-            if user_id in self.wallet_callbacks:
-                del self.wallet_callbacks[user_id]
-            logger.error(f"Error in request_agent_start_with_wallet: {e}")
-            return {'success': False, 'error': str(e)}
-    
-    async def request_agent_start(self, user_id: str) -> Dict:
-        """Request agent start without waiting for wallet."""
+        Returns:
+            Dict with success status and agent/wallet info
+        """
         if not self.redis_client:
             logger.warning("Redis not available, cannot start agent")
             return {'success': False, 'error': 'Redis not available'}
-            
+        
+        # Prepare command - let agent manager decide if wallet is needed
         command = {
             'action': 'start',
             'user_id': user_id,
+            'wait_for_wallet': wait_for_wallet,
             'timestamp': datetime.utcnow().isoformat()
         }
         
-        try:
-            self.redis_client.publish('agent_commands', json.dumps(command))
-            return {
-                'success': True,
-                'user_id': user_id,
-                'status': 'start_requested'
-            }
-        except Exception as e:
-            logger.error(f"Error requesting agent start: {e}")
-            return {'success': False, 'error': str(e)}
+        # If we should wait for wallet creation
+        if wait_for_wallet:
+            wallet_future = asyncio.Future()
+            self.wallet_callbacks[user_id] = wallet_future
+            
+            try:
+                self.redis_client.publish('agent_commands', json.dumps(command))
+                logger.info(f"Published start command for {user_id}, waiting for wallet...")
+                
+                # Wait for wallet creation or confirmation
+                wallet_data = await asyncio.wait_for(wallet_future, timeout=60)
+                
+                return {
+                    'success': True,
+                    'user_id': user_id,
+                    'wallet_address': wallet_data.get('wallet_address'),
+                    'agent_status': 'running',
+                    'wallet_created': wallet_data.get('wallet_created', False)
+                }
+            except asyncio.TimeoutError:
+                if user_id in self.wallet_callbacks:
+                    del self.wallet_callbacks[user_id]
+                logger.warning(f"Timeout waiting for wallet creation for {user_id}")
+                return {'success': False, 'error': 'Wallet creation timeout'}
+            except Exception as e:
+                if user_id in self.wallet_callbacks:
+                    del self.wallet_callbacks[user_id]
+                logger.error(f"Error in start_agent with wallet: {e}")
+                return {'success': False, 'error': str(e)}
+        else:
+            # Just start the agent without waiting
+            try:
+                self.redis_client.publish('agent_commands', json.dumps(command))
+                logger.info(f"Published start command for {user_id} (no wait)")
+                
+                return {
+                    'success': True,
+                    'user_id': user_id,
+                    'status': 'start_requested',
+                    'agent_status': 'starting'
+                }
+            except Exception as e:
+                logger.error(f"Error requesting agent start: {e}")
+                return {'success': False, 'error': str(e)}
     
     async def request_agent_stop(self, user_id: str) -> bool:
         """Request agent stop."""

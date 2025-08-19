@@ -10,18 +10,22 @@ agent_service = AgentManagementService()
 
 
 @router.post("/start/{user_id}")
-async def start_agent(user_id: str) -> Dict:
-    """Start agent for user."""
-    result = await agent_service.request_agent_start(user_id)
-    if not result.get('success'):
-        raise HTTPException(status_code=500, detail=result.get('error', 'Failed to start agent'))
-    return result
-
-
-@router.post("/start-with-wallet/{user_id}")
-async def start_agent_with_wallet(user_id: str) -> Dict:
-    """Start agent for user and wait for wallet creation."""
-    result = await agent_service.request_agent_start_with_wallet(user_id)
+async def start_agent(user_id: str, wait_for_wallet: bool = True) -> Dict:
+    """Start agent for user.
+    
+    This endpoint intelligently handles agent startup:
+    - Checks if user exists and has CDP wallet
+    - Creates CDP wallet if needed
+    - Starts the executor process
+    
+    Args:
+        user_id: User's wallet address
+        wait_for_wallet: Whether to wait for CDP wallet creation (default: true)
+    
+    Returns:
+        Agent status and wallet info if created
+    """
+    result = await agent_service.start_agent(user_id, wait_for_wallet)
     if not result.get('success'):
         raise HTTPException(status_code=500, detail=result.get('error', 'Failed to start agent'))
     return result

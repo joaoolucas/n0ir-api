@@ -92,7 +92,7 @@ async def create_user_with_agent(
         
         # Start agent and wait for wallet creation
         logger.info(f"Starting agent for user {request.user_id}")
-        agent_result = await agent_service.request_agent_start_with_wallet(request.user_id)
+        agent_result = await agent_service.start_agent(request.user_id, wait_for_wallet=True)
         
         if agent_result.get('success'):
             wallet_address = agent_result['wallet_address']
