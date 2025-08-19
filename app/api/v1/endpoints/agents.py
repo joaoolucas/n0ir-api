@@ -3,7 +3,7 @@ from typing import Dict, List
 from app.services.agent_management_service import AgentManagementService
 
 
-router = APIRouter(prefix="/agents", tags=["agents"])
+router = APIRouter(prefix="/agents", tags=["Agents"])
 
 # Create a singleton instance of the service
 agent_service = AgentManagementService()

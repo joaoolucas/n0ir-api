@@ -46,6 +46,6 @@ api_router.include_router(
 )
 
 api_router.include_router(
-    agents.router,
-    tags=["Agents"]
+    agents.router
+    # Tags already defined in agents.router
 )
