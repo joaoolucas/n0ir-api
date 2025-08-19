@@ -10,7 +10,7 @@ from app.services.agent_management_service import AgentManagementService
 from app.schemas.users import (
     CreateUserRequest, UpdateUserRequest, DepositRequest, WithdrawRequest,
     UserResponse, TransactionResponse, TransactionListResponse,
-    PositionResponse, PositionListResponse, PositionCreateRequest,
+    PositionResponse, PositionListResponse, CreatePositionRequest,
     BalanceResponse, PnLResponse, PerformanceResponse,
     ProtocolFeeListResponse, ProtocolFeeResponse,
     UserStatus, TransactionType, TransactionStatus, PositionStatus
@@ -198,7 +198,7 @@ async def get_transactions(
 @router.post("/{user_id}/positions", response_model=PositionResponse, status_code=201)
 async def create_position(
     user_id: str,
-    request: PositionCreateRequest,
+    request: CreatePositionRequest,
     db: AsyncSession = Depends(get_db)
 ):
     """Create a new position."""
