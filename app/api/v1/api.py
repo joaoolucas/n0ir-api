@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import pools, tokens, health, positions, wallets, strategy, users, transactions, agents
+from app.api.v1.endpoints import pools, tokens, health, positions, wallets, strategy, users, transactions, agents, debug
 
 api_router = APIRouter()
 
@@ -48,4 +48,10 @@ api_router.include_router(
 api_router.include_router(
     agents.router
     # Tags already defined in agents.router
+)
+
+# Debug endpoints (only in development)
+api_router.include_router(
+    debug.router,
+    tags=["Debug"]
 )
