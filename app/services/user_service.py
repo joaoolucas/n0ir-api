@@ -310,61 +310,8 @@ class UserService:
         await self.db.refresh(position)
         return position
     
-    async def create_protocol_fee(
-        self,
-        user_id: str,
-        position_id: uuid.UUID,
-        position_profit_usdc: Decimal,
-        fee_percentage: Decimal = Decimal("0.05")
-    ) -> ProtocolFee:
-        """Create a protocol fee record for a profitable position."""
-        fee_amount = position_profit_usdc * fee_percentage
-        
-        protocol_fee = ProtocolFee(
-            user_id=user_id,
-            position_id=position_id,
-            position_profit_usdc=position_profit_usdc,
-            fee_amount_usdc=fee_amount,
-            fee_percentage=fee_percentage
-        )
-        
-        self.db.add(protocol_fee)
-        await self.db.commit()
-        await self.db.refresh(protocol_fee)
-        return protocol_fee
-    
-    async def get_uncollected_fees(self, user_id: str) -> List[ProtocolFee]:
-        """Get all uncollected protocol fees for a user."""
-        stmt = select(ProtocolFee).where(
-            and_(
-                ProtocolFee.user_id == user_id,
-                ProtocolFee.collected == False
-            )
-        ).options(selectinload(ProtocolFee.position))
-        
-        result = await self.db.execute(stmt)
-        return result.scalars().all()
-    
-    async def mark_fee_collected(
-        self,
-        fee_id: uuid.UUID,
-        collection_tx_hash: str
-    ) -> Optional[ProtocolFee]:
-        """Mark a protocol fee as collected."""
-        stmt = select(ProtocolFee).where(ProtocolFee.fee_id == fee_id)
-        result = await self.db.execute(stmt)
-        fee = result.scalar_one_or_none()
-        
-        if not fee:
-            return None
-        
-        fee.collected = True
-        fee.collection_tx_hash = collection_tx_hash
-        fee.collected_at = datetime.utcnow()
-        
-        await self.db.commit()
-        await self.db.refresh(fee)
-        return fee
+    # Protocol fee methods removed - fees are now tracked directly on Position model
+    # Use position.protocol_fee_amount, position.protocol_fee_collected fields instead
     
     async def calculate_user_performance(self, user_id: str) -> Dict[str, Any]:
         """Calculate comprehensive performance metrics for a user."""
