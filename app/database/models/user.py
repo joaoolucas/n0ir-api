@@ -8,7 +8,6 @@ from app.database.base import Base
 if TYPE_CHECKING:
     from app.database.models.transaction import Transaction
     from app.database.models.position import Position
-    from app.database.models.fee import ProtocolFee
 
 
 class UserStatus(enum.Enum):
