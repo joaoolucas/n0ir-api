@@ -17,7 +17,7 @@ class TransactionType(enum.Enum):
     WITHDRAW = "withdraw"
     POSITION_ENTRY = "position_entry"
     POSITION_EXIT = "position_exit"
-    FEE_COLLECTION = "fee_collection"
+    PROTOCOL_FEE = "protocol_fee"  # Protocol fee collection from profitable positions
 
 
 class TransactionStatus(enum.Enum):
@@ -39,6 +39,9 @@ class Transaction(Base):
     # Transaction details
     transaction_type = Column(SQLEnum(TransactionType), nullable=False)
     amount_usdc = Column(Numeric(precision=20, scale=6), nullable=False)
+    
+    # Related position (for entry/exit/fee transactions)
+    related_position_id = Column(Integer, ForeignKey("positions.nft_token_id"), nullable=True, index=True)
     
     # Blockchain information
     tx_hash = Column(String, unique=True, nullable=True, index=True)

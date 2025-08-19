@@ -27,10 +27,6 @@ class User(Base):
     wallet_address = Column(String, unique=True, nullable=False, index=True)
     cdp_wallet_name = Column(String, nullable=False)
     
-    # Owner EOA information
-    cdp_owner_wallet_address = Column(String, nullable=False, index=True)
-    cdp_owner_wallet_name = Column(String, nullable=False)
-    
     # User status
     status = Column(SQLEnum(UserStatus), default=UserStatus.ACTIVE, nullable=False)
     
@@ -53,18 +49,10 @@ class User(Base):
         lazy="select"
     )
     
-    protocol_fees: Mapped[List["ProtocolFee"]] = relationship(
-        "ProtocolFee",
-        back_populates="user",
-        cascade="all, delete-orphan",
-        lazy="select"
-    )
-    
     # Indexes
     __table_args__ = (
         Index("idx_user_status", "status"),
         Index("idx_user_created_at", "created_at"),
-        Index("idx_user_cdp_owner", "cdp_owner_wallet_address"),
     )
     
     def __repr__(self):

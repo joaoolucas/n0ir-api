@@ -22,14 +22,11 @@ class PositionStatus(enum.Enum):
 class Position(Base):
     __tablename__ = "positions"
     
-    # Primary key
-    position_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Primary key - Using NFT token ID as it's the on-chain source of truth
+    nft_token_id = Column(Integer, primary_key=True)
     
     # Foreign key to user
     user_id = Column(String, ForeignKey("users.user_id"), nullable=False, index=True)
-    
-    # Aerodrome NFT position ID
-    nft_token_id = Column(Integer, unique=True, nullable=False, index=True)
     
     # Pool information
     pool_address = Column(String, nullable=False, index=True)
@@ -56,6 +53,11 @@ class Position(Base):
     fees_earned_usdc = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
     rewards_earned_usdc = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
     
+    # Protocol fee tracking (5% of profits)
+    protocol_fee_amount = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
+    protocol_fee_collected = Column(Boolean, default=False, nullable=False)
+    protocol_fee_tx_hash = Column(String, nullable=True, index=True)
+    
     # Status
     status = Column(SQLEnum(PositionStatus), default=PositionStatus.ACTIVE, nullable=False)
     
@@ -70,12 +72,6 @@ class Position(Base):
     
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="positions")
-    protocol_fee: Mapped[Optional["ProtocolFee"]] = relationship(
-        "ProtocolFee",
-        back_populates="position",
-        uselist=False,
-        cascade="all, delete-orphan"
-    )
     
     # Indexes
     __table_args__ = (
@@ -99,4 +95,4 @@ class Position(Base):
         )
     
     def __repr__(self):
-        return f"<Position(id={self.position_id}, nft_id={self.nft_token_id}, pool={self.pool_address[:10]}..., status={self.status})>"
+        return f"<Position(nft_id={self.nft_token_id}, pool={self.pool_address[:10]}..., status={self.status})>"
