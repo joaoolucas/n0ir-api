@@ -27,8 +27,8 @@ router = APIRouter(prefix="/users")
 
 # Request model for creating user with agent
 class CreateUserWithAgentRequest(BaseModel):
-    user_id: str = Field(..., description="Unique user identifier")
-    email: Optional[str] = Field(None, description="User email address")
+    user_id: str = Field(..., description="User's wallet address (EOA)")
+    signature: Optional[str] = Field(None, description="Signature to prove wallet ownership")
 
 
 # User Management Endpoints
@@ -60,7 +60,15 @@ async def create_user_with_agent(
     request: CreateUserWithAgentRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    """Create user, start agent, and wait for CDP wallet creation."""
+    """Create user with wallet address as ID, start agent, and wait for CDP wallet creation."""
+    
+    # Validate wallet address format
+    if not request.user_id.startswith("0x") or len(request.user_id) != 42:
+        raise HTTPException(status_code=400, detail="Invalid wallet address format")
+    
+    # TODO: Verify signature to prove wallet ownership (optional but recommended)
+    # if request.signature:
+    #     verify_wallet_signature(request.user_id, request.signature)
     
     user_service = UserService(db)
     agent_service = AgentManagementService()
@@ -72,13 +80,14 @@ async def create_user_with_agent(
     
     # Create user record with pending status (without wallet initially)
     try:
-        # Create a placeholder user with temporary wallet info
+        # Create user with wallet address as ID
+        # user_id IS the owner's wallet address
         user = await user_service.create_user(
-            user_id=request.user_id,
-            wallet_address="pending",  # Temporary placeholder
-            cdp_wallet_name=f"n0ir-user-{request.user_id}",
-            cdp_owner_wallet_address="pending",  # Temporary placeholder
-            cdp_owner_wallet_name=f"n0ir-owner-{request.user_id}"
+            user_id=request.user_id,  # This is the user's EOA address
+            wallet_address="pending",  # CDP smart wallet (will be created)
+            cdp_wallet_name=f"n0ir-cdp-{request.user_id[:8]}",  # Shortened for readability
+            cdp_owner_wallet_address=request.user_id,  # Same as user_id (owner's EOA)
+            cdp_owner_wallet_name=f"user-wallet-{request.user_id[:8]}"  # Shortened
         )
         
         # Start agent and wait for wallet creation
