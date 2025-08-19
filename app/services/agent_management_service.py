@@ -9,20 +9,42 @@ from app.core.config import settings
 
 class AgentManagementService:
     def __init__(self):
-        self.redis_client = redis.from_url(
-            settings.redis_url,
-            decode_responses=True
-        )
+        try:
+            # Handle Railway template variable format
+            redis_url = settings.redis_url
+            if redis_url and not redis_url.startswith(('redis://', 'rediss://')):
+                logger.warning(f"Invalid Redis URL format: {redis_url[:20]}...")
+                redis_url = None
+            
+            if redis_url:
+                self.redis_client = redis.from_url(
+                    redis_url,
+                    decode_responses=True,
+                    socket_connect_timeout=5
+                )
+                # Test connection
+                self.redis_client.ping()
+                logger.info("Redis connection established")
+            else:
+                logger.warning("Redis URL not configured, running without Redis")
+                self.redis_client = None
+        except Exception as e:
+            logger.warning(f"Failed to connect to Redis: {e}. Running without Redis.")
+            self.redis_client = None
+            
         self.wallet_callbacks = {}
         self._listener_task = None
         
     async def start_listener(self):
         """Start listening for wallet creation events."""
-        if self._listener_task is None:
+        if self.redis_client and self._listener_task is None:
             self._listener_task = asyncio.create_task(self._listen_for_wallet_creation())
     
     async def _listen_for_wallet_creation(self):
         """Listen for wallet creation events from agent manager."""
+        if not self.redis_client:
+            return
+            
         try:
             pubsub = self.redis_client.pubsub()
             pubsub.subscribe('wallet_created')
@@ -49,6 +71,10 @@ class AgentManagementService:
     
     async def request_agent_start_with_wallet(self, user_id: str) -> Dict:
         """Request agent start and wait for wallet creation."""
+        if not self.redis_client:
+            logger.warning("Redis not available, cannot start agent with wallet")
+            return {'success': False, 'error': 'Redis not available'}
+            
         wallet_future = asyncio.Future()
         self.wallet_callbacks[user_id] = wallet_future
         
@@ -80,6 +106,10 @@ class AgentManagementService:
     
     async def request_agent_start(self, user_id: str) -> Dict:
         """Request agent start without waiting for wallet."""
+        if not self.redis_client:
+            logger.warning("Redis not available, cannot start agent")
+            return {'success': False, 'error': 'Redis not available'}
+            
         command = {
             'action': 'start',
             'user_id': user_id,
@@ -99,6 +129,10 @@ class AgentManagementService:
     
     async def request_agent_stop(self, user_id: str) -> bool:
         """Request agent stop."""
+        if not self.redis_client:
+            logger.warning("Redis not available, cannot stop agent")
+            return False
+            
         command = {
             'action': 'stop',
             'user_id': user_id,
@@ -114,6 +148,10 @@ class AgentManagementService:
     
     async def get_agent_status(self, user_id: str) -> Optional[Dict]:
         """Get agent status from Redis."""
+        if not self.redis_client:
+            logger.warning("Redis not available, cannot get agent status")
+            return None
+            
         try:
             status_key = f"agent:{user_id}:status"
             status = self.redis_client.get(status_key)
@@ -128,6 +166,10 @@ class AgentManagementService:
     
     async def list_all_agents(self) -> list:
         """List all agents and their statuses."""
+        if not self.redis_client:
+            logger.warning("Redis not available, cannot list agents")
+            return []
+            
         try:
             pattern = "agent:*:status"
             keys = self.redis_client.keys(pattern)
@@ -148,6 +190,10 @@ class AgentManagementService:
     
     async def restart_agent(self, user_id: str) -> Dict:
         """Restart an agent."""
+        if not self.redis_client:
+            logger.warning("Redis not available, cannot restart agent")
+            return {'success': False, 'error': 'Redis not available'}
+            
         command = {
             'action': 'restart',
             'user_id': user_id,
