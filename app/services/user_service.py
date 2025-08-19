@@ -25,9 +25,7 @@ class UserService:
         self,
         user_id: str,
         wallet_address: str,
-        cdp_wallet_name: str,
-        cdp_owner_wallet_address: str,
-        cdp_owner_wallet_name: str
+        cdp_wallet_name: str
     ) -> User:
         """Create a new user with CDP wallet information."""
         try:
@@ -36,19 +34,18 @@ class UserService:
             if existing_user:
                 raise ValueError(f"User with ID {user_id} already exists")
             
-            # Check if wallet address is already registered
-            stmt = select(User).where(User.wallet_address == wallet_address)
-            result = await self.db.execute(stmt)
-            if result.scalar_one_or_none():
-                raise ValueError(f"Wallet address {wallet_address} is already registered")
+            # Check if wallet address is already registered (unless it's "pending")
+            if wallet_address != "pending":
+                stmt = select(User).where(User.wallet_address == wallet_address)
+                result = await self.db.execute(stmt)
+                if result.scalar_one_or_none():
+                    raise ValueError(f"Wallet address {wallet_address} is already registered")
             
             # Create new user
             user = User(
                 user_id=user_id,
                 wallet_address=wallet_address,
                 cdp_wallet_name=cdp_wallet_name,
-                cdp_owner_wallet_address=cdp_owner_wallet_address,
-                cdp_owner_wallet_name=cdp_owner_wallet_name,
                 status=UserStatus.ACTIVE
             )
             

@@ -62,9 +62,7 @@ async def create_user(
         user = await user_service.create_user(
             user_id=request.user_id,  # This is the user's EOA address
             wallet_address="pending",  # CDP smart wallet (will be created if start_agent=true)
-            cdp_wallet_name=f"n0ir-cdp-{request.user_id[:8]}",  # Shortened for readability
-            cdp_owner_wallet_address=request.user_id,  # Same as user_id (owner's EOA)
-            cdp_owner_wallet_name=f"user-wallet-{request.user_id[:8]}"  # Shortened
+            cdp_wallet_name=f"n0ir-agent-{request.user_id[:8]}"  # Shortened for readability
         )
         
         # Start agent if requested
