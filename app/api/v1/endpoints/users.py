@@ -1,34 +1,25 @@
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from typing import Optional, List
 from decimal import Decimal
-from uuid import UUID
-
-from fastapi import APIRouter, Depends, HTTPException, Query, Path
-from sqlalchemy.ext.asyncio import AsyncSession
-from pydantic import BaseModel, Field
-
+from loguru import logger
 from app.database.session import get_db
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.user_service import UserService
 from app.services.agent_management_service import AgentManagementService
 from app.schemas.users import (
-    CreateUserRequest, UserResponse,
-    DepositRequest, WithdrawRequest, BalanceResponse,
-    CreatePositionRequest, ClosePositionRequest,
-    PositionResponse, PositionListResponse,
-    TransactionResponse, TransactionListResponse,
-    PnLResponse, PerformanceResponse,
-    ProtocolFeeResponse, ProtocolFeeListResponse,
-    TransactionType, TransactionStatus, PositionStatus
+    CreateUserRequest, UpdateUserRequest, DepositRequest, WithdrawRequest,
+    UserResponse, TransactionResponse, TransactionListResponse,
+    PositionResponse, PositionListResponse, PositionCreateRequest,
+    BalanceResponse, PnLResponse, PerformanceResponse,
+    ProtocolFeeListResponse, ProtocolFeeResponse,
+    UserStatus, TransactionType, TransactionStatus, PositionStatus
 )
 from app.database.models.transaction import TransactionType as DBTransactionType
 from app.database.models.position import PositionStatus as DBPositionStatus
 from app.core.logger import logger
 
 router = APIRouter(prefix="/users")
-
-# Request model for creating user with agent
-class CreateUserWithAgentRequest(BaseModel):
-    user_id: str = Field(..., description="User's wallet address (EOA)")
-    signature: Optional[str] = Field(None, description="Signature to prove wallet ownership")
 
 
 # User Management Endpoints
@@ -37,30 +28,18 @@ async def create_user(
     request: CreateUserRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    """Create a new user with CDP wallet."""
-    try:
-        service = UserService(db)
-        user = await service.create_user(
-            user_id=request.user_id,
-            wallet_address=request.wallet_address,
-            cdp_wallet_name=request.cdp_wallet_name,
-            cdp_owner_wallet_address=request.cdp_owner_wallet_address,
-            cdp_owner_wallet_name=request.cdp_owner_wallet_name
-        )
-        return UserResponse.model_validate(user)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error creating user: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create user")
-
-
-@router.post("/create-with-agent", response_model=UserResponse, status_code=201)
-async def create_user_with_agent(
-    request: CreateUserWithAgentRequest,
-    db: AsyncSession = Depends(get_db)
-):
-    """Create user with wallet address as ID, start agent, and wait for CDP wallet creation."""
+    """Create a new user and optionally start their agent.
+    
+    This endpoint intelligently handles user creation:
+    - Creates user record with wallet address as ID
+    - Optionally starts agent and creates CDP wallet
+    - Returns user info with CDP wallet if created
+    
+    Args:
+        user_id: User's wallet address (EOA)
+        start_agent: Whether to start agent and create CDP wallet (default: true)
+        signature: Optional signature to prove wallet ownership
+    """
     
     # Validate wallet address format
     if not request.user_id.startswith("0x") or len(request.user_id) != 42:
@@ -71,289 +50,185 @@ async def create_user_with_agent(
     #     verify_wallet_signature(request.user_id, request.signature)
     
     user_service = UserService(db)
-    agent_service = AgentManagementService()
     
     # Check if user already exists
     existing_user = await user_service.get_user(request.user_id)
     if existing_user:
         raise HTTPException(status_code=400, detail="User already exists")
     
-    # Create user record with pending status (without wallet initially)
     try:
         # Create user with wallet address as ID
         # user_id IS the owner's wallet address
         user = await user_service.create_user(
             user_id=request.user_id,  # This is the user's EOA address
-            wallet_address="pending",  # CDP smart wallet (will be created)
+            wallet_address="pending",  # CDP smart wallet (will be created if start_agent=true)
             cdp_wallet_name=f"n0ir-cdp-{request.user_id[:8]}",  # Shortened for readability
             cdp_owner_wallet_address=request.user_id,  # Same as user_id (owner's EOA)
             cdp_owner_wallet_name=f"user-wallet-{request.user_id[:8]}"  # Shortened
         )
         
-        # Start agent and wait for wallet creation
-        logger.info(f"Starting agent for user {request.user_id}")
-        agent_result = await agent_service.start_agent(request.user_id, wait_for_wallet=True)
+        # Start agent if requested
+        if request.start_agent:
+            agent_service = AgentManagementService()
+            logger.info(f"Starting agent for user {request.user_id}")
+            agent_result = await agent_service.start_agent(request.user_id, wait_for_wallet=True)
+            
+            if agent_result.get('success'):
+                wallet_address = agent_result.get('wallet_address')
+                if wallet_address:
+                    logger.info(f"CDP wallet created for user {request.user_id}: {wallet_address}")
+                    # Update user with actual wallet information
+                    user.wallet_address = wallet_address
+                else:
+                    logger.warning(f"Agent started but no wallet address returned for {request.user_id}")
+            else:
+                # Log warning but don't fail user creation
+                logger.warning(f"Agent start failed for user {request.user_id}: {agent_result.get('error', 'Unknown error')}")
+                # User is still created, they can start agent later
         
-        if agent_result.get('success'):
-            wallet_address = agent_result['wallet_address']
-            logger.info(f"Wallet created for user {request.user_id}: {wallet_address}")
-            
-            # Update user with actual wallet information
-            # Note: This would require adding an update method to UserService
-            # For now, we'll return the user with updated info
-            user.wallet_address = wallet_address
-            user.cdp_owner_wallet_address = wallet_address  # Using same for now
-            
-            return UserResponse.model_validate(user)
-        else:
-            # If wallet creation failed, we should handle cleanup
-            logger.error(f"Failed to create wallet for user {request.user_id}: {agent_result.get('error')}")
-            raise HTTPException(status_code=500, detail="Failed to create wallet for user")
-            
+        return UserResponse.model_validate(user)
+        
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error creating user with agent: {e}")
+        logger.error(f"Error creating user: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{user_id}", response_model=UserResponse)
 async def get_user(
-    user_id: str = Path(..., description="User ID"),
+    user_id: str,
     db: AsyncSession = Depends(get_db)
 ):
-    """Get user profile by ID."""
+    """Get user details."""
     service = UserService(db)
     user = await service.get_user(user_id)
-    
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
     return UserResponse.model_validate(user)
 
 
-
-
-# Wallet Operations
+# Financial Operations
 @router.post("/{user_id}/deposit", response_model=TransactionResponse, status_code=201)
-async def deposit_usdc(
-    user_id: str = Path(..., description="User ID"),
-    request: DepositRequest = ...,
+async def deposit(
+    user_id: str,
+    request: DepositRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    """Deposit USDC to user wallet."""
-    service = UserService(db)
-    
-    # Verify user exists
-    user = await service.get_user(user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # Create deposit transaction
-    transaction = await service.create_transaction(
-        user_id=user_id,
-        transaction_type=DBTransactionType.DEPOSIT,
-        amount_usdc=request.amount_usdc,
-        tx_hash=request.tx_hash
-    )
-    
-    return TransactionResponse.model_validate(transaction)
+    """Deposit USDC to user account."""
+    try:
+        service = UserService(db)
+        transaction = await service.deposit_usdc(
+            user_id=user_id,
+            amount=request.amount_usdc,
+            tx_hash=request.tx_hash
+        )
+        return TransactionResponse.model_validate(transaction)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error processing deposit: {e}")
+        raise HTTPException(status_code=500, detail="Failed to process deposit")
 
 
 @router.post("/{user_id}/withdraw", response_model=TransactionResponse, status_code=201)
-async def withdraw_usdc(
-    user_id: str = Path(..., description="User ID"),
-    request: WithdrawRequest = ...,
+async def withdraw(
+    user_id: str,
+    request: WithdrawRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    """Withdraw USDC from user wallet."""
-    service = UserService(db)
-    
-    # Verify user exists
-    user = await service.get_user(user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # Check balance
-    balance = await service.get_user_balance(user_id)
-    if balance < request.amount_usdc:
-        raise HTTPException(status_code=400, detail="Insufficient balance")
-    
-    # Create withdrawal transaction
-    metadata = {"destination": request.destination_address} if request.destination_address else None
-    transaction = await service.create_transaction(
-        user_id=user_id,
-        transaction_type=DBTransactionType.WITHDRAW,
-        amount_usdc=request.amount_usdc,
-        metadata=metadata
-    )
-    
-    return TransactionResponse.model_validate(transaction)
+    """Withdraw USDC from user account."""
+    try:
+        service = UserService(db)
+        transaction = await service.withdraw_usdc(
+            user_id=user_id,
+            amount=request.amount_usdc,
+            tx_hash=request.tx_hash
+        )
+        return TransactionResponse.model_validate(transaction)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error processing withdrawal: {e}")
+        raise HTTPException(status_code=500, detail="Failed to process withdrawal")
 
 
 @router.get("/{user_id}/balance", response_model=BalanceResponse)
-async def get_user_balance(
-    user_id: str = Path(..., description="User ID"),
+async def get_balance(
+    user_id: str,
     db: AsyncSession = Depends(get_db)
 ):
-    """Get user's current balance."""
+    """Get user balance."""
     service = UserService(db)
-    
-    # Verify user exists
-    user = await service.get_user(user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # Get balance and positions
     balance = await service.get_user_balance(user_id)
-    positions = await service.get_user_positions(user_id, status=DBPositionStatus.ACTIVE)
-    
-    # Calculate locked and pending amounts
-    locked_in_positions = sum(p.entry_amount_usdc for p in positions)
-    
-    # Get pending transactions
-    from app.database.models.transaction import TransactionStatus as DBTransactionStatus
-    pending_deposits = await service.get_user_transactions(
-        user_id, 
-        transaction_type=DBTransactionType.DEPOSIT,
-        status=DBTransactionStatus.PENDING
-    )
-    pending_withdrawals = await service.get_user_transactions(
-        user_id,
-        transaction_type=DBTransactionType.WITHDRAW,
-        status=DBTransactionStatus.PENDING
-    )
-    
-    pending_deposits_amount = sum(t.amount_usdc for t in pending_deposits)
-    pending_withdrawals_amount = sum(t.amount_usdc for t in pending_withdrawals)
+    if balance is None:
+        raise HTTPException(status_code=404, detail="User not found")
     
     return BalanceResponse(
         user_id=user_id,
         balance_usdc=balance,
-        available_balance_usdc=balance - locked_in_positions,
-        locked_in_positions_usdc=locked_in_positions,
-        pending_deposits_usdc=pending_deposits_amount,
-        pending_withdrawals_usdc=pending_withdrawals_amount
+        available_balance_usdc=balance  # TODO: Calculate available (not in positions)
     )
 
 
-# Transaction History
 @router.get("/{user_id}/transactions", response_model=TransactionListResponse)
-async def get_user_transactions(
-    user_id: str = Path(..., description="User ID"),
-    transaction_type: Optional[TransactionType] = Query(None, description="Filter by transaction type"),
-    status: Optional[TransactionStatus] = Query(None, description="Filter by status"),
-    limit: int = Query(100, ge=1, le=1000, description="Number of results to return"),
-    offset: int = Query(0, ge=0, description="Number of results to skip"),
+async def get_transactions(
+    user_id: str,
+    limit: int = 100,
+    offset: int = 0,
+    transaction_type: Optional[DBTransactionType] = None,
     db: AsyncSession = Depends(get_db)
 ):
-    """Get user's transaction history."""
+    """Get user transactions."""
     service = UserService(db)
-    
-    # Verify user exists
-    user = await service.get_user(user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # Convert enums if provided
-    db_transaction_type = DBTransactionType(transaction_type.value) if transaction_type else None
-    from app.database.models.transaction import TransactionStatus as DBTransactionStatus
-    db_status = DBTransactionStatus(status.value) if status else None
-    
-    # Get transactions
     transactions = await service.get_user_transactions(
         user_id=user_id,
-        transaction_type=db_transaction_type,
-        status=db_status,
         limit=limit,
-        offset=offset
+        offset=offset,
+        transaction_type=transaction_type
     )
     
     return TransactionListResponse(
         transactions=[TransactionResponse.model_validate(t) for t in transactions],
-        total=len(transactions),
-        offset=offset,
-        limit=limit
+        total=len(transactions)
     )
-
-
 
 
 # Position Management
 @router.post("/{user_id}/positions", response_model=PositionResponse, status_code=201)
 async def create_position(
-    user_id: str = Path(..., description="User ID"),
-    request: CreatePositionRequest = ...,
+    user_id: str,
+    request: PositionCreateRequest,
     db: AsyncSession = Depends(get_db)
 ):
     """Create a new position."""
-    service = UserService(db)
-    
-    # Verify user exists
-    user = await service.get_user(user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # Check balance
-    balance = await service.get_user_balance(user_id)
-    if balance < request.entry_amount_usdc:
-        raise HTTPException(status_code=400, detail="Insufficient balance")
-    
-    # Create position
-    position = await service.create_position(
-        user_id=user_id,
-        nft_token_id=request.nft_token_id,
-        pool_address=request.pool_address,
-        token0_address=request.token0_address,
-        token1_address=request.token1_address,
-        tick_lower=request.tick_lower,
-        tick_upper=request.tick_upper,
-        tick_spacing=request.tick_spacing,
-        liquidity=request.liquidity,
-        entry_amount_usdc=request.entry_amount_usdc,
-        entry_tx_hash=request.entry_tx_hash,
-        staked=request.staked,
-        gauge_address=request.gauge_address
-    )
-    
-    # Create position entry transaction
-    await service.create_transaction(
-        user_id=user_id,
-        transaction_type=DBTransactionType.POSITION_ENTRY,
-        amount_usdc=request.entry_amount_usdc,
-        tx_hash=request.entry_tx_hash,
-        metadata={"position_id": str(position.position_id)}
-    )
-    
-    return PositionResponse.model_validate(position)
+    try:
+        service = UserService(db)
+        position = await service.create_position(
+            user_id=user_id,
+            pool_address=request.pool_address,
+            entry_amount_usdc=request.entry_amount_usdc,
+            leverage=request.leverage,
+            stop_loss=request.stop_loss,
+            take_profit=request.take_profit
+        )
+        return PositionResponse.model_validate(position)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error creating position: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create position")
 
 
 @router.get("/{user_id}/positions", response_model=PositionListResponse)
-async def get_user_positions(
-    user_id: str = Path(..., description="User ID"),
-    status: Optional[PositionStatus] = Query(None, description="Filter by position status"),
-    pool_address: Optional[str] = Query(None, description="Filter by pool address"),
-    staked: Optional[bool] = Query(None, description="Filter by staking status"),
+async def get_positions(
+    user_id: str,
+    status: Optional[DBPositionStatus] = None,
     db: AsyncSession = Depends(get_db)
 ):
-    """Get user's positions."""
+    """Get user positions."""
     service = UserService(db)
-    
-    # Verify user exists
-    user = await service.get_user(user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # Convert status enum if provided
-    db_status = DBPositionStatus(status.value) if status else None
-    
-    # Get positions
-    positions = await service.get_user_positions(
-        user_id=user_id,
-        status=db_status,
-        pool_address=pool_address,
-        staked=staked
-    )
+    positions = await service.get_user_positions(user_id, status)
     
     return PositionListResponse(
         positions=[PositionResponse.model_validate(p) for p in positions],
@@ -361,125 +236,99 @@ async def get_user_positions(
     )
 
 
-
-
-
-
 @router.delete("/{user_id}/positions/{position_id}", response_model=PositionResponse)
 async def close_position(
-    user_id: str = Path(..., description="User ID"),
-    position_id: UUID = Path(..., description="Position ID"),
-    request: ClosePositionRequest = ...,
+    user_id: str,
+    position_id: str,
     db: AsyncSession = Depends(get_db)
 ):
-    """Exit/close a position."""
-    service = UserService(db)
-    
-    # Verify position belongs to user
-    positions = await service.get_user_positions(user_id)
-    if not any(p.position_id == position_id for p in positions):
-        raise HTTPException(status_code=404, detail="Position not found")
-    
-    # Close position
-    position = await service.close_position(
-        position_id=position_id,
-        exit_tx_hash=request.exit_tx_hash,
-        realized_pnl_usdc=request.realized_pnl_usdc,
-        final_value_usdc=request.final_value_usdc
-    )
-    
-    if not position:
-        raise HTTPException(status_code=404, detail="Position not found")
-    
-    # Create position exit transaction
-    await service.create_transaction(
-        user_id=user_id,
-        transaction_type=DBTransactionType.POSITION_EXIT,
-        amount_usdc=request.final_value_usdc,
-        tx_hash=request.exit_tx_hash,
-        metadata={"position_id": str(position_id)}
-    )
-    
-    return PositionResponse.model_validate(position)
+    """Close a position."""
+    try:
+        service = UserService(db)
+        position = await service.close_position(user_id, position_id)
+        return PositionResponse.model_validate(position)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error closing position: {e}")
+        raise HTTPException(status_code=500, detail="Failed to close position")
 
 
-# Performance and Analytics
+# Analytics
 @router.get("/{user_id}/pnl", response_model=PnLResponse)
-async def get_user_pnl(
-    user_id: str = Path(..., description="User ID"),
+async def get_pnl(
+    user_id: str,
     db: AsyncSession = Depends(get_db)
 ):
-    """Get user's PnL breakdown."""
+    """Get user P&L summary."""
     service = UserService(db)
+    pnl = await service.calculate_user_pnl(user_id)
     
-    # Verify user exists
-    user = await service.get_user(user_id)
-    if not user:
+    if pnl is None:
         raise HTTPException(status_code=404, detail="User not found")
     
-    # Get performance data
-    performance = await service.calculate_user_performance(user_id)
-    
-    total_pnl = Decimal(str(performance["total_pnl"]))
-    protocol_fees = Decimal(str(performance["total_protocol_fees_pending"]))
-    
     return PnLResponse(
-        realized_pnl_usdc=Decimal(str(performance["total_realized_pnl"])),
-        unrealized_pnl_usdc=Decimal(str(performance["total_unrealized_pnl"])),
-        fees_earned_usdc=Decimal(str(performance["total_fees_earned"])),
-        rewards_earned_usdc=Decimal(str(performance["total_rewards_earned"])),
-        total_pnl_usdc=total_pnl,
-        protocol_fees_pending_usdc=protocol_fees,
-        net_pnl_usdc=total_pnl - protocol_fees
+        user_id=user_id,
+        total_realized_pnl=pnl['realized'],
+        total_unrealized_pnl=pnl['unrealized'],
+        total_pnl=pnl['total']
     )
 
 
 @router.get("/{user_id}/performance", response_model=PerformanceResponse)
-async def get_user_performance(
-    user_id: str = Path(..., description="User ID"),
+async def get_performance(
+    user_id: str,
     db: AsyncSession = Depends(get_db)
 ):
-    """Get complete performance metrics."""
+    """Get user performance metrics."""
     service = UserService(db)
+    metrics = await service.get_performance_metrics(user_id)
     
-    # Verify user exists
-    user = await service.get_user(user_id)
-    if not user:
+    if metrics is None:
         raise HTTPException(status_code=404, detail="User not found")
     
-    # Get performance data
-    performance = await service.calculate_user_performance(user_id)
-    
-    return PerformanceResponse.from_service_data(performance)
+    return PerformanceResponse(
+        user_id=user_id,
+        total_positions=metrics.get('total_positions', 0),
+        winning_positions=metrics.get('winning_positions', 0),
+        losing_positions=metrics.get('losing_positions', 0),
+        win_rate=metrics.get('win_rate', 0.0),
+        average_return=metrics.get('average_return', 0.0),
+        best_position_pnl=metrics.get('best_position_pnl', 0.0),
+        worst_position_pnl=metrics.get('worst_position_pnl', 0.0),
+        total_volume_traded=metrics.get('total_volume', 0.0)
+    )
 
 
 # Protocol Fees
 @router.get("/{user_id}/fees", response_model=ProtocolFeeListResponse)
-async def get_user_fees(
-    user_id: str = Path(..., description="User ID"),
-    collected: Optional[bool] = Query(None, description="Filter by collection status"),
+async def get_protocol_fees(
+    user_id: str,
+    collected: Optional[bool] = None,
     db: AsyncSession = Depends(get_db)
 ):
-    """Get user's protocol fees."""
+    """Get protocol fees for user."""
     service = UserService(db)
     
-    # Verify user exists
-    user = await service.get_user(user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    # Get fees from positions
+    positions = await service.get_user_positions(user_id)
     
-    # Get fees based on filter
-    if collected is False:
-        fees = await service.get_uncollected_fees(user_id)
-    else:
-        # Get all fees (implementation would need to be added to service)
-        fees = await service.get_uncollected_fees(user_id)  # Simplified for now
+    fees = []
+    for position in positions:
+        if position.protocol_fee_amount and position.protocol_fee_amount > 0:
+            if collected is None or position.protocol_fee_collected == collected:
+                fees.append(ProtocolFeeResponse(
+                    position_id=str(position.position_id or position.nft_token_id),
+                    fee_amount_usdc=position.protocol_fee_amount,
+                    collected=position.protocol_fee_collected,
+                    collection_tx_hash=position.protocol_fee_tx_hash
+                ))
     
-    total_pending = sum(f.fee_amount_usdc for f in fees if not f.collected)
     total_collected = sum(f.fee_amount_usdc for f in fees if f.collected)
+    total_pending = sum(f.fee_amount_usdc for f in fees if not f.collected)
     
     return ProtocolFeeListResponse(
-        fees=[ProtocolFeeResponse.model_validate(f) for f in fees],
-        total_pending=total_pending,
-        total_collected=total_collected
+        fees=fees,
+        total_collected_usdc=total_collected,
+        total_pending_usdc=total_pending
     )

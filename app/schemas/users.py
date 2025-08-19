@@ -36,11 +36,9 @@ class PositionStatus(str, enum.Enum):
 
 # Request Models
 class CreateUserRequest(BaseModel):
-    user_id: str = Field(..., description="Unique user identifier")
-    wallet_address: str = Field(..., description="CDP wallet address")
-    cdp_wallet_name: str = Field(..., description="CDP wallet name")
-    cdp_owner_wallet_address: str = Field(..., description="Owner EOA address")
-    cdp_owner_wallet_name: str = Field(..., description="Owner EOA name")
+    user_id: str = Field(..., description="User's wallet address (EOA)")
+    start_agent: bool = Field(True, description="Whether to start agent and create CDP wallet")
+    signature: Optional[str] = Field(None, description="Signature to prove wallet ownership (optional)")
 
 
 class UpdateUserRequest(BaseModel):
