@@ -47,8 +47,8 @@ class AgentManagementService:
             
         try:
             pubsub = self.redis_client.pubsub()
-            # Listen for both wallet_created and agent_responses
-            pubsub.subscribe('wallet_created', 'agent_responses')
+            # Listen for wallet_created, wallet_ready, and agent_responses
+            pubsub.subscribe('wallet_created', 'wallet_ready', 'agent_responses')
             
             while True:
                 try:
@@ -57,7 +57,23 @@ class AgentManagementService:
                         data = json.loads(message['data'])
                         user_id = data.get('user_id')
                         
-                        # Handle both wallet_created and agent_responses messages
+                        # Handle wallet_ready event to update database
+                        if message['channel'] == 'wallet_ready':
+                            wallet_address = data.get('wallet_address')
+                            if user_id and wallet_address:
+                                logger.info(f"Received wallet_ready for user {user_id}: {wallet_address}")
+                                # Update the user's wallet address in the database
+                                try:
+                                    from app.services.user_service import UserService
+                                    from app.database.session import get_db
+                                    async for db in get_db():
+                                        user_service = UserService(db)
+                                        await user_service.update_user_wallet(user_id, wallet_address)
+                                        break
+                                except Exception as e:
+                                    logger.error(f"Failed to update wallet address for user {user_id}: {e}")
+                        
+                        # Handle both wallet_created and agent_responses messages for callbacks
                         if user_id in self.wallet_callbacks:
                             # Check if this is a successful response with wallet
                             if message['channel'] == 'agent_responses':

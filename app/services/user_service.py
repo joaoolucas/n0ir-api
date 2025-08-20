@@ -85,6 +85,27 @@ class UserService:
         await self.db.refresh(user)
         return user
     
+    async def update_user_wallet(self, user_id: str, wallet_address: str) -> Optional[User]:
+        """Update user's CDP wallet address after wallet creation."""
+        user = await self.get_user(user_id)
+        if not user:
+            logger.warning(f"User {user_id} not found for wallet update")
+            return None
+        
+        # Only update if current wallet is a pending placeholder
+        if user.cdp_wallet_address.startswith("pending_"):
+            logger.info(f"Updating wallet for user {user_id}: {user.cdp_wallet_address} -> {wallet_address}")
+            user.cdp_wallet_address = wallet_address
+            user.wallet_created_at = datetime.utcnow()
+            user.updated_at = datetime.utcnow()
+            await self.db.commit()
+            await self.db.refresh(user)
+            logger.info(f"Successfully updated wallet for user {user_id}")
+        else:
+            logger.warning(f"User {user_id} already has wallet {user.cdp_wallet_address}, not updating to {wallet_address}")
+        
+        return user
+    
     async def create_transaction(
         self,
         user_id: str,
