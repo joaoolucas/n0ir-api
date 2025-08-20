@@ -77,6 +77,9 @@ async def create_user(
                     logger.info(f"CDP wallet created for user {request.user_id}: {wallet_address}")
                     # Update user with actual wallet information
                     user.cdp_wallet_address = wallet_address
+                    # Commit the wallet address update to database
+                    await db.commit()
+                    await db.refresh(user)
                 else:
                     logger.warning(f"Agent started but no CDP wallet address returned for {request.user_id}")
             else:

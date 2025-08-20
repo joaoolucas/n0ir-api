@@ -47,7 +47,8 @@ class AgentManagementService:
             
         try:
             pubsub = self.redis_client.pubsub()
-            pubsub.subscribe('wallet_created')
+            # Listen for both wallet_created and agent_responses
+            pubsub.subscribe('wallet_created', 'agent_responses')
             
             while True:
                 try:
@@ -56,7 +57,15 @@ class AgentManagementService:
                         data = json.loads(message['data'])
                         user_id = data.get('user_id')
                         
+                        # Handle both wallet_created and agent_responses messages
                         if user_id in self.wallet_callbacks:
+                            # Check if this is a successful response with wallet
+                            if message['channel'] == 'agent_responses':
+                                if data.get('action') == 'start' and data.get('success'):
+                                    # Wait for actual wallet creation event
+                                    logger.info(f"Agent started for {user_id}, waiting for wallet...")
+                                    continue
+                            
                             future = self.wallet_callbacks[user_id]
                             if not future.done():
                                 future.set_result(data)
