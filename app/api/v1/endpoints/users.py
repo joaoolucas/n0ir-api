@@ -298,11 +298,18 @@ async def create_position(
         service = UserService(db)
         position = await service.create_position(
             user_id=user_id,
+            nft_token_id=request.nft_token_id,
             pool_address=request.pool_address,
+            token0_address=request.token0_address,
+            token1_address=request.token1_address,
+            tick_lower=request.tick_lower,
+            tick_upper=request.tick_upper,
+            tick_spacing=request.tick_spacing,
+            liquidity=request.liquidity,
             entry_amount_usdc=request.entry_amount_usdc,
-            leverage=request.leverage,
-            stop_loss=request.stop_loss,
-            take_profit=request.take_profit
+            entry_tx_hash=request.entry_tx_hash,
+            staked=request.staked,
+            gauge_address=request.gauge_address
         )
         return PositionResponse.model_validate(position)
     except ValueError as e:
