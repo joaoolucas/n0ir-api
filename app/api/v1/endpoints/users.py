@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.user_service import UserService
 from app.services.agent_management_service import get_agent_service
 from app.core.pools_service import pools_service
-from app.core.positions_service import PositionsService
+from app.core.positions_service import positions_service
 from app.schemas.users import (
     CreateUserRequest, UpdateUserRequest, DepositRequest, WithdrawRequest,
     UserResponse, TransactionResponse, TransactionListResponse,
@@ -29,8 +29,7 @@ async def enrich_position_with_pool_data(position) -> dict:
     position_dict = PositionResponse.model_validate(position).model_dump()
     
     try:
-        # Get real-time position data from blockchain
-        positions_service = PositionsService()
+        # Get real-time position data from blockchain using the singleton service
         position_info = await positions_service.get_position_by_id(position.nft_token_id)
         
         # Get token info for pool name
@@ -42,20 +41,21 @@ async def enrich_position_with_pool_data(position) -> dict:
         token1_symbol = token1_info.get('symbol', '???')
         position_dict['pool_name'] = f"{token0_symbol}/{token1_symbol}"
         
-        # Use real-time position value from blockchain
-        blockchain_value_usd = Decimal(str(position_info.current_value_usd or 0))
+        # Use correct values from the positions service
+        current_value_usd = Decimal(str(position_info.current_value_usd or 0))
+        unclaimed_fees_usd = Decimal(str(position_info.unclaimed_fees_usd or 0))
         
-        # Calculate current_total_value: blockchain position value + accumulated rewards/fees
-        current_total_value = blockchain_value_usd
+        # Calculate current_total_value: position value + unclaimed fees + database rewards/fees
+        current_total_value = current_value_usd + unclaimed_fees_usd
         
-        # Add accumulated rewards and fees from database
+        # Add any accumulated rewards/fees tracked in database (if different from blockchain)
         current_total_value += (position.rewards_earned_usdc or Decimal(0))
         current_total_value += (position.fees_earned_usdc or Decimal(0))
         
         position_dict['current_total_value'] = current_total_value
         
-        # Also update current_value_usdc with the real-time value for consistency
-        position_dict['current_value_usdc'] = blockchain_value_usd
+        # Update current_value_usdc with the real-time value for consistency
+        position_dict['current_value_usdc'] = current_value_usd
         
     except Exception as e:
         logger.warning(f"Failed to enrich position {position.nft_token_id}: {e}")
