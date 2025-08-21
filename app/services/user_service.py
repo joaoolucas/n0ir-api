@@ -1,5 +1,5 @@
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 import uuid
 import json
@@ -495,7 +495,7 @@ class UserService:
         if active_positions and total_invested > 0:
             # Simple APR calculation (can be enhanced)
             avg_position_age_days = sum(
-                (datetime.utcnow() - p.entry_date).days 
+                (datetime.now(timezone.utc) - p.entry_date).days 
                 for p in active_positions
             ) / len(active_positions)
             if avg_position_age_days > 0:
