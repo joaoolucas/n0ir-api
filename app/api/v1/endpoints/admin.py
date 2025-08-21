@@ -42,7 +42,7 @@ async def fix_user_balance(
         
         # Get current balance from UserService
         user_service = UserService(db)
-        current_balance = await user_service.get_balance(user_id)
+        current_balance = await user_service.get_user_balance(user_id)
         logger.info(f"Current calculated balance: {current_balance} USDC")
         
         # Check if we already have a position entry transaction
@@ -72,7 +72,7 @@ async def fix_user_balance(
             await db.commit()
             
             # Get new balance
-            new_balance = await user_service.get_balance(user_id)
+            new_balance = await user_service.get_user_balance(user_id)
             
             return {
                 "success": True,
