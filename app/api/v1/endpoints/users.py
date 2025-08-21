@@ -276,9 +276,31 @@ async def get_balance(
     # Get confirmed balance
     balance = await service.get_user_balance(user_id)
     
-    # Get active positions to calculate locked amount
+    # Get active positions to calculate locked amount and current value
     positions = await service.get_user_positions(user_id, status=DBPositionStatus.ACTIVE)
     locked_in_positions = sum(p.entry_amount_usdc for p in positions)
+    
+    # Calculate total positions value using real-time blockchain data
+    current_positions_value = Decimal(0)
+    for position in positions:
+        try:
+            # Use the same enrichment logic to get real-time values
+            position_info = await positions_service.get_position_by_id(position.nft_token_id)
+            
+            current_value_usd = Decimal(str(position_info.current_value_usd or 0))
+            unclaimed_fees_usd = Decimal(str(position_info.unclaimed_fees_usd or 0))
+            
+            # Calculate total position value: blockchain value + unclaimed fees + database rewards/fees
+            position_total = current_value_usd + unclaimed_fees_usd
+            position_total += (position.rewards_earned_usdc or Decimal(0))
+            position_total += (position.fees_earned_usdc or Decimal(0))
+            
+            current_positions_value += position_total
+            
+        except Exception as e:
+            logger.warning(f"Failed to get value for position {position.nft_token_id}: {e}")
+            # Fallback to database value
+            current_positions_value += (position.current_value_usdc or Decimal(0))
     
     # Get pending transactions
     pending_deposits = await service.get_user_transactions(
@@ -295,14 +317,17 @@ async def get_balance(
     )
     pending_withdrawals_amount = sum(t.amount_usdc for t in pending_withdrawals)
     
-    # Calculate available balance (balance not locked in positions)
+    # Calculate available balance and total portfolio value
     available_balance = balance - locked_in_positions
+    total_portfolio_value = balance + current_positions_value
     
     return BalanceResponse(
         user_id=user_id,
         balance_usdc=balance,
         available_balance_usdc=available_balance,
         locked_in_positions_usdc=locked_in_positions,
+        current_positions_value_usdc=current_positions_value,
+        total_portfolio_value_usdc=total_portfolio_value,
         pending_deposits_usdc=pending_deposits_amount,
         pending_withdrawals_usdc=pending_withdrawals_amount
     )

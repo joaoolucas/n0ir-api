@@ -101,6 +101,8 @@ class BalanceResponse(BaseModel):
     balance_usdc: Decimal
     available_balance_usdc: Decimal
     locked_in_positions_usdc: Decimal
+    current_positions_value_usdc: Decimal = Field(..., description="Real-time total value of all positions")
+    total_portfolio_value_usdc: Decimal = Field(..., description="Wallet balance + positions value")
     pending_deposits_usdc: Decimal
     pending_withdrawals_usdc: Decimal
 
