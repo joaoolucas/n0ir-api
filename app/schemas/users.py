@@ -147,6 +147,10 @@ class PositionResponse(BaseModel):
     unrealized_pnl_usdc: Decimal
     fees_earned_usdc: Decimal
     rewards_earned_usdc: Decimal
+    total_pnl_usdc: Optional[Decimal] = Field(None, description="Total PNL (unrealized + fees + rewards)")
+    pnl_percentage: Optional[Decimal] = Field(None, description="PNL as percentage of entry amount")
+    pool_base_apr: Optional[Decimal] = Field(None, description="Pool's base APR percentage")
+    effective_apr: Optional[Decimal] = Field(None, description="Effective APR based on position range")
     protocol_fee_amount: Decimal  # 5% of profits
     protocol_fee_collected: bool
     protocol_fee_tx_hash: Optional[str]

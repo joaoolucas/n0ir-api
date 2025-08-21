@@ -25,7 +25,7 @@ router = APIRouter(prefix="/users")
 
 
 async def enrich_position_with_pool_data(position) -> dict:
-    """Enrich position with pool information and calculated values from blockchain."""
+    """Enrich position with pool information, PNL, APR, and calculated values from blockchain."""
     position_dict = PositionResponse.model_validate(position).model_dump()
     
     try:
@@ -60,11 +60,67 @@ async def enrich_position_with_pool_data(position) -> dict:
         # Update current_value_usdc with the real-time value for consistency
         position_dict['current_value_usdc'] = current_value_usd
         
+        # Calculate PNL
+        entry_amount = position.entry_amount_usdc or Decimal(0)
+        if entry_amount > 0:
+            # Total PNL = current_total_value - entry_amount
+            total_pnl = current_total_value - entry_amount
+            position_dict['total_pnl_usdc'] = total_pnl
+            
+            # PNL percentage
+            pnl_percentage = (total_pnl / entry_amount) * Decimal(100)
+            position_dict['pnl_percentage'] = pnl_percentage
+        else:
+            position_dict['total_pnl_usdc'] = Decimal(0)
+            position_dict['pnl_percentage'] = Decimal(0)
+        
+        # Get pool info for APR
+        try:
+            pool = await pools_service.get_pool_by_address(position.pool_address)
+            if pool:
+                base_apr = Decimal(str(pool.get('apr', 0)))
+                position_dict['pool_base_apr'] = base_apr
+                
+                # Calculate effective APR based on position range
+                if position.tick_spacing and position_info.in_range:
+                    # Import the APR calculator
+                    from app.core.effective_apr_calculator import EffectiveAPRCalculator
+                    apr_calc = EffectiveAPRCalculator()
+                    
+                    # Calculate range width in ticks
+                    tick_range = position.tick_upper - position.tick_lower
+                    
+                    # Convert tick range to percentage (approximate)
+                    # For a rough approximation: each tick represents ~0.01% price change
+                    # This is simplified and could be made more accurate
+                    range_percentage = tick_range / 10000  
+                    
+                    effective_apr = apr_calc.calculate_effective_apr(
+                        float(base_apr),
+                        position.tick_spacing,
+                        range_percentage
+                    )
+                    position_dict['effective_apr'] = Decimal(str(effective_apr))
+                else:
+                    # Out of range positions get 0 effective APR
+                    position_dict['effective_apr'] = Decimal(0) if not position_info.in_range else base_apr
+            else:
+                position_dict['pool_base_apr'] = Decimal(0)
+                position_dict['effective_apr'] = Decimal(0)
+        except Exception as e:
+            logger.warning(f"Failed to get APR for pool {position.pool_address}: {e}")
+            position_dict['pool_base_apr'] = Decimal(0)
+            position_dict['effective_apr'] = Decimal(0)
+        
     except Exception as e:
         logger.warning(f"Failed to enrich position {position.nft_token_id}: {e}")
         # Set fallback values if blockchain services fail
         position_dict['pool_name'] = "???/???"
         position_dict['current_total_value'] = position.current_value_usdc or Decimal(0)
+        position_dict['total_pnl_usdc'] = Decimal(0)
+        position_dict['pnl_percentage'] = Decimal(0)
+        position_dict['pool_base_apr'] = Decimal(0)
+        position_dict['effective_apr'] = Decimal(0)
     
     return position_dict
 
