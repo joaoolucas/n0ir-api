@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import pools, tokens, health, positions, wallets, strategy, users, transactions, agents, debug
+from app.api.v1.endpoints import pools, tokens, health, positions, wallets, strategy, users, transactions, agents, debug, admin
 
 api_router = APIRouter()
 
@@ -54,4 +54,11 @@ api_router.include_router(
 api_router.include_router(
     debug.router,
     tags=["Debug"]
+)
+
+# Admin endpoints (temporary for migrations)
+api_router.include_router(
+    admin.router,
+    prefix="/admin",
+    tags=["Admin"]
 )
