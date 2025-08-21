@@ -365,7 +365,6 @@ class UserService:
         if staked is not None:
             stmt = stmt.where(Position.staked == staked)
         
-        stmt = stmt.options(selectinload(Position.protocol_fee))
         stmt = stmt.order_by(Position.entry_date.desc())
         
         result = await self.db.execute(stmt)
