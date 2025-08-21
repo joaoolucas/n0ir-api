@@ -1,12 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
 from typing import Dict, List
-from app.services.agent_management_service import AgentManagementService
+from app.services.agent_management_service import get_agent_service
 
 
 router = APIRouter(prefix="/agents", tags=["Agents"])
 
-# Create a singleton instance of the service
-agent_service = AgentManagementService()
+# Get the singleton instance of the service
+agent_service = get_agent_service()
 
 
 @router.post("/start/{user_id}")

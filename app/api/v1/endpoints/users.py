@@ -6,7 +6,7 @@ from loguru import logger
 from app.database.session import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.user_service import UserService
-from app.services.agent_management_service import AgentManagementService
+from app.services.agent_management_service import get_agent_service
 from app.schemas.users import (
     CreateUserRequest, UpdateUserRequest, DepositRequest, WithdrawRequest,
     UserResponse, TransactionResponse, TransactionListResponse,
@@ -67,7 +67,7 @@ async def create_user(
         
         # Start agent if requested
         if request.start_agent:
-            agent_service = AgentManagementService()
+            agent_service = get_agent_service()
             logger.info(f"Starting agent for user {request.user_id}")
             agent_result = await agent_service.start_agent(request.user_id, wait_for_wallet=True)
             
@@ -135,7 +135,7 @@ async def retry_wallet_creation(
         )
     
     # Try to create wallet via agent
-    agent_service = AgentManagementService()
+    agent_service = get_agent_service()
     logger.info(f"Retrying CDP wallet creation for user {user_id}")
     
     agent_result = await agent_service.start_agent(user_id, wait_for_wallet=True)

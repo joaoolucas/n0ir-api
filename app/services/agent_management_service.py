@@ -6,6 +6,16 @@ from datetime import datetime
 from loguru import logger
 from app.core.config import settings
 
+# Global singleton instance
+_agent_service_instance = None
+
+def get_agent_service():
+    """Get the singleton agent management service instance."""
+    global _agent_service_instance
+    if _agent_service_instance is None:
+        _agent_service_instance = AgentManagementService()
+    return _agent_service_instance
+
 
 class AgentManagementService:
     def __init__(self):

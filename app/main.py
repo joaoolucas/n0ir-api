@@ -5,20 +5,17 @@ from contextlib import asynccontextmanager
 from app.core.config import settings
 from app.api.v1.api import api_router
 from app.core.logger import logger
-from app.services.agent_management_service import AgentManagementService
-
-# Global agent management service instance
-agent_service = None
+from app.services.agent_management_service import get_agent_service
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager to handle startup and shutdown."""
-    global agent_service
     
     # Startup
     logger.info("Starting API with agent management service listener...")
     try:
-        agent_service = AgentManagementService()
+        # Get the singleton instance
+        agent_service = get_agent_service()
         if agent_service.redis_client:
             await agent_service.start_listener()
             logger.info("Agent management service listener started successfully")
@@ -26,7 +23,6 @@ async def lifespan(app: FastAPI):
             logger.warning("Agent management service running without Redis")
     except Exception as e:
         logger.error(f"Failed to start agent management service listener: {e}")
-        agent_service = None
     
     yield
     
@@ -100,12 +96,16 @@ async def startup_event():
     else:
         logger.warning("⚠️  No database configured - user management features disabled")
     
-    # Initialize agent management service listener
+    # Agent management service is now initialized in lifespan handler
+    agent_service = get_agent_service()
+    if agent_service and agent_service.redis_client:
+        logger.info("🤖 Agent management service already initialized via lifespan")
+    else:
+        logger.warning("⚠️  Agent management service not initialized - check lifespan handler")
+    
+    # Don't create a new instance here - it's handled in lifespan
     try:
-        from app.services.agent_management_service import AgentManagementService
-        agent_service = AgentManagementService()
-        await agent_service.start_listener()
-        logger.info("🤖 Agent management service initialized")
+        pass  # Keep try block for consistency
     except Exception as e:
         logger.warning(f"⚠️  Could not initialize agent management service: {e}")
 
