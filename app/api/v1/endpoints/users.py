@@ -238,7 +238,7 @@ async def get_balance(
     
     pending_withdrawals = await service.get_user_transactions(
         user_id=user_id,
-        transaction_type=DBTransactionType.WITHDRAWAL,
+        transaction_type=DBTransactionType.WITHDRAW,
         status=DBTransactionStatus.PENDING
     )
     pending_withdrawals_amount = sum(t.amount_usdc for t in pending_withdrawals)

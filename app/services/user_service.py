@@ -260,7 +260,7 @@ class UserService:
         # Create withdrawal transaction
         transaction = await self.create_transaction(
             user_id=user_id,
-            transaction_type=TransactionType.WITHDRAWAL,
+            transaction_type=TransactionType.WITHDRAW,
             amount_usdc=amount,
             tx_hash=tx_hash,
             metadata={"type": "withdrawal"}
