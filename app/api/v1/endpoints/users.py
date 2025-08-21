@@ -76,7 +76,7 @@ async def enrich_position_with_pool_data(position) -> dict:
         
         # Get pool info for APR
         try:
-            pool = await pools_service.get_pool_by_address(position.pool_address)
+            pool = await pools_service.get_pool(position.pool_address)
             if pool:
                 base_apr = Decimal(str(pool.get('apr', 0)))
                 position_dict['pool_base_apr'] = base_apr
