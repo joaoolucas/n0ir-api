@@ -45,6 +45,9 @@ async def enrich_position_with_pool_data(position) -> dict:
         current_value_usd = Decimal(str(position_info.current_value_usd or 0))
         unclaimed_fees_usd = Decimal(str(position_info.unclaimed_fees_usd or 0))
         
+        # Debug logging
+        logger.info(f"Position {position.nft_token_id} enrichment: current_value_usd={current_value_usd}, unclaimed_fees_usd={unclaimed_fees_usd}")
+        
         # Calculate current_total_value: position value + unclaimed fees + database rewards/fees
         current_total_value = current_value_usd + unclaimed_fees_usd
         
