@@ -1,4 +1,5 @@
 import redis
+import redis.asyncio as aioredis
 import json
 import asyncio
 from typing import Dict, Optional
@@ -19,9 +20,22 @@ def get_agent_service():
 
 class AgentManagementService:
     def __init__(self):
+        self.redis_url = settings.redis_url
+        self.redis_client = None
+        self.async_redis_client = None
+        self.wallet_callbacks = {}
+        self._listener_task = None
+        self._pubsub = None
+        self._initialized = False
+        
+    async def _ensure_initialized(self):
+        """Ensure the service is initialized with async Redis."""
+        if self._initialized:
+            return
+            
         try:
             # Handle Railway template variable format
-            redis_url = settings.redis_url
+            redis_url = self.redis_url
             logger.info(f"Attempting Redis connection with URL: {redis_url[:30] if redis_url else 'None'}...")
             
             # Check if it's a template variable that wasn't expanded
@@ -33,47 +47,61 @@ class AgentManagementService:
                 redis_url = None
             
             if redis_url:
-                logger.info(f"Creating Redis client with URL: {redis_url[:30]}...")
+                logger.info(f"Creating async Redis client with URL: {redis_url[:30]}...")
+                # Create both sync (for publishing) and async (for subscribing) clients
                 self.redis_client = redis.from_url(
                     redis_url,
                     decode_responses=True,
                     socket_connect_timeout=5
                 )
+                self.async_redis_client = await aioredis.from_url(
+                    redis_url,
+                    decode_responses=True
+                )
                 # Test connection
-                self.redis_client.ping()
-                logger.info(f"Redis connection established successfully to {redis_url[:30]}")
+                await self.async_redis_client.ping()
+                logger.info(f"Async Redis connection established successfully to {redis_url[:30]}")
+                self._initialized = True
             else:
                 logger.warning("Redis URL not configured, running without Redis (agent features disabled)")
                 self.redis_client = None
+                self.async_redis_client = None
         except Exception as e:
-            logger.error(f"Failed to connect to Redis at {settings.redis_url[:30] if settings.redis_url else 'None'}: {e}")
+            logger.error(f"Failed to connect to Redis at {self.redis_url[:30] if self.redis_url else 'None'}: {e}")
             logger.warning("Running without Redis - agent management features will be disabled")
             self.redis_client = None
-            
-        self.wallet_callbacks = {}
-        self._listener_task = None
+            self.async_redis_client = None
         
     async def start_listener(self):
         """Start listening for wallet creation events."""
-        if self.redis_client and self._listener_task is None:
+        await self._ensure_initialized()
+        if self.async_redis_client and self._listener_task is None:
             self._listener_task = asyncio.create_task(self._listen_for_wallet_creation())
+            logger.info("Started wallet creation listener task")
     
     async def _listen_for_wallet_creation(self):
         """Listen for wallet creation events from agent manager."""
-        if not self.redis_client:
+        if not self.async_redis_client:
+            logger.warning("No async Redis client, cannot start listener")
             return
             
         try:
-            pubsub = self.redis_client.pubsub()
+            # Create pubsub with async client
+            self._pubsub = self.async_redis_client.pubsub()
             # Listen for wallet_created, wallet_ready, and agent_responses
-            pubsub.subscribe('wallet_created', 'wallet_ready', 'agent_responses')
+            await self._pubsub.subscribe('wallet_created', 'wallet_ready', 'agent_responses')
+            logger.info("Subscribed to channels: wallet_created, wallet_ready, agent_responses")
             
-            while True:
+            # Use async iterator for messages
+            async for message in self._pubsub.listen():
                 try:
-                    message = pubsub.get_message(timeout=0.1)
+                    logger.debug(f"Received pubsub message: type={message.get('type')}, channel={message.get('channel')}")
+                    
                     if message and message['type'] == 'message':
+                        logger.info(f"Processing message from channel {message['channel']}: {message['data'][:100]}")
                         data = json.loads(message['data'])
                         user_id = data.get('user_id')
+                        logger.info(f"Message for user_id: {user_id}, channel: {message['channel']}")
                         
                         # Handle wallet_ready event to update database
                         if message['channel'] == 'wallet_ready':
@@ -104,13 +132,16 @@ class AgentManagementService:
                             if not future.done():
                                 future.set_result(data)
                             del self.wallet_callbacks[user_id]
+                            logger.info(f"Processed callback for user {user_id}")
                 except Exception as e:
                     logger.error(f"Error processing wallet creation message: {e}")
-                
-                await asyncio.sleep(0.1)
-                
+                    
         except Exception as e:
             logger.error(f"Error in wallet creation listener: {e}")
+        finally:
+            if self._pubsub:
+                await self._pubsub.unsubscribe()
+                await self._pubsub.close()
     
     async def start_agent(self, user_id: str, wait_for_wallet: bool = True) -> Dict:
         """Smart agent start - handles wallet creation if needed.
@@ -122,6 +153,7 @@ class AgentManagementService:
         Returns:
             Dict with success status and agent/wallet info
         """
+        await self._ensure_initialized()
         if not self.redis_client:
             logger.warning("Redis not available, cannot start agent")
             return {'success': False, 'error': 'Redis not available'}
@@ -185,6 +217,7 @@ class AgentManagementService:
     
     async def request_agent_stop(self, user_id: str) -> bool:
         """Request agent stop."""
+        await self._ensure_initialized()
         if not self.redis_client:
             logger.warning("Redis not available, cannot stop agent")
             return False
@@ -204,6 +237,7 @@ class AgentManagementService:
     
     async def get_agent_status(self, user_id: str) -> Optional[Dict]:
         """Get agent status from Redis."""
+        await self._ensure_initialized()
         if not self.redis_client:
             logger.warning("Redis not available, cannot get agent status")
             return None
@@ -222,6 +256,7 @@ class AgentManagementService:
     
     async def list_all_agents(self) -> list:
         """List all agents and their statuses."""
+        await self._ensure_initialized()
         if not self.redis_client:
             logger.warning("Redis not available, cannot list agents")
             return []
@@ -246,6 +281,7 @@ class AgentManagementService:
     
     async def restart_agent(self, user_id: str) -> Dict:
         """Restart an agent."""
+        await self._ensure_initialized()
         if not self.redis_client:
             logger.warning("Redis not available, cannot restart agent")
             return {'success': False, 'error': 'Redis not available'}
