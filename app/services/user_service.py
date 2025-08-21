@@ -247,7 +247,7 @@ class UserService:
         tx_hash: Optional[str] = None,
         to_address: Optional[str] = None,
         force_close_positions: bool = True,
-        max_slippage_percent: Decimal = Decimal("2.0")
+        max_slippage_percent: Decimal = Decimal("0.5")
     ) -> Transaction:
         """Process USDC withdrawal for user.
         
@@ -372,11 +372,11 @@ class UserService:
         requires_closing = wallet_balance < amount
         positions_to_close = len(active_positions) if requires_closing else 0
         
-        # Estimate gas fees (rough estimate: 0.50 USDC per position close)
-        estimated_gas = Decimal("0.50") * positions_to_close
+        # Gas fees are sponsored - no USDC cost to user
+        estimated_gas = Decimal("0")
         
-        # Estimate slippage (2% of positions value)
-        estimated_slippage = positions_value * Decimal("0.02") if requires_closing else Decimal(0)
+        # Estimate slippage (0.1% of positions value - minimal for liquidity removal)
+        estimated_slippage = positions_value * Decimal("0.001") if requires_closing else Decimal(0)
         
         # Calculate estimated available after closing
         if requires_closing:
@@ -390,9 +390,12 @@ class UserService:
         # Generate warning message
         warning_message = None
         if requires_closing:
-            warning_message = f"This withdrawal requires closing {positions_to_close} position(s)"
+            if estimated_slippage > 0:
+                warning_message = f"This withdrawal requires closing {positions_to_close} position(s). Estimated slippage: {estimated_slippage:.4f} USDC"
+            else:
+                warning_message = f"This withdrawal requires closing {positions_to_close} position(s)"
         if not can_withdraw:
-            warning_message = f"Insufficient funds even after closing positions. Available: {estimated_available:.2f} USDC"
+            warning_message = f"Insufficient funds. Available after closing: {estimated_available:.6f} USDC (includes {estimated_slippage:.4f} USDC slippage)"
         
         return {
             "requested_amount": amount,

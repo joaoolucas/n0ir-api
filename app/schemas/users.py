@@ -55,7 +55,7 @@ class WithdrawRequest(BaseModel):
     destination_address: Optional[str] = Field(None, description="Destination wallet address (defaults to user's address)")
     tx_hash: Optional[str] = Field(None, description="Transaction hash if already executed")
     force_close_positions: bool = Field(True, description="Automatically close positions if needed for withdrawal")
-    max_slippage_percent: Decimal = Field(Decimal("2.0"), description="Maximum acceptable slippage when closing positions (%)")
+    max_slippage_percent: Decimal = Field(Decimal("0.5"), description="Maximum acceptable slippage when closing positions (%)")
 
 
 class WithdrawPreviewResponse(BaseModel):
