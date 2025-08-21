@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from decimal import Decimal
@@ -10,7 +10,7 @@ from app.services.agent_management_service import get_agent_service
 from app.core.pools_service import pools_service
 from app.core.positions_service import positions_service
 from app.schemas.users import (
-    CreateUserRequest, UpdateUserRequest, DepositRequest, WithdrawRequest,
+    CreateUserRequest, UpdateUserRequest, DepositRequest, WithdrawRequest, WithdrawPreviewResponse,
     UserResponse, TransactionResponse, TransactionListResponse,
     PositionResponse, PositionListResponse, CreatePositionRequest,
     BalanceResponse, PnLResponse, PerformanceResponse,
@@ -297,8 +297,13 @@ async def withdraw(
 ):
     """Withdraw USDC from user account.
     
+    This endpoint will automatically close positions if needed to fulfill the withdrawal.
     If tx_hash is provided, the withdrawal is recorded as already executed.
     Otherwise, the withdrawal is executed through the agent manager service.
+    
+    Args:
+        user_id: User's wallet address
+        request: Withdrawal request with amount and options
     """
     try:
         service = UserService(db)
@@ -306,7 +311,9 @@ async def withdraw(
             user_id=user_id,
             amount=request.amount_usdc,
             tx_hash=request.tx_hash,
-            to_address=request.destination_address
+            to_address=request.destination_address,
+            force_close_positions=request.force_close_positions,
+            max_slippage_percent=request.max_slippage_percent
         )
         return TransactionResponse.model_validate(transaction)
     except ValueError as e:
@@ -314,6 +321,27 @@ async def withdraw(
     except Exception as e:
         logger.error(f"Error processing withdrawal: {e}")
         raise HTTPException(status_code=500, detail="Failed to process withdrawal")
+
+
+@router.get("/{user_id}/withdraw/preview", response_model=WithdrawPreviewResponse)
+async def preview_withdrawal(
+    user_id: str,
+    amount: Decimal = Query(..., gt=0, description="Amount to withdraw in USDC"),
+    db: AsyncSession = Depends(get_db)
+):
+    """Preview a withdrawal to see what would happen.
+    
+    Shows whether positions need to be closed, estimated fees, and if withdrawal is possible.
+    """
+    try:
+        service = UserService(db)
+        preview = await service.preview_withdrawal(user_id, amount)
+        return WithdrawPreviewResponse(**preview)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error previewing withdrawal: {e}")
+        raise HTTPException(status_code=500, detail="Failed to preview withdrawal")
 
 
 @router.get("/{user_id}/balance", response_model=BalanceResponse)

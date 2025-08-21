@@ -245,7 +245,9 @@ class UserService:
         user_id: str,
         amount: Decimal,
         tx_hash: Optional[str] = None,
-        to_address: Optional[str] = None
+        to_address: Optional[str] = None,
+        force_close_positions: bool = True,
+        max_slippage_percent: Decimal = Decimal("2.0")
     ) -> Transaction:
         """Process USDC withdrawal for user.
         
@@ -254,16 +256,51 @@ class UserService:
             amount: Amount of USDC to withdraw
             tx_hash: Optional transaction hash if already executed
             to_address: Optional destination address (defaults to user_id)
+            force_close_positions: Whether to close positions if needed
+            max_slippage_percent: Maximum acceptable slippage when closing positions
         """
         # Verify user exists
         user = await self.get_user(user_id)
         if not user:
             raise ValueError(f"User {user_id} not found")
         
-        # Check user has sufficient balance
-        balance = await self.get_user_balance(user_id)
-        if balance < amount:
-            raise ValueError(f"Insufficient balance. Available: {balance}, Requested: {amount}")
+        # Check current wallet balance
+        wallet_balance = await self.get_user_balance(user_id)
+        
+        # If wallet balance is insufficient, check if we should close positions
+        if wallet_balance < amount:
+            if not force_close_positions:
+                raise ValueError(f"Insufficient wallet balance. Available: {wallet_balance}, Requested: {amount}")
+            
+            # Get active positions
+            active_positions = await self.get_user_positions(user_id, status=PositionStatus.ACTIVE)
+            
+            if not active_positions:
+                raise ValueError(f"Insufficient funds. Wallet: {wallet_balance}, No active positions to close")
+            
+            logger.info(f"Closing {len(active_positions)} positions for withdrawal of {amount} USDC")
+            
+            # Close all positions to free up funds
+            total_returned = Decimal(0)
+            for position in active_positions:
+                try:
+                    closed_position = await self.close_position(
+                        user_id=user_id,
+                        nft_token_id=position.nft_token_id
+                    )
+                    if closed_position:
+                        # The close_position method already returns funds to balance
+                        # via POSITION_EXIT transaction
+                        logger.info(f"Closed position {position.nft_token_id}")
+                except Exception as e:
+                    logger.error(f"Failed to close position {position.nft_token_id}: {e}")
+                    # Continue with other positions
+            
+            # Re-check balance after closing positions
+            wallet_balance = await self.get_user_balance(user_id)
+            
+            if wallet_balance < amount:
+                raise ValueError(f"Still insufficient after closing positions. Available: {wallet_balance}, Requested: {amount}")
         
         # If no tx_hash provided, execute withdrawal through agent manager
         if not tx_hash:
@@ -307,6 +344,68 @@ class UserService:
         
         logger.info(f"Processed withdrawal of {amount} USDC for user {user_id} (tx: {tx_hash})")
         return transaction
+    
+    async def preview_withdrawal(
+        self,
+        user_id: str,
+        amount: Decimal
+    ) -> Dict[str, Any]:
+        """Preview a withdrawal to show what would happen.
+        
+        Returns information about positions that would need to be closed,
+        estimated fees, and whether the withdrawal is possible.
+        """
+        # Get current wallet balance
+        wallet_balance = await self.get_user_balance(user_id)
+        
+        # Get active positions
+        active_positions = await self.get_user_positions(user_id, status=PositionStatus.ACTIVE)
+        
+        # Calculate total positions value
+        positions_value = Decimal(0)
+        if active_positions:
+            for position in active_positions:
+                # Use current_value_usdc from database as estimate
+                positions_value += position.current_value_usdc or position.entry_amount_usdc
+        
+        # Determine if positions need to be closed
+        requires_closing = wallet_balance < amount
+        positions_to_close = len(active_positions) if requires_closing else 0
+        
+        # Estimate gas fees (rough estimate: 0.50 USDC per position close)
+        estimated_gas = Decimal("0.50") * positions_to_close
+        
+        # Estimate slippage (2% of positions value)
+        estimated_slippage = positions_value * Decimal("0.02") if requires_closing else Decimal(0)
+        
+        # Calculate estimated available after closing
+        if requires_closing:
+            estimated_available = wallet_balance + positions_value - estimated_gas - estimated_slippage
+        else:
+            estimated_available = wallet_balance
+        
+        # Determine if withdrawal is possible
+        can_withdraw = estimated_available >= amount
+        
+        # Generate warning message
+        warning_message = None
+        if requires_closing:
+            warning_message = f"This withdrawal requires closing {positions_to_close} position(s)"
+        if not can_withdraw:
+            warning_message = f"Insufficient funds even after closing positions. Available: {estimated_available:.2f} USDC"
+        
+        return {
+            "requested_amount": amount,
+            "wallet_balance": wallet_balance,
+            "positions_to_close": positions_to_close,
+            "positions_value": positions_value if requires_closing else Decimal(0),
+            "estimated_gas_fees": estimated_gas,
+            "estimated_slippage": estimated_slippage,
+            "estimated_available": estimated_available,
+            "can_withdraw": can_withdraw,
+            "requires_position_closing": requires_closing,
+            "warning_message": warning_message
+        }
     
     async def calculate_user_pnl(self, user_id: str) -> Optional[Dict[str, Decimal]]:
         """Calculate user's P&L summary."""

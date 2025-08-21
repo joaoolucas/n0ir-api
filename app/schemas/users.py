@@ -54,6 +54,21 @@ class WithdrawRequest(BaseModel):
     amount_usdc: Decimal = Field(..., gt=0, description="Amount to withdraw in USDC")
     destination_address: Optional[str] = Field(None, description="Destination wallet address (defaults to user's address)")
     tx_hash: Optional[str] = Field(None, description="Transaction hash if already executed")
+    force_close_positions: bool = Field(True, description="Automatically close positions if needed for withdrawal")
+    max_slippage_percent: Decimal = Field(Decimal("2.0"), description="Maximum acceptable slippage when closing positions (%)")
+
+
+class WithdrawPreviewResponse(BaseModel):
+    requested_amount: Decimal = Field(..., description="Amount requested to withdraw")
+    wallet_balance: Decimal = Field(..., description="Current wallet balance")
+    positions_to_close: int = Field(..., description="Number of positions that need to be closed")
+    positions_value: Decimal = Field(..., description="Total value of positions to be closed")
+    estimated_gas_fees: Decimal = Field(..., description="Estimated gas fees for closing positions")
+    estimated_slippage: Decimal = Field(..., description="Estimated slippage amount")
+    estimated_available: Decimal = Field(..., description="Estimated total available after closing positions")
+    can_withdraw: bool = Field(..., description="Whether withdrawal is possible")
+    requires_position_closing: bool = Field(..., description="Whether positions need to be closed")
+    warning_message: Optional[str] = Field(None, description="Warning message if any")
 
 
 class CreatePositionRequest(BaseModel):
