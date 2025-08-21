@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.user_service import UserService
 from app.services.agent_management_service import get_agent_service
 from app.core.pools_service import pools_service
+from app.core.positions_service import PositionsService
 from app.schemas.users import (
     CreateUserRequest, UpdateUserRequest, DepositRequest, WithdrawRequest,
     UserResponse, TransactionResponse, TransactionListResponse,
@@ -24,10 +25,14 @@ router = APIRouter(prefix="/users")
 
 
 async def enrich_position_with_pool_data(position) -> dict:
-    """Enrich position with pool information and calculated values."""
+    """Enrich position with pool information and calculated values from blockchain."""
     position_dict = PositionResponse.model_validate(position).model_dump()
     
     try:
+        # Get real-time position data from blockchain
+        positions_service = PositionsService()
+        position_info = await positions_service.get_position_by_id(position.nft_token_id)
+        
         # Get token info for pool name
         token0_info = await pools_service.get_token_info(position.token0_address)
         token1_info = await pools_service.get_token_info(position.token1_address)
@@ -37,22 +42,26 @@ async def enrich_position_with_pool_data(position) -> dict:
         token1_symbol = token1_info.get('symbol', '???')
         position_dict['pool_name'] = f"{token0_symbol}/{token1_symbol}"
         
-        # Calculate current_total_value (position value + emissions)
-        # For staked positions, we need to add estimated rewards/emissions value
-        current_total_value = position.current_value_usdc or Decimal(0)
+        # Use real-time position value from blockchain
+        blockchain_value_usd = Decimal(str(position_info.current_value_usd or 0))
         
-        if position.staked and position.current_value_usdc:
-            # Add accumulated rewards and fees to get total value
-            current_total_value += (position.rewards_earned_usdc or Decimal(0))
-            current_total_value += (position.fees_earned_usdc or Decimal(0))
+        # Calculate current_total_value: blockchain position value + accumulated rewards/fees
+        current_total_value = blockchain_value_usd
+        
+        # Add accumulated rewards and fees from database
+        current_total_value += (position.rewards_earned_usdc or Decimal(0))
+        current_total_value += (position.fees_earned_usdc or Decimal(0))
         
         position_dict['current_total_value'] = current_total_value
         
+        # Also update current_value_usdc with the real-time value for consistency
+        position_dict['current_value_usdc'] = blockchain_value_usd
+        
     except Exception as e:
         logger.warning(f"Failed to enrich position {position.nft_token_id}: {e}")
-        # Set fallback values if pool service fails
+        # Set fallback values if blockchain services fail
         position_dict['pool_name'] = "???/???"
-        position_dict['current_total_value'] = position.current_value_usdc
+        position_dict['current_total_value'] = position.current_value_usdc or Decimal(0)
     
     return position_dict
 
