@@ -356,7 +356,15 @@ class UserService:
         staked: bool = False,
         gauge_address: Optional[str] = None
     ) -> Position:
-        """Create a new position."""
+        """Create a new position and deduct balance atomically."""
+        # Check if user has sufficient balance
+        current_balance = await self.get_user_balance(user_id)
+        if current_balance < entry_amount_usdc:
+            raise ValueError(
+                f"Insufficient balance. Available: {current_balance}, Required: {entry_amount_usdc}"
+            )
+        
+        # Create position
         position = Position(
             user_id=user_id,
             nft_token_id=nft_token_id,
@@ -374,9 +382,28 @@ class UserService:
             status=PositionStatus.ACTIVE
         )
         
+        # Create transaction record for position entry (debit)
+        transaction = Transaction(
+            user_id=user_id,
+            transaction_type=TransactionType.POSITION_ENTRY,
+            amount_usdc=entry_amount_usdc,  # Store as positive, type indicates debit
+            tx_hash=entry_tx_hash,
+            status=TransactionStatus.CONFIRMED,
+            tx_metadata=json.dumps({
+                "nft_token_id": nft_token_id,
+                "pool_address": pool_address,
+                "action": "position_opened"
+            }),
+            confirmed_at=datetime.now(timezone.utc)
+        )
+        
+        # Add both records in the same transaction
         self.db.add(position)
+        self.db.add(transaction)
         await self.db.commit()
         await self.db.refresh(position)
+        
+        logger.info(f"Created position {nft_token_id} for user {user_id}, deducted {entry_amount_usdc} USDC")
         return position
     
     async def get_user_positions(
@@ -433,22 +460,39 @@ class UserService:
     
     async def close_position(
         self,
-        position_id: uuid.UUID,
-        exit_tx_hash: str,
-        realized_pnl_usdc: Decimal,
-        final_value_usdc: Decimal
+        user_id: str,
+        nft_token_id: int,
+        exit_tx_hash: Optional[str] = None,
+        realized_pnl_usdc: Optional[Decimal] = None,
+        final_value_usdc: Optional[Decimal] = None
     ) -> Optional[Position]:
-        """Close a position and record final metrics."""
-        stmt = select(Position).where(Position.position_id == position_id)
+        """Close a position and return funds to user balance."""
+        stmt = select(Position).where(
+            and_(
+                Position.nft_token_id == nft_token_id,
+                Position.user_id == user_id,
+                Position.status == PositionStatus.ACTIVE
+            )
+        )
         result = await self.db.execute(stmt)
         position = result.scalar_one_or_none()
         
         if not position:
             return None
         
+        # Calculate final value if not provided
+        if final_value_usdc is None:
+            # Use current_value_usdc from database or entry amount as fallback
+            final_value_usdc = position.current_value_usdc or position.entry_amount_usdc
+        
+        # Calculate realized P&L if not provided
+        if realized_pnl_usdc is None:
+            realized_pnl_usdc = final_value_usdc - position.entry_amount_usdc
+        
+        # Update position status
         position.status = PositionStatus.CLOSED
         position.exit_tx_hash = exit_tx_hash
-        position.exit_date = datetime.utcnow()
+        position.exit_date = datetime.now(timezone.utc)
         position.realized_pnl_usdc = realized_pnl_usdc
         position.current_value_usdc = final_value_usdc
         position.unrealized_pnl_usdc = Decimal(0)
@@ -459,9 +503,33 @@ class UserService:
             # Protocol fee is 5% of profit
             position.protocol_fee_amount = total_profit * Decimal('0.05')
             position.protocol_fee_collected = False
+            # Actual amount returned is final value minus protocol fee
+            amount_returned = final_value_usdc - position.protocol_fee_amount
+        else:
+            amount_returned = final_value_usdc
         
+        # Create transaction record for position exit (credit)
+        transaction = Transaction(
+            user_id=user_id,
+            transaction_type=TransactionType.POSITION_EXIT,
+            amount_usdc=amount_returned,  # Amount returned to user
+            tx_hash=exit_tx_hash,
+            status=TransactionStatus.CONFIRMED,
+            tx_metadata=json.dumps({
+                "nft_token_id": nft_token_id,
+                "pool_address": position.pool_address,
+                "action": "position_closed",
+                "realized_pnl": str(realized_pnl_usdc),
+                "protocol_fee": str(position.protocol_fee_amount) if position.protocol_fee_amount else "0"
+            }),
+            confirmed_at=datetime.now(timezone.utc)
+        )
+        
+        self.db.add(transaction)
         await self.db.commit()
         await self.db.refresh(position)
+        
+        logger.info(f"Closed position {nft_token_id} for user {user_id}, returned {amount_returned} USDC")
         return position
     
     # Protocol fee methods removed - fees are now tracked directly on Position model

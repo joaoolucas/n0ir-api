@@ -98,11 +98,12 @@ class UserResponse(BaseModel):
 
 class BalanceResponse(BaseModel):
     user_id: str
-    balance_usdc: Decimal
-    available_balance_usdc: Decimal
-    locked_in_positions_usdc: Decimal
+    wallet_balance_usdc: Decimal = Field(..., description="Current spendable balance in wallet")
+    available_balance_usdc: Decimal = Field(..., description="Available for withdrawal/trading")
+    invested_amount_usdc: Decimal = Field(..., description="Total amount invested in active positions")
     current_positions_value_usdc: Decimal = Field(..., description="Real-time total value of all positions")
     total_portfolio_value_usdc: Decimal = Field(..., description="Wallet balance + positions value")
+    unrealized_pnl_usdc: Decimal = Field(..., description="Unrealized P&L across all positions")
     pending_deposits_usdc: Decimal
     pending_withdrawals_usdc: Decimal
 

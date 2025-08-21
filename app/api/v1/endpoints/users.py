@@ -273,15 +273,17 @@ async def get_balance(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    # Get confirmed balance
-    balance = await service.get_user_balance(user_id)
+    # Get confirmed balance from database (transaction-based)
+    wallet_balance = await service.get_user_balance(user_id)
     
-    # Get active positions to calculate locked amount and current value
+    # Get active positions to calculate invested amount and current value
     positions = await service.get_user_positions(user_id, status=DBPositionStatus.ACTIVE)
-    locked_in_positions = sum(p.entry_amount_usdc for p in positions)
+    invested_amount = sum(p.entry_amount_usdc for p in positions)
     
     # Calculate total positions value using real-time blockchain data
     current_positions_value = Decimal(0)
+    unrealized_pnl = Decimal(0)
+    
     for position in positions:
         try:
             # Use the same enrichment logic to get real-time values
@@ -297,10 +299,16 @@ async def get_balance(
             
             current_positions_value += position_total
             
+            # Calculate unrealized P&L for this position
+            position_pnl = position_total - position.entry_amount_usdc
+            unrealized_pnl += position_pnl
+            
         except Exception as e:
             logger.warning(f"Failed to get value for position {position.nft_token_id}: {e}")
             # Fallback to database value
-            current_positions_value += (position.current_value_usdc or Decimal(0))
+            fallback_value = position.current_value_usdc or position.entry_amount_usdc
+            current_positions_value += fallback_value
+            unrealized_pnl += (fallback_value - position.entry_amount_usdc)
     
     # Get pending transactions
     pending_deposits = await service.get_user_transactions(
@@ -317,17 +325,20 @@ async def get_balance(
     )
     pending_withdrawals_amount = sum(t.amount_usdc for t in pending_withdrawals)
     
-    # Calculate available balance and total portfolio value
-    available_balance = balance - locked_in_positions
-    total_portfolio_value = balance + current_positions_value
+    # Calculate available balance (wallet balance is all available since position funds are tracked separately)
+    available_balance = wallet_balance - pending_withdrawals_amount
+    
+    # Calculate total portfolio value
+    total_portfolio_value = wallet_balance + current_positions_value
     
     return BalanceResponse(
         user_id=user_id,
-        balance_usdc=balance,
+        wallet_balance_usdc=wallet_balance,
         available_balance_usdc=available_balance,
-        locked_in_positions_usdc=locked_in_positions,
+        invested_amount_usdc=invested_amount,
         current_positions_value_usdc=current_positions_value,
         total_portfolio_value_usdc=total_portfolio_value,
+        unrealized_pnl_usdc=unrealized_pnl,
         pending_deposits_usdc=pending_deposits_amount,
         pending_withdrawals_usdc=pending_withdrawals_amount
     )
@@ -415,21 +426,29 @@ async def get_positions(
     )
 
 
-@router.delete("/{user_id}/positions/{position_id}", response_model=PositionResponse)
+@router.delete("/{user_id}/positions/{nft_token_id}", response_model=PositionResponse)
 async def close_position(
     user_id: str,
-    position_id: str,
+    nft_token_id: int,
     db: AsyncSession = Depends(get_db)
 ):
-    """Close a position."""
+    """Close a position and return funds to user balance."""
     try:
         service = UserService(db)
-        position = await service.close_position(user_id, position_id)
+        position = await service.close_position(
+            user_id=user_id,
+            nft_token_id=nft_token_id
+        )
+        if not position:
+            raise HTTPException(status_code=404, detail="Position not found or already closed")
+        
         # Enrich the closed position with pool data
         enriched_position = await enrich_position_with_pool_data(position)
         return PositionResponse.model_validate(enriched_position)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error closing position: {e}")
         raise HTTPException(status_code=500, detail="Failed to close position")
