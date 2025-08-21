@@ -275,7 +275,9 @@ async def get_transactions(
     
     return TransactionListResponse(
         transactions=[TransactionResponse.model_validate(t) for t in transactions],
-        total=len(transactions)
+        total=len(transactions),
+        offset=offset,
+        limit=limit
     )
 
 
