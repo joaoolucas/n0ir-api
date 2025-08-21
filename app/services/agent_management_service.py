@@ -88,9 +88,9 @@ class AgentManagementService:
         try:
             # Create pubsub with async client
             self._pubsub = self.async_redis_client.pubsub()
-            # Listen for wallet_created, wallet_ready, and agent_responses
-            await self._pubsub.subscribe('wallet_created', 'wallet_ready', 'agent_responses')
-            logger.info("Subscribed to channels: wallet_created, wallet_ready, agent_responses")
+            # Listen for wallet_created, wallet_ready, agent_responses, and transaction_complete
+            await self._pubsub.subscribe('wallet_created', 'wallet_ready', 'agent_responses', 'transaction_complete')
+            logger.info("Subscribed to channels: wallet_created, wallet_ready, agent_responses, transaction_complete")
             
             # Use async iterator for messages
             async for message in self._pubsub.listen():
@@ -119,8 +119,20 @@ class AgentManagementService:
                                 except Exception as e:
                                     logger.error(f"Failed to update wallet address for user {user_id}: {e}")
                         
+                        # Handle transaction_complete events for withdrawals
+                        if message['channel'] == 'transaction_complete':
+                            action = data.get('action')
+                            if action == 'withdraw':
+                                callback_key = f"{user_id}:withdraw"
+                                if callback_key in self.wallet_callbacks:
+                                    future = self.wallet_callbacks[callback_key]
+                                    if not future.done():
+                                        future.set_result(data)
+                                    del self.wallet_callbacks[callback_key]
+                                    logger.info(f"Processed withdrawal callback for user {user_id}")
+                        
                         # Handle both wallet_created and agent_responses messages for callbacks
-                        if user_id in self.wallet_callbacks:
+                        elif user_id in self.wallet_callbacks:
                             # Check if this is a successful response with wallet
                             if message['channel'] == 'agent_responses':
                                 if data.get('action') == 'start' and data.get('success'):
@@ -301,4 +313,69 @@ class AgentManagementService:
             }
         except Exception as e:
             logger.error(f"Error requesting agent restart: {e}")
+            return {'success': False, 'error': str(e)}
+    
+    async def withdraw_usdc(self, user_id: str, amount: float, to_address: str = None) -> Dict:
+        """Request USDC withdrawal through agent manager.
+        
+        Args:
+            user_id: The user's wallet address (used as ID)
+            amount: Amount of USDC to withdraw
+            to_address: Optional destination address (defaults to user_id if not provided)
+        
+        Returns:
+            Dict with success status and transaction info
+        """
+        await self._ensure_initialized()
+        if not self.redis_client:
+            logger.warning("Redis not available, cannot process withdrawal")
+            return {'success': False, 'error': 'Redis not available'}
+        
+        # Default to user's own address if not specified
+        if not to_address:
+            to_address = user_id
+        
+        # Create withdrawal command
+        command = {
+            'action': 'withdraw',
+            'user_id': user_id,
+            'amount_usdc': amount,
+            'to_address': to_address,
+            'timestamp': datetime.utcnow().isoformat()
+        }
+        
+        # Set up callback to wait for transaction result
+        withdrawal_future = asyncio.Future()
+        self.wallet_callbacks[f"{user_id}:withdraw"] = withdrawal_future
+        
+        try:
+            # Publish withdrawal command
+            num_subscribers = self.redis_client.publish('agent_commands', json.dumps(command))
+            logger.info(f"Published withdraw command for {user_id} ({amount} USDC) to {num_subscribers} subscribers")
+            
+            if num_subscribers == 0:
+                logger.error("No subscribers on 'agent_commands' channel! Agent manager may not be running.")
+                del self.wallet_callbacks[f"{user_id}:withdraw"]
+                return {'success': False, 'error': 'Agent manager not available'}
+            
+            # Wait for transaction result (timeout after 30 seconds)
+            result = await asyncio.wait_for(withdrawal_future, timeout=30)
+            
+            return {
+                'success': result.get('success', False),
+                'tx_hash': result.get('tx_hash'),
+                'amount': amount,
+                'to_address': to_address,
+                'error': result.get('error')
+            }
+            
+        except asyncio.TimeoutError:
+            if f"{user_id}:withdraw" in self.wallet_callbacks:
+                del self.wallet_callbacks[f"{user_id}:withdraw"]
+            logger.warning(f"Timeout waiting for withdrawal transaction for {user_id}")
+            return {'success': False, 'error': 'Transaction timeout'}
+        except Exception as e:
+            if f"{user_id}:withdraw" in self.wallet_callbacks:
+                del self.wallet_callbacks[f"{user_id}:withdraw"]
+            logger.error(f"Error processing withdrawal: {e}")
             return {'success': False, 'error': str(e)}

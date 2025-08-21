@@ -192,13 +192,18 @@ async def withdraw(
     request: WithdrawRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    """Withdraw USDC from user account."""
+    """Withdraw USDC from user account.
+    
+    If tx_hash is provided, the withdrawal is recorded as already executed.
+    Otherwise, the withdrawal is executed through the agent manager service.
+    """
     try:
         service = UserService(db)
         transaction = await service.withdraw_usdc(
             user_id=user_id,
             amount=request.amount_usdc,
-            tx_hash=request.tx_hash
+            tx_hash=request.tx_hash,
+            to_address=request.destination_address
         )
         return TransactionResponse.model_validate(transaction)
     except ValueError as e:

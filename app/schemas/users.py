@@ -52,7 +52,8 @@ class DepositRequest(BaseModel):
 
 class WithdrawRequest(BaseModel):
     amount_usdc: Decimal = Field(..., gt=0, description="Amount to withdraw in USDC")
-    destination_address: Optional[str] = Field(None, description="Destination wallet address")
+    destination_address: Optional[str] = Field(None, description="Destination wallet address (defaults to user's address)")
+    tx_hash: Optional[str] = Field(None, description="Transaction hash if already executed")
 
 
 class CreatePositionRequest(BaseModel):

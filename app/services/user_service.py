@@ -244,9 +244,17 @@ class UserService:
         self,
         user_id: str,
         amount: Decimal,
-        tx_hash: Optional[str] = None
+        tx_hash: Optional[str] = None,
+        to_address: Optional[str] = None
     ) -> Transaction:
-        """Process USDC withdrawal for user."""
+        """Process USDC withdrawal for user.
+        
+        Args:
+            user_id: The user's wallet address (used as ID)
+            amount: Amount of USDC to withdraw
+            tx_hash: Optional transaction hash if already executed
+            to_address: Optional destination address (defaults to user_id)
+        """
         # Verify user exists
         user = await self.get_user(user_id)
         if not user:
@@ -257,16 +265,39 @@ class UserService:
         if balance < amount:
             raise ValueError(f"Insufficient balance. Available: {balance}, Requested: {amount}")
         
-        # Create withdrawal transaction
+        # If no tx_hash provided, execute withdrawal through agent manager
+        if not tx_hash:
+            from app.services.agent_management_service import get_agent_service
+            agent_service = get_agent_service()
+            
+            # Request withdrawal through agent
+            result = await agent_service.withdraw_usdc(
+                user_id=user_id,
+                amount=float(amount),
+                to_address=to_address
+            )
+            
+            if not result.get('success'):
+                error_msg = result.get('error', 'Unknown error')
+                raise ValueError(f"Withdrawal failed: {error_msg}")
+            
+            tx_hash = result.get('tx_hash')
+            if not tx_hash:
+                raise ValueError("Withdrawal executed but no transaction hash returned")
+        
+        # Create withdrawal transaction record
         transaction = await self.create_transaction(
             user_id=user_id,
             transaction_type=TransactionType.WITHDRAW,
             amount_usdc=amount,
             tx_hash=tx_hash,
-            metadata={"type": "withdrawal"}
+            metadata={
+                "type": "withdrawal",
+                "to_address": to_address or user_id
+            }
         )
         
-        # If tx_hash provided, mark as confirmed
+        # Mark as confirmed since we have tx_hash
         if tx_hash:
             transaction = await self.update_transaction_status(
                 transaction_id=transaction.transaction_id,
@@ -274,7 +305,7 @@ class UserService:
                 tx_hash=tx_hash
             )
         
-        logger.info(f"Processed withdrawal of {amount} USDC for user {user_id}")
+        logger.info(f"Processed withdrawal of {amount} USDC for user {user_id} (tx: {tx_hash})")
         return transaction
     
     async def calculate_user_pnl(self, user_id: str) -> Optional[Dict[str, Decimal]]:
