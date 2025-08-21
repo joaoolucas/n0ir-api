@@ -560,6 +560,25 @@ class UserService:
         await self.db.refresh(position)
         return position
     
+    async def update_position_status(
+        self,
+        nft_token_id: int,
+        status: PositionStatus
+    ) -> Optional[Position]:
+        """Update position status in database."""
+        stmt = select(Position).where(Position.nft_token_id == nft_token_id)
+        result = await self.db.execute(stmt)
+        position = result.scalar_one_or_none()
+        
+        if position:
+            position.status = status
+            position.last_updated = datetime.now(timezone.utc)
+            await self.db.commit()
+            await self.db.refresh(position)
+            logger.info(f"Updated position {nft_token_id} status to {status}")
+        
+        return position
+    
     async def close_position(
         self,
         user_id: str,

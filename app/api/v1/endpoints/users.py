@@ -30,7 +30,28 @@ async def enrich_position_with_pool_data(position) -> dict:
     
     try:
         # Get real-time position data from blockchain using the singleton service
-        position_info = await positions_service.get_position_by_id(position.nft_token_id)
+        try:
+            position_info = await positions_service.get_position_by_id(position.nft_token_id)
+        except Exception as e:
+            # If position doesn't exist on-chain, it was likely closed externally
+            if "execution reverted: ID" in str(e) or "ContractLogicError" in str(e):
+                logger.error(f"Position {position.nft_token_id} no longer exists on-chain but still marked as {position.status} in database!")
+                logger.error("Agent manager should call /users/{user_id}/positions/{nft_token_id}/close when closing positions")
+                
+                # Return data showing position is likely closed
+                position_dict['current_value_usdc'] = Decimal(0)
+                position_dict['current_total_value'] = Decimal(0)
+                position_dict['pool_name'] = "CLOSED/ERROR"
+                position_dict['total_pnl_usdc'] = Decimal(0) - (position.entry_amount_usdc or Decimal(0))
+                position_dict['pnl_percentage'] = Decimal(-100)
+                position_dict['pool_base_apr'] = Decimal(0)
+                position_dict['effective_apr'] = Decimal(0)
+                # Add error flag to help frontend handle this case
+                position_dict['error'] = "Position not found on-chain - likely closed externally"
+                position_dict['needs_sync'] = True
+                return position_dict
+            else:
+                raise  # Re-raise if it's a different error
         
         # Get token info for pool name
         token0_info = await pools_service.get_token_info(position.token0_address)
@@ -398,10 +419,16 @@ async def get_balance(
             current_positions_value += position_total
             
         except Exception as e:
-            logger.warning(f"Failed to get value for position {position.nft_token_id}: {e}")
-            # Fallback to database value
-            fallback_value = position.current_value_usdc or position.entry_amount_usdc
-            current_positions_value += fallback_value
+            # Check if position was closed externally
+            if "execution reverted: ID" in str(e) or "ContractLogicError" in str(e):
+                logger.error(f"Position {position.nft_token_id} not found on-chain during balance calculation - assuming closed with 0 value")
+                # Don't add any value for positions that don't exist on-chain
+                # This prevents inflating the balance with phantom positions
+            else:
+                logger.warning(f"Failed to get value for position {position.nft_token_id}: {e}")
+                # For other errors, use a conservative fallback
+                fallback_value = position.current_value_usdc or Decimal(0)
+                current_positions_value += fallback_value
     
     # Get pending transactions
     pending_deposits = await service.get_user_transactions(
@@ -550,11 +577,38 @@ async def close_position(
         return PositionResponse.model_validate(enriched_position)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error closing position: {e}")
-        raise HTTPException(status_code=500, detail="Failed to close position")
+
+
+@router.post("/{user_id}/positions/sync", status_code=200)
+async def sync_positions(
+    user_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """Sync positions with blockchain state.
+    
+    Checks all active positions and marks any that don't exist on-chain as closed.
+    This helps recover from situations where positions were closed externally.
+    """
+    service = UserService(db)
+    positions = await service.get_user_positions(user_id, status=DBPositionStatus.ACTIVE)
+    
+    synced = []
+    for position in positions:
+        try:
+            # Try to fetch position from blockchain
+            await positions_service.get_position_by_id(position.nft_token_id)
+            # Position exists, no action needed
+        except Exception as e:
+            if "execution reverted: ID" in str(e) or "ContractLogicError" in str(e):
+                # Position doesn't exist on-chain, mark as closed
+                logger.warning(f"Syncing position {position.nft_token_id} - marking as closed")
+                await service.update_position_status(position.nft_token_id, PositionStatus.CLOSED)
+                synced.append(position.nft_token_id)
+    
+    return {
+        "synced_positions": synced,
+        "message": f"Synced {len(synced)} positions that were closed externally"
+    }
 
 
 # Analytics
