@@ -563,7 +563,7 @@ class UserService:
     async def update_position_status(
         self,
         nft_token_id: int,
-        status: PositionStatus
+        status
     ) -> Optional[Position]:
         """Update position status in database."""
         stmt = select(Position).where(Position.nft_token_id == nft_token_id)

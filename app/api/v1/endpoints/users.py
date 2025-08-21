@@ -602,7 +602,7 @@ async def sync_positions(
             if "execution reverted: ID" in str(e) or "ContractLogicError" in str(e):
                 # Position doesn't exist on-chain, mark as closed
                 logger.warning(f"Syncing position {position.nft_token_id} - marking as closed")
-                await service.update_position_status(position.nft_token_id, PositionStatus.CLOSED)
+                await service.update_position_status(position.nft_token_id, DBPositionStatus.CLOSED)
                 synced.append(position.nft_token_id)
     
     return {
