@@ -104,6 +104,7 @@ class BalanceResponse(BaseModel):
     current_positions_value_usdc: Decimal = Field(..., description="Real-time total value of all positions")
     total_portfolio_value_usdc: Decimal = Field(..., description="Wallet balance + positions value")
     unrealized_pnl_usdc: Decimal = Field(..., description="Unrealized P&L across all positions")
+    pnl_percentage: Decimal = Field(..., description="PNL as percentage of total deposited")
     pending_deposits_usdc: Decimal
     pending_withdrawals_usdc: Decimal
 

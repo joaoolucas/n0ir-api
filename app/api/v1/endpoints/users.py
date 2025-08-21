@@ -399,6 +399,12 @@ async def get_balance(
     # Calculate TRUE unrealized PNL: Total Portfolio Value - Total Deposited
     unrealized_pnl = total_portfolio_value - total_deposited
     
+    # Calculate PNL percentage
+    if total_deposited > 0:
+        pnl_percentage = (unrealized_pnl / total_deposited) * Decimal(100)
+    else:
+        pnl_percentage = Decimal(0)
+    
     return BalanceResponse(
         user_id=user_id,
         wallet_balance_usdc=wallet_balance,
@@ -407,6 +413,7 @@ async def get_balance(
         current_positions_value_usdc=current_positions_value,
         total_portfolio_value_usdc=total_portfolio_value,
         unrealized_pnl_usdc=unrealized_pnl,  # True PNL against total deposits
+        pnl_percentage=pnl_percentage,  # PNL as percentage
         pending_deposits_usdc=pending_deposits_amount,
         pending_withdrawals_usdc=pending_withdrawals_amount
     )
