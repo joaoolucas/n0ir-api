@@ -125,9 +125,8 @@ class TransactionResponse(BaseModel):
 class PositionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     
-    position_id: UUID
+    nft_token_id: int  # Primary key - Aerodrome NFT position ID
     user_id: str
-    nft_token_id: int
     pool_address: str
     token0_address: str
     token1_address: str
@@ -143,6 +142,9 @@ class PositionResponse(BaseModel):
     unrealized_pnl_usdc: Decimal
     fees_earned_usdc: Decimal
     rewards_earned_usdc: Decimal
+    protocol_fee_amount: Decimal  # 5% of profits
+    protocol_fee_collected: bool
+    protocol_fee_tx_hash: Optional[str]
     status: PositionStatus
     entry_tx_hash: Optional[str]
     exit_tx_hash: Optional[str]
@@ -154,7 +156,7 @@ class PositionResponse(BaseModel):
 class ProtocolFeeResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     
-    position_id: str  # Can be UUID or NFT token ID as string
+    nft_token_id: int  # Aerodrome NFT position ID
     fee_amount_usdc: Decimal
     collected: bool
     collection_tx_hash: Optional[str]
