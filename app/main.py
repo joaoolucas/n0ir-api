@@ -1,9 +1,38 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from contextlib import asynccontextmanager
 from app.core.config import settings
 from app.api.v1.api import api_router
 from app.core.logger import logger
+from app.services.agent_management_service import AgentManagementService
+
+# Global agent management service instance
+agent_service = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan manager to handle startup and shutdown."""
+    global agent_service
+    
+    # Startup
+    logger.info("Starting API with agent management service listener...")
+    try:
+        agent_service = AgentManagementService()
+        if agent_service.redis_client:
+            await agent_service.start_listener()
+            logger.info("Agent management service listener started successfully")
+        else:
+            logger.warning("Agent management service running without Redis")
+    except Exception as e:
+        logger.error(f"Failed to start agent management service listener: {e}")
+        agent_service = None
+    
+    yield
+    
+    # Shutdown
+    logger.info("Shutting down agent management service listener...")
+    # Cleanup if needed
 
 # Create FastAPI application
 app = FastAPI(
@@ -12,7 +41,8 @@ app = FastAPI(
     description="API for accessing Aerodrome Finance Concentrated Liquidity pool data on Base network",
     docs_url="/docs",
     redoc_url="/redoc",
-    openapi_url="/openapi.json"
+    openapi_url="/openapi.json",
+    lifespan=lifespan
 )
 
 # Configure CORS

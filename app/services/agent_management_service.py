@@ -12,11 +12,18 @@ class AgentManagementService:
         try:
             # Handle Railway template variable format
             redis_url = settings.redis_url
-            if redis_url and not redis_url.startswith(('redis://', 'rediss://')):
-                logger.warning(f"Invalid Redis URL format: {redis_url[:20]}...")
+            logger.info(f"Attempting Redis connection with URL: {redis_url[:30] if redis_url else 'None'}...")
+            
+            # Check if it's a template variable that wasn't expanded
+            if redis_url and redis_url.startswith('${{'):
+                logger.error(f"Redis URL appears to be an unexpanded template variable: {redis_url}")
+                redis_url = None
+            elif redis_url and not redis_url.startswith(('redis://', 'rediss://')):
+                logger.warning(f"Invalid Redis URL format (should start with redis:// or rediss://): {redis_url[:30]}...")
                 redis_url = None
             
             if redis_url:
+                logger.info(f"Creating Redis client with URL: {redis_url[:30]}...")
                 self.redis_client = redis.from_url(
                     redis_url,
                     decode_responses=True,
@@ -24,12 +31,13 @@ class AgentManagementService:
                 )
                 # Test connection
                 self.redis_client.ping()
-                logger.info("Redis connection established")
+                logger.info(f"Redis connection established successfully to {redis_url[:30]}")
             else:
-                logger.warning("Redis URL not configured, running without Redis")
+                logger.warning("Redis URL not configured, running without Redis (agent features disabled)")
                 self.redis_client = None
         except Exception as e:
-            logger.warning(f"Failed to connect to Redis: {e}. Running without Redis.")
+            logger.error(f"Failed to connect to Redis at {settings.redis_url[:30] if settings.redis_url else 'None'}: {e}")
+            logger.warning("Running without Redis - agent management features will be disabled")
             self.redis_client = None
             
         self.wallet_callbacks = {}
@@ -122,8 +130,12 @@ class AgentManagementService:
             self.wallet_callbacks[user_id] = wallet_future
             
             try:
-                self.redis_client.publish('agent_commands', json.dumps(command))
-                logger.info(f"Published start command for {user_id}, waiting for wallet...")
+                # Publish command and check if anyone is listening
+                num_subscribers = self.redis_client.publish('agent_commands', json.dumps(command))
+                logger.info(f"Published start command for {user_id} to {num_subscribers} subscribers, waiting for wallet...")
+                
+                if num_subscribers == 0:
+                    logger.error(f"No subscribers listening on 'agent_commands' channel! Agent manager may not be running or connected.")
                 
                 # Wait for wallet creation or confirmation
                 wallet_data = await asyncio.wait_for(wallet_future, timeout=60)
