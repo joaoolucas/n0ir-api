@@ -19,11 +19,29 @@ depends_on = None
 def upgrade():
     """Change primary key from position_id to nft_token_id."""
     
-    # 1. Drop foreign key constraints that reference position_id
-    op.drop_constraint('fk_transaction_position', 'transactions', type_='foreignkey')
+    # Check if we need to do the migration by checking if position_id column exists
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    columns = [col['name'] for col in inspector.get_columns('positions')]
     
-    # 2. Drop the primary key constraint on position_id
-    op.drop_constraint('positions_pkey', 'positions', type_='primary')
+    # If position_id doesn't exist, the migration was already applied
+    if 'position_id' not in columns:
+        print("Migration already applied - position_id column not found")
+        return
+    
+    # Get existing constraints to check their names
+    constraints = inspector.get_pk_constraint('positions')
+    pk_name = constraints['name'] if constraints else None
+    
+    # 1. Drop foreign key constraints that reference position_id (if exists)
+    try:
+        op.drop_constraint('fk_transaction_position', 'transactions', type_='foreignkey')
+    except:
+        pass  # Constraint might not exist
+    
+    # 2. Drop the primary key constraint if it exists
+    if pk_name:
+        op.drop_constraint(pk_name, 'positions', type_='primary')
     
     # 3. Drop the position_id column
     op.drop_column('positions', 'position_id')
@@ -31,8 +49,11 @@ def upgrade():
     # 4. Create new primary key on nft_token_id
     op.create_primary_key('positions_pkey', 'positions', ['nft_token_id'])
     
-    # 5. Create unique index on nft_token_id for better performance
-    op.create_index('idx_position_nft_token_id', 'positions', ['nft_token_id'], unique=True)
+    # 5. Create unique index on nft_token_id for better performance (if not exists)
+    try:
+        op.create_index('idx_position_nft_token_id', 'positions', ['nft_token_id'], unique=True)
+    except:
+        pass  # Index might already exist
     
     # 6. Recreate the foreign key for transactions using nft_token_id
     op.create_foreign_key(

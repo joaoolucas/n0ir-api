@@ -180,3 +180,4 @@ secrets/
 # Local stuff
 CLAUDE.md 
 specs
+.mcp.json
