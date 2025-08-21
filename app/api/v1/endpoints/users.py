@@ -15,7 +15,7 @@ from app.schemas.users import (
     ProtocolFeeListResponse, ProtocolFeeResponse,
     UserStatus, TransactionType, TransactionStatus, PositionStatus
 )
-from app.database.models.transaction import TransactionType as DBTransactionType
+from app.database.models.transaction import TransactionType as DBTransactionType, TransactionStatus as DBTransactionStatus
 from app.database.models.position import PositionStatus as DBPositionStatus
 from app.core.logger import logger
 
@@ -215,14 +215,44 @@ async def get_balance(
 ):
     """Get user balance."""
     service = UserService(db)
-    balance = await service.get_user_balance(user_id)
-    if balance is None:
+    
+    # Verify user exists
+    user = await service.get_user(user_id)
+    if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    
+    # Get confirmed balance
+    balance = await service.get_user_balance(user_id)
+    
+    # Get active positions to calculate locked amount
+    positions = await service.get_user_positions(user_id, status=DBPositionStatus.ACTIVE)
+    locked_in_positions = sum(p.entry_amount_usdc for p in positions)
+    
+    # Get pending transactions
+    pending_deposits = await service.get_user_transactions(
+        user_id=user_id,
+        transaction_type=DBTransactionType.DEPOSIT,
+        status=DBTransactionStatus.PENDING
+    )
+    pending_deposits_amount = sum(t.amount_usdc for t in pending_deposits)
+    
+    pending_withdrawals = await service.get_user_transactions(
+        user_id=user_id,
+        transaction_type=DBTransactionType.WITHDRAWAL,
+        status=DBTransactionStatus.PENDING
+    )
+    pending_withdrawals_amount = sum(t.amount_usdc for t in pending_withdrawals)
+    
+    # Calculate available balance (balance not locked in positions)
+    available_balance = balance - locked_in_positions
     
     return BalanceResponse(
         user_id=user_id,
         balance_usdc=balance,
-        available_balance_usdc=balance  # TODO: Calculate available (not in positions)
+        available_balance_usdc=available_balance,
+        locked_in_positions_usdc=locked_in_positions,
+        pending_deposits_usdc=pending_deposits_amount,
+        pending_withdrawals_usdc=pending_withdrawals_amount
     )
 
 
@@ -317,16 +347,31 @@ async def get_pnl(
 ):
     """Get user P&L summary."""
     service = UserService(db)
-    pnl = await service.calculate_user_pnl(user_id)
     
-    if pnl is None:
+    # Verify user exists
+    user = await service.get_user(user_id)
+    if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
+    pnl = await service.calculate_user_pnl(user_id)
+    
+    # Get protocol fees
+    positions = await service.get_user_positions(user_id)
+    protocol_fees_pending = sum(
+        p.protocol_fee_amount for p in positions 
+        if p.protocol_fee_amount and not p.protocol_fee_collected
+    )
+    
+    net_pnl = pnl['total'] - protocol_fees_pending
+    
     return PnLResponse(
-        user_id=user_id,
-        total_realized_pnl=pnl['realized'],
-        total_unrealized_pnl=pnl['unrealized'],
-        total_pnl=pnl['total']
+        realized_pnl_usdc=pnl['realized'],
+        unrealized_pnl_usdc=pnl['unrealized'],
+        fees_earned_usdc=pnl['fees'],
+        rewards_earned_usdc=pnl['rewards'],
+        total_pnl_usdc=pnl['total'],
+        protocol_fees_pending_usdc=protocol_fees_pending,
+        net_pnl_usdc=net_pnl
     )
 
 
@@ -337,22 +382,15 @@ async def get_performance(
 ):
     """Get user performance metrics."""
     service = UserService(db)
-    metrics = await service.get_performance_metrics(user_id)
     
-    if metrics is None:
+    # Verify user exists
+    user = await service.get_user(user_id)
+    if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    return PerformanceResponse(
-        user_id=user_id,
-        total_positions=metrics.get('total_positions', 0),
-        winning_positions=metrics.get('winning_positions', 0),
-        losing_positions=metrics.get('losing_positions', 0),
-        win_rate=metrics.get('win_rate', 0.0),
-        average_return=metrics.get('average_return', 0.0),
-        best_position_pnl=metrics.get('best_position_pnl', 0.0),
-        worst_position_pnl=metrics.get('worst_position_pnl', 0.0),
-        total_volume_traded=metrics.get('total_volume', 0.0)
-    )
+    metrics = await service.get_performance_metrics(user_id)
+    
+    return PerformanceResponse.from_service_data(metrics)
 
 
 # Protocol Fees

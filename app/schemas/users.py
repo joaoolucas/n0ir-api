@@ -153,16 +153,10 @@ class PositionResponse(BaseModel):
 class ProtocolFeeResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     
-    fee_id: UUID
-    user_id: str
-    position_id: UUID
-    position_profit_usdc: Decimal
+    position_id: str  # Can be UUID or NFT token ID as string
     fee_amount_usdc: Decimal
-    fee_percentage: Decimal
     collected: bool
     collection_tx_hash: Optional[str]
-    created_at: datetime
-    collected_at: Optional[datetime]
 
 
 class PnLResponse(BaseModel):
@@ -217,5 +211,5 @@ class PositionListResponse(BaseModel):
 
 class ProtocolFeeListResponse(BaseModel):
     fees: List[ProtocolFeeResponse]
-    total_pending: Decimal
-    total_collected: Decimal
+    total_pending_usdc: Decimal
+    total_collected_usdc: Decimal

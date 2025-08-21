@@ -208,6 +208,107 @@ class UserService:
         result = await self.db.execute(stmt)
         return result.scalars().all()
     
+    async def deposit_usdc(
+        self,
+        user_id: str,
+        amount: Decimal,
+        tx_hash: Optional[str] = None
+    ) -> Transaction:
+        """Process USDC deposit for user."""
+        # Verify user exists
+        user = await self.get_user(user_id)
+        if not user:
+            raise ValueError(f"User {user_id} not found")
+        
+        # Create deposit transaction
+        transaction = await self.create_transaction(
+            user_id=user_id,
+            transaction_type=TransactionType.DEPOSIT,
+            amount_usdc=amount,
+            tx_hash=tx_hash,
+            metadata={"type": "deposit"}
+        )
+        
+        # If tx_hash provided, mark as confirmed (on-chain deposit)
+        if tx_hash:
+            transaction = await self.update_transaction_status(
+                transaction_id=transaction.transaction_id,
+                status=TransactionStatus.CONFIRMED,
+                tx_hash=tx_hash
+            )
+        
+        logger.info(f"Processed deposit of {amount} USDC for user {user_id}")
+        return transaction
+    
+    async def withdraw_usdc(
+        self,
+        user_id: str,
+        amount: Decimal,
+        tx_hash: Optional[str] = None
+    ) -> Transaction:
+        """Process USDC withdrawal for user."""
+        # Verify user exists
+        user = await self.get_user(user_id)
+        if not user:
+            raise ValueError(f"User {user_id} not found")
+        
+        # Check user has sufficient balance
+        balance = await self.get_user_balance(user_id)
+        if balance < amount:
+            raise ValueError(f"Insufficient balance. Available: {balance}, Requested: {amount}")
+        
+        # Create withdrawal transaction
+        transaction = await self.create_transaction(
+            user_id=user_id,
+            transaction_type=TransactionType.WITHDRAWAL,
+            amount_usdc=amount,
+            tx_hash=tx_hash,
+            metadata={"type": "withdrawal"}
+        )
+        
+        # If tx_hash provided, mark as confirmed
+        if tx_hash:
+            transaction = await self.update_transaction_status(
+                transaction_id=transaction.transaction_id,
+                status=TransactionStatus.CONFIRMED,
+                tx_hash=tx_hash
+            )
+        
+        logger.info(f"Processed withdrawal of {amount} USDC for user {user_id}")
+        return transaction
+    
+    async def calculate_user_pnl(self, user_id: str) -> Optional[Dict[str, Decimal]]:
+        """Calculate user's P&L summary."""
+        # Get all positions
+        positions = await self.get_user_positions(user_id)
+        
+        if not positions:
+            return {
+                "realized": Decimal(0),
+                "unrealized": Decimal(0),
+                "fees": Decimal(0),
+                "rewards": Decimal(0),
+                "total": Decimal(0)
+            }
+        
+        # Calculate totals
+        total_realized = sum(p.realized_pnl_usdc for p in positions)
+        total_unrealized = sum(p.unrealized_pnl_usdc for p in positions if p.status == PositionStatus.ACTIVE)
+        total_fees = sum(p.fees_earned_usdc for p in positions)
+        total_rewards = sum(p.rewards_earned_usdc for p in positions)
+        
+        return {
+            "realized": total_realized,
+            "unrealized": total_unrealized,
+            "fees": total_fees,
+            "rewards": total_rewards,
+            "total": total_realized + total_unrealized + total_fees + total_rewards
+        }
+    
+    async def get_performance_metrics(self, user_id: str) -> Dict[str, Any]:
+        """Alias for calculate_user_performance for backward compatibility."""
+        return await self.calculate_user_performance(user_id)
+    
     async def create_position(
         self,
         user_id: str,
@@ -325,7 +426,9 @@ class UserService:
         # Calculate protocol fee if position was profitable
         total_profit = realized_pnl_usdc + position.fees_earned_usdc + position.rewards_earned_usdc
         if total_profit > 0:
-            await self.create_protocol_fee(position.user_id, position_id, total_profit)
+            # Protocol fee is 5% of profit
+            position.protocol_fee_amount = total_profit * Decimal('0.05')
+            position.protocol_fee_collected = False
         
         await self.db.commit()
         await self.db.refresh(position)
@@ -347,9 +450,11 @@ class UserService:
         total_fees_earned = sum(p.fees_earned_usdc for p in positions)
         total_rewards_earned = sum(p.rewards_earned_usdc for p in positions)
         
-        # Get uncollected protocol fees
-        uncollected_fees = await self.get_uncollected_fees(user_id)
-        total_protocol_fees_pending = sum(f.fee_amount_usdc for f in uncollected_fees)
+        # Get uncollected protocol fees from positions
+        total_protocol_fees_pending = sum(
+            p.protocol_fee_amount for p in positions 
+            if p.protocol_fee_amount and not p.protocol_fee_collected
+        )
         
         # Calculate overall PnL
         total_pnl = total_realized_pnl + total_unrealized_pnl + total_fees_earned + total_rewards_earned
