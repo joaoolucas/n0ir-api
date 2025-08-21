@@ -128,6 +128,7 @@ class PositionResponse(BaseModel):
     nft_token_id: int  # Primary key - Aerodrome NFT position ID
     user_id: str
     pool_address: str
+    pool_name: Optional[str] = Field(None, description="Pool name (e.g. ZORA/USDC)")
     token0_address: str
     token1_address: str
     tick_lower: int
@@ -138,6 +139,7 @@ class PositionResponse(BaseModel):
     gauge_address: Optional[str]
     entry_amount_usdc: Decimal
     current_value_usdc: Optional[Decimal]
+    current_total_value: Optional[Decimal] = Field(None, description="Total value including position value + staked emissions")
     realized_pnl_usdc: Decimal
     unrealized_pnl_usdc: Decimal
     fees_earned_usdc: Decimal

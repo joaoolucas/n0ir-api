@@ -7,6 +7,7 @@ from app.database.session import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.user_service import UserService
 from app.services.agent_management_service import get_agent_service
+from app.core.pools_service import pools_service
 from app.schemas.users import (
     CreateUserRequest, UpdateUserRequest, DepositRequest, WithdrawRequest,
     UserResponse, TransactionResponse, TransactionListResponse,
@@ -20,6 +21,40 @@ from app.database.models.position import PositionStatus as DBPositionStatus
 from app.core.logger import logger
 
 router = APIRouter(prefix="/users")
+
+
+async def enrich_position_with_pool_data(position) -> dict:
+    """Enrich position with pool information and calculated values."""
+    position_dict = PositionResponse.model_validate(position).model_dump()
+    
+    try:
+        # Get token info for pool name
+        token0_info = await pools_service.get_token_info(position.token0_address)
+        token1_info = await pools_service.get_token_info(position.token1_address)
+        
+        # Create pool name from token symbols  
+        token0_symbol = token0_info.get('symbol', '???')
+        token1_symbol = token1_info.get('symbol', '???')
+        position_dict['pool_name'] = f"{token0_symbol}/{token1_symbol}"
+        
+        # Calculate current_total_value (position value + emissions)
+        # For staked positions, we need to add estimated rewards/emissions value
+        current_total_value = position.current_value_usdc or Decimal(0)
+        
+        if position.staked and position.current_value_usdc:
+            # Add accumulated rewards and fees to get total value
+            current_total_value += (position.rewards_earned_usdc or Decimal(0))
+            current_total_value += (position.fees_earned_usdc or Decimal(0))
+        
+        position_dict['current_total_value'] = current_total_value
+        
+    except Exception as e:
+        logger.warning(f"Failed to enrich position {position.nft_token_id}: {e}")
+        # Set fallback values if pool service fails
+        position_dict['pool_name'] = "???/???"
+        position_dict['current_total_value'] = position.current_value_usdc
+    
+    return position_dict
 
 
 # User Management Endpoints
@@ -311,7 +346,9 @@ async def create_position(
             staked=request.staked,
             gauge_address=request.gauge_address
         )
-        return PositionResponse.model_validate(position)
+        # Enrich the newly created position with pool data
+        enriched_position = await enrich_position_with_pool_data(position)
+        return PositionResponse.model_validate(enriched_position)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -325,12 +362,18 @@ async def get_positions(
     status: Optional[DBPositionStatus] = None,
     db: AsyncSession = Depends(get_db)
 ):
-    """Get user positions."""
+    """Get user positions with enriched pool data."""
     service = UserService(db)
     positions = await service.get_user_positions(user_id, status)
     
+    # Enrich positions with pool data
+    enriched_positions = []
+    for position in positions:
+        enriched_position = await enrich_position_with_pool_data(position)
+        enriched_positions.append(PositionResponse.model_validate(enriched_position))
+    
     return PositionListResponse(
-        positions=[PositionResponse.model_validate(p) for p in positions],
+        positions=enriched_positions,
         total=len(positions)
     )
 
@@ -345,7 +388,9 @@ async def close_position(
     try:
         service = UserService(db)
         position = await service.close_position(user_id, position_id)
-        return PositionResponse.model_validate(position)
+        # Enrich the closed position with pool data
+        enriched_position = await enrich_position_with_pool_data(position)
+        return PositionResponse.model_validate(enriched_position)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
