@@ -332,13 +332,27 @@ async def get_balance(
     # Get confirmed balance from database (transaction-based)
     wallet_balance = await service.get_user_balance(user_id)
     
-    # Get active positions to calculate invested amount and current value
+    # Get all confirmed deposits to calculate total deposited to platform
+    all_deposits = await service.get_user_transactions(
+        user_id=user_id,
+        transaction_type=DBTransactionType.DEPOSIT,
+        status=DBTransactionStatus.CONFIRMED
+    )
+    total_deposited = sum(t.amount_usdc for t in all_deposits)
+    
+    # Get all position entry transactions to calculate amount invested in pools
+    position_entries = await service.get_user_transactions(
+        user_id=user_id,
+        transaction_type=DBTransactionType.POSITION_ENTRY,
+        status=DBTransactionStatus.CONFIRMED
+    )
+    invested_in_pools = sum(t.amount_usdc for t in position_entries)
+    
+    # Get active positions to calculate current value
     positions = await service.get_user_positions(user_id, status=DBPositionStatus.ACTIVE)
-    invested_amount = sum(p.entry_amount_usdc for p in positions)
     
     # Calculate total positions value using real-time blockchain data
     current_positions_value = Decimal(0)
-    unrealized_pnl = Decimal(0)
     
     for position in positions:
         try:
@@ -355,16 +369,11 @@ async def get_balance(
             
             current_positions_value += position_total
             
-            # Calculate unrealized P&L for this position
-            position_pnl = position_total - position.entry_amount_usdc
-            unrealized_pnl += position_pnl
-            
         except Exception as e:
             logger.warning(f"Failed to get value for position {position.nft_token_id}: {e}")
             # Fallback to database value
             fallback_value = position.current_value_usdc or position.entry_amount_usdc
             current_positions_value += fallback_value
-            unrealized_pnl += (fallback_value - position.entry_amount_usdc)
     
     # Get pending transactions
     pending_deposits = await service.get_user_transactions(
@@ -384,17 +393,20 @@ async def get_balance(
     # Calculate available balance (wallet balance is all available since position funds are tracked separately)
     available_balance = wallet_balance - pending_withdrawals_amount
     
-    # Calculate total portfolio value
+    # Calculate total portfolio value (wallet + positions)
     total_portfolio_value = wallet_balance + current_positions_value
+    
+    # Calculate TRUE unrealized PNL: Total Portfolio Value - Total Deposited
+    unrealized_pnl = total_portfolio_value - total_deposited
     
     return BalanceResponse(
         user_id=user_id,
         wallet_balance_usdc=wallet_balance,
         available_balance_usdc=available_balance,
-        invested_amount_usdc=invested_amount,
+        invested_amount_usdc=invested_in_pools,  # Amount actually invested in pools
         current_positions_value_usdc=current_positions_value,
         total_portfolio_value_usdc=total_portfolio_value,
-        unrealized_pnl_usdc=unrealized_pnl,
+        unrealized_pnl_usdc=unrealized_pnl,  # True PNL against total deposits
         pending_deposits_usdc=pending_deposits_amount,
         pending_withdrawals_usdc=pending_withdrawals_amount
     )
