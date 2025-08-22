@@ -2,7 +2,7 @@ import redis
 import redis.asyncio as aioredis
 import json
 import asyncio
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from datetime import datetime
 from loguru import logger
 from app.core.config import settings
@@ -315,7 +315,7 @@ class AgentManagementService:
             logger.error(f"Error requesting agent restart: {e}")
             return {'success': False, 'error': str(e)}
     
-    async def withdraw_usdc(self, user_id: str, amount: float, to_address: str = None) -> Dict:
+    async def withdraw_usdc(self, user_id: str, amount: float, to_address: str = None, positions_to_close: List[int] = None) -> Dict:
         """Request USDC withdrawal through agent manager.
         
         Args:
@@ -341,6 +341,7 @@ class AgentManagementService:
             'user_id': user_id,
             'amount_usdc': amount,
             'to_address': to_address,
+            'positions_to_close': positions_to_close or [],  # Tell agent which positions need closing
             'timestamp': datetime.utcnow().isoformat()
         }
         

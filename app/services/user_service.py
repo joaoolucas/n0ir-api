@@ -278,6 +278,10 @@ class UserService:
         # Check current wallet balance
         wallet_balance = await self.get_user_balance(user_id)
         
+        # Track positions that need to be closed
+        positions_to_close = []
+        positions_closed = []
+        
         # If wallet balance is insufficient, check if we should close positions
         if wallet_balance < amount:
             if not force_close_positions:
@@ -289,49 +293,71 @@ class UserService:
             if not active_positions:
                 raise ValueError(f"Insufficient funds. Wallet: {wallet_balance}, No active positions to close")
             
-            logger.info(f"Closing {len(active_positions)} positions for withdrawal of {amount} USDC")
+            logger.info(f"Need to close {len(active_positions)} positions for withdrawal of {amount} USDC")
             
-            # Close all positions to free up funds
-            total_returned = Decimal(0)
+            # Store positions that need to be closed (but don't close them yet)
+            positions_to_close = active_positions
+            
+            # Calculate expected balance after closing positions
+            expected_balance = wallet_balance
             for position in active_positions:
-                try:
-                    closed_position = await self.close_position(
-                        user_id=user_id,
-                        nft_token_id=position.nft_token_id
-                    )
-                    if closed_position:
-                        # The close_position method already returns funds to balance
-                        # via POSITION_EXIT transaction
-                        logger.info(f"Closed position {position.nft_token_id}")
-                except Exception as e:
-                    logger.error(f"Failed to close position {position.nft_token_id}: {e}")
-                    # Continue with other positions
+                expected_balance += (position.current_value_usdc or position.entry_amount_usdc)
             
-            # Re-check balance after closing positions
-            wallet_balance = await self.get_user_balance(user_id)
-            
-            if wallet_balance < amount:
-                raise ValueError(f"Still insufficient after closing positions. Available: {wallet_balance}, Requested: {amount}")
+            if expected_balance < amount:
+                raise ValueError(f"Insufficient funds even with positions. Expected: {expected_balance}, Requested: {amount}")
         
         # If no tx_hash provided, execute withdrawal through agent manager
         if not tx_hash:
             from app.services.agent_management_service import get_agent_service
             agent_service = get_agent_service()
             
-            # Request withdrawal through agent
-            result = await agent_service.withdraw_usdc(
-                user_id=user_id,
-                amount=float(amount),
-                to_address=to_address
-            )
-            
-            if not result.get('success'):
-                error_msg = result.get('error', 'Unknown error')
-                raise ValueError(f"Withdrawal failed: {error_msg}")
-            
-            tx_hash = result.get('tx_hash')
-            if not tx_hash:
-                raise ValueError("Withdrawal executed but no transaction hash returned")
+            try:
+                # If positions need to be closed, mark them as closed in DB first
+                # (will rollback if withdrawal fails)
+                if positions_to_close:
+                    for position in positions_to_close:
+                        closed_position = await self.close_position(
+                            user_id=user_id,
+                            nft_token_id=position.nft_token_id
+                        )
+                        if closed_position:
+                            positions_closed.append(closed_position)
+                            logger.info(f"Marked position {position.nft_token_id} as closed in DB")
+                    
+                    # Re-check balance after marking positions closed
+                    wallet_balance = await self.get_user_balance(user_id)
+                    if wallet_balance < amount:
+                        # Rollback position closures
+                        await self._rollback_position_closures(positions_closed)
+                        raise ValueError(f"Still insufficient after closing positions. Available: {wallet_balance}, Requested: {amount}")
+                
+                # Request withdrawal through agent
+                result = await agent_service.withdraw_usdc(
+                    user_id=user_id,
+                    amount=float(amount),
+                    to_address=to_address,
+                    positions_to_close=[p.nft_token_id for p in positions_to_close]  # Tell agent which positions to close
+                )
+                
+                if not result.get('success'):
+                    # Rollback position closures if withdrawal failed
+                    if positions_closed:
+                        await self._rollback_position_closures(positions_closed)
+                    error_msg = result.get('error', 'Unknown error')
+                    raise ValueError(f"Withdrawal failed: {error_msg}")
+                
+                tx_hash = result.get('tx_hash')
+                if not tx_hash:
+                    # Rollback position closures if no tx_hash
+                    if positions_closed:
+                        await self._rollback_position_closures(positions_closed)
+                    raise ValueError("Withdrawal executed but no transaction hash returned")
+                    
+            except Exception as e:
+                # Rollback any position closures on any error
+                if positions_closed:
+                    await self._rollback_position_closures(positions_closed)
+                raise
         
         # Calculate realized PnL for this withdrawal
         # Get total deposits and current portfolio value
@@ -805,6 +831,40 @@ class UserService:
                 f"unrealized={unrealized_pnl}, realized={realized_pnl}, "
                 f"unrealized%={unrealized_pnl_percentage}, realized%={realized_pnl_percentage}"
             )
+    
+    async def _rollback_position_closures(self, positions: List) -> None:
+        """Rollback position closures by reopening them and removing exit transactions."""
+        logger.info(f"Rolling back {len(positions)} position closures")
+        
+        for position in positions:
+            try:
+                # Reopen the position
+                position.status = PositionStatus.ACTIVE
+                position.exit_date = None
+                position.exit_tx_hash = None
+                position.realized_pnl_usdc = Decimal(0)
+                
+                # Find and remove the POSITION_EXIT transaction
+                exit_tx = await self.db.execute(
+                    select(Transaction).where(
+                        and_(
+                            Transaction.transaction_type == TransactionType.POSITION_EXIT,
+                            Transaction.tx_metadata.like(f'%"nft_token_id": {position.nft_token_id}%')
+                        )
+                    ).order_by(Transaction.created_at.desc()).limit(1)
+                )
+                exit_transaction = exit_tx.scalar_one_or_none()
+                
+                if exit_transaction:
+                    await self.db.delete(exit_transaction)
+                    logger.info(f"Removed POSITION_EXIT transaction for position {position.nft_token_id}")
+                
+                logger.info(f"Rolled back position {position.nft_token_id} to ACTIVE status")
+                
+            except Exception as e:
+                logger.error(f"Error rolling back position {position.nft_token_id}: {e}")
+        
+        await self.db.commit()
     
     async def recalculate_user_pnl(self, user_id: str) -> None:
         """Recalculate and update user's PnL values.
