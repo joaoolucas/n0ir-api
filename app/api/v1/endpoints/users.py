@@ -588,6 +588,7 @@ async def create_position(
             user_id=user_id,
             nft_token_id=request.nft_token_id,
             pool_address=request.pool_address,
+            pool_name=request.pool_name,
             token0_address=request.token0_address,
             token1_address=request.token1_address,
             tick_lower=request.tick_lower,

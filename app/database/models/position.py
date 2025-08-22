@@ -29,6 +29,7 @@ class Position(Base):
     
     # Pool information
     pool_address = Column(String, nullable=False, index=True)
+    pool_name = Column(String, nullable=True)  # e.g., "WETH-USDC"
     token0_address = Column(String, nullable=False)
     token1_address = Column(String, nullable=False)
     

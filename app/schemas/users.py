@@ -74,6 +74,7 @@ class WithdrawPreviewResponse(BaseModel):
 class CreatePositionRequest(BaseModel):
     nft_token_id: int = Field(..., description="Aerodrome NFT position ID")
     pool_address: str = Field(..., description="Pool contract address")
+    pool_name: Optional[str] = Field(None, description="Pool name (e.g., 'WETH-USDC')")
     token0_address: str = Field(..., description="Token0 address")
     token1_address: str = Field(..., description="Token1 address")
     tick_lower: int = Field(..., description="Lower tick")

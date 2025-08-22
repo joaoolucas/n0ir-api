@@ -465,7 +465,8 @@ class UserService:
         entry_amount_usdc: Decimal,
         entry_tx_hash: Optional[str] = None,
         staked: bool = False,
-        gauge_address: Optional[str] = None
+        gauge_address: Optional[str] = None,
+        pool_name: Optional[str] = None
     ) -> Position:
         """Create a new position and deduct balance atomically."""
         # Check if user has sufficient balance
@@ -480,6 +481,7 @@ class UserService:
             user_id=user_id,
             nft_token_id=nft_token_id,
             pool_address=pool_address,
+            pool_name=pool_name,
             token0_address=token0_address,
             token1_address=token1_address,
             tick_lower=tick_lower,
