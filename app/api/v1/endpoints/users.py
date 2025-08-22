@@ -419,6 +419,17 @@ async def get_balance(
     )
     total_deposited = sum(t.amount_usdc for t in all_deposits)
     
+    # Get all confirmed withdrawals to calculate net deposits
+    all_withdrawals = await service.get_user_transactions(
+        user_id=user_id,
+        transaction_type=DBTransactionType.WITHDRAW,
+        status=DBTransactionStatus.CONFIRMED
+    )
+    total_withdrawn = sum(t.amount_usdc for t in all_withdrawals)
+    
+    # Calculate net deposited (deposits minus withdrawals)
+    net_deposited = total_deposited - total_withdrawn
+    
     # Get active positions to calculate current value and invested amount
     positions = await service.get_user_positions(user_id, status=DBPositionStatus.ACTIVE)
     
@@ -476,12 +487,12 @@ async def get_balance(
     # Calculate total portfolio value (wallet + positions)
     total_portfolio_value = wallet_balance + current_positions_value
     
-    # Calculate TRUE unrealized PNL: Total Portfolio Value - Total Deposited
-    unrealized_pnl = total_portfolio_value - total_deposited
+    # Calculate TRUE unrealized PNL: Total Portfolio Value - Net Deposited (deposits - withdrawals)
+    unrealized_pnl = total_portfolio_value - net_deposited
     
-    # Calculate PNL percentage
-    if total_deposited > 0:
-        pnl_percentage = (unrealized_pnl / total_deposited) * Decimal(100)
+    # Calculate PNL percentage based on net deposits
+    if net_deposited > 0:
+        pnl_percentage = (unrealized_pnl / net_deposited) * Decimal(100)
     else:
         pnl_percentage = Decimal(0)
     
