@@ -1,4 +1,4 @@
-"""Admin endpoints for maintenance tasks."""
+"""Admin endpoints for maintenance and recovery tasks."""
 
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
