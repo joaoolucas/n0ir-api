@@ -726,6 +726,8 @@ async def get_pnl(
     return PnLResponse(
         realized_pnl_usdc=user.realized_pnl_usdc,
         unrealized_pnl_usdc=user.unrealized_pnl_usdc,
+        unrealized_pnl_percentage=user.unrealized_pnl_percentage,
+        realized_pnl_percentage=user.realized_pnl_percentage,
         fees_earned_usdc=total_fees_earned,
         rewards_earned_usdc=total_rewards_earned,
         total_pnl_usdc=total_pnl,

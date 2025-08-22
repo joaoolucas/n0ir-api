@@ -193,6 +193,8 @@ class ProtocolFeeResponse(BaseModel):
 class PnLResponse(BaseModel):
     realized_pnl_usdc: Decimal
     unrealized_pnl_usdc: Decimal
+    unrealized_pnl_percentage: Decimal
+    realized_pnl_percentage: Decimal
     fees_earned_usdc: Decimal
     rewards_earned_usdc: Decimal
     total_pnl_usdc: Decimal
