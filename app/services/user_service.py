@@ -475,7 +475,7 @@ class UserService:
                 f"Insufficient balance. Available: {current_balance}, Required: {entry_amount_usdc}"
             )
         
-        # Create position
+        # Create position with initial value set to entry amount
         position = Position(
             user_id=user_id,
             nft_token_id=nft_token_id,
@@ -487,6 +487,7 @@ class UserService:
             tick_spacing=tick_spacing,
             liquidity=liquidity,
             entry_amount_usdc=entry_amount_usdc,
+            current_value_usdc=entry_amount_usdc,  # Initialize with entry amount
             entry_tx_hash=entry_tx_hash,
             staked=staked,
             gauge_address=gauge_address,
@@ -544,14 +545,14 @@ class UserService:
     
     async def update_position_value(
         self,
-        position_id: uuid.UUID,
+        nft_token_id: int,
         current_value_usdc: Decimal,
         unrealized_pnl_usdc: Optional[Decimal] = None,
         fees_earned_usdc: Optional[Decimal] = None,
         rewards_earned_usdc: Optional[Decimal] = None
     ) -> Optional[Position]:
         """Update position value and performance metrics."""
-        stmt = select(Position).where(Position.position_id == position_id)
+        stmt = select(Position).where(Position.nft_token_id == nft_token_id)
         result = await self.db.execute(stmt)
         position = result.scalar_one_or_none()
         
@@ -566,11 +567,49 @@ class UserService:
         if rewards_earned_usdc is not None:
             position.rewards_earned_usdc = rewards_earned_usdc
         
-        position.last_updated = datetime.utcnow()
+        position.last_updated = datetime.now(timezone.utc)
         
         await self.db.commit()
         await self.db.refresh(position)
         return position
+    
+    async def sync_position_values(self, user_id: str) -> None:
+        """Sync all position values with blockchain for a user."""
+        from app.core.positions_service import positions_service
+        
+        positions = await self.get_user_positions(user_id, status=PositionStatus.ACTIVE)
+        
+        for position in positions:
+            try:
+                # Fetch real-time value from blockchain
+                position_info = await positions_service.get_position_by_id(position.nft_token_id)
+                
+                if position_info:
+                    current_value = Decimal(str(position_info.current_value_usd or 0))
+                    unclaimed_fees = Decimal(str(position_info.unclaimed_fees_usd or 0))
+                    
+                    # Update position value
+                    total_value = current_value + unclaimed_fees
+                    unrealized_pnl = total_value - (position.entry_amount_usdc or Decimal(0))
+                    
+                    await self.update_position_value(
+                        nft_token_id=position.nft_token_id,
+                        current_value_usdc=total_value,
+                        unrealized_pnl_usdc=unrealized_pnl,
+                        fees_earned_usdc=unclaimed_fees
+                    )
+                    
+                    logger.info(f"Updated position {position.nft_token_id} value: ${total_value}")
+                else:
+                    logger.warning(f"Could not fetch blockchain data for position {position.nft_token_id}")
+                    
+            except Exception as e:
+                if "execution reverted: ID" in str(e) or "ContractLogicError" in str(e):
+                    # Position closed on-chain but not in DB
+                    logger.error(f"Position {position.nft_token_id} closed on-chain but still active in DB")
+                    # Could mark as closed here if needed
+                else:
+                    logger.error(f"Error syncing position {position.nft_token_id}: {e}")
     
     async def update_position_status(
         self,
@@ -735,6 +774,8 @@ class UserService:
         - Deposit is made
         - Withdrawal is made
         """
+        from app.core.positions_service import positions_service
+        
         # Get user balance (wallet)
         wallet_balance = await self.get_user_balance(user_id)
         
@@ -760,9 +801,46 @@ class UserService:
         # Get active positions
         positions = await self.get_user_positions(user_id, status=PositionStatus.ACTIVE)
         
-        # Calculate invested amount and current value
+        # Calculate invested amount
         invested_in_pools = sum(p.entry_amount_usdc or Decimal(0) for p in positions)
-        current_positions_value = sum(p.current_value_usdc or Decimal(0) for p in positions)
+        
+        # Calculate current positions value with real-time blockchain data
+        current_positions_value = Decimal(0)
+        
+        for position in positions:
+            try:
+                # Fetch real-time value from blockchain
+                position_info = await positions_service.get_position_by_id(position.nft_token_id)
+                
+                if position_info:
+                    current_value_usd = Decimal(str(position_info.current_value_usd or 0))
+                    unclaimed_fees_usd = Decimal(str(position_info.unclaimed_fees_usd or 0))
+                    
+                    # Calculate total position value
+                    position_total = current_value_usd + unclaimed_fees_usd
+                    position_total += (position.rewards_earned_usdc or Decimal(0))
+                    position_total += (position.fees_earned_usdc or Decimal(0))
+                    
+                    current_positions_value += position_total
+                    
+                    # Update position's current value in DB for caching
+                    position.current_value_usdc = current_value_usd + unclaimed_fees_usd
+                else:
+                    # If blockchain fetch fails, use database value
+                    current_positions_value += (position.current_value_usdc or position.entry_amount_usdc or Decimal(0))
+                    
+            except Exception as e:
+                # Check if position was closed externally
+                if "execution reverted: ID" in str(e) or "ContractLogicError" in str(e):
+                    logger.warning(f"Position {position.nft_token_id} not found on-chain, may be closed")
+                    # Don't add value for positions that don't exist on-chain
+                else:
+                    logger.error(f"Error fetching position {position.nft_token_id}: {e}")
+                    # Use database value as fallback
+                    current_positions_value += (position.current_value_usdc or position.entry_amount_usdc or Decimal(0))
+        
+        # Commit any position value updates
+        await self.db.commit()
         
         # Calculate total portfolio value
         total_portfolio_value = wallet_balance + current_positions_value

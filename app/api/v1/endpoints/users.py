@@ -659,7 +659,7 @@ async def sync_positions(
     user_id: str,
     db: AsyncSession = Depends(get_db)
 ):
-    """Sync positions with blockchain state.
+    """Sync positions with blockchain state and update values.
     
     Checks all active positions and marks any that don't exist on-chain as closed.
     This helps recover from situations where positions were closed externally.
@@ -667,22 +667,30 @@ async def sync_positions(
     service = UserService(db)
     positions = await service.get_user_positions(user_id, status=DBPositionStatus.ACTIVE)
     
-    synced = []
+    # Sync position values with blockchain
+    await service.sync_position_values(user_id)
+    
+    # Also check for positions closed externally
+    closed_positions = []
     for position in positions:
         try:
             # Try to fetch position from blockchain
             await positions_service.get_position_by_id(position.nft_token_id)
-            # Position exists, no action needed
+            # Position exists, values already synced above
         except Exception as e:
             if "execution reverted: ID" in str(e) or "ContractLogicError" in str(e):
                 # Position doesn't exist on-chain, mark as closed
                 logger.warning(f"Syncing position {position.nft_token_id} - marking as closed")
                 await service.update_position_status(position.nft_token_id, DBPositionStatus.CLOSED)
-                synced.append(position.nft_token_id)
+                closed_positions.append(position.nft_token_id)
+    
+    # Recalculate user PnL after syncing
+    await service.recalculate_user_pnl(user_id)
     
     return {
-        "synced_positions": synced,
-        "message": f"Synced {len(synced)} positions that were closed externally"
+        "positions_updated": len(positions) - len(closed_positions),
+        "positions_closed": closed_positions,
+        "message": f"Synced {len(positions)} positions, {len(closed_positions)} were closed externally"
     }
 
 
