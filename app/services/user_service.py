@@ -238,6 +238,10 @@ class UserService:
                 tx_hash=tx_hash
             )
         
+        # Recalculate user PnL after deposit
+        if tx_hash:  # Only recalculate for confirmed deposits
+            await self.recalculate_user_pnl(user_id)
+        
         logger.info(f"Processed deposit of {amount} USDC for user {user_id}")
         return transaction
     
@@ -342,6 +346,10 @@ class UserService:
                 status=TransactionStatus.CONFIRMED,
                 tx_hash=tx_hash
             )
+        
+        # Recalculate user PnL after withdrawal
+        if tx_hash:  # Only recalculate for confirmed withdrawals
+            await self.recalculate_user_pnl(user_id)
         
         logger.info(f"Processed withdrawal of {amount} USDC for user {user_id} (tx: {tx_hash})")
         return transaction
@@ -671,11 +679,114 @@ class UserService:
         await self.db.commit()
         await self.db.refresh(position)
         
+        # Recalculate user PnL after closing position
+        await self.recalculate_user_pnl(user_id)
+        
         logger.info(f"Closed position {nft_token_id} for user {user_id}, returned {amount_returned} USDC")
         return position
     
     # Protocol fee methods removed - fees are now tracked directly on Position model
     # Use position.protocol_fee_amount, position.protocol_fee_collected fields instead
+    
+    async def update_user_pnl(
+        self, 
+        user_id: str,
+        unrealized_pnl: Decimal,
+        realized_pnl: Decimal,
+        unrealized_pnl_percentage: Decimal,
+        realized_pnl_percentage: Decimal
+    ) -> None:
+        """Update user's PnL values in the database.
+        
+        Args:
+            user_id: User's wallet address
+            unrealized_pnl: Unrealized P&L from active positions
+            realized_pnl: Realized P&L from closed positions and withdrawals
+            unrealized_pnl_percentage: Unrealized PnL as percentage
+            realized_pnl_percentage: Realized PnL as percentage
+        """
+        stmt = select(User).where(User.user_id == user_id)
+        result = await self.db.execute(stmt)
+        user = result.scalar_one_or_none()
+        
+        if user:
+            user.unrealized_pnl_usdc = unrealized_pnl
+            user.realized_pnl_usdc = realized_pnl
+            user.unrealized_pnl_percentage = unrealized_pnl_percentage
+            user.realized_pnl_percentage = realized_pnl_percentage
+            user.updated_at = datetime.now(timezone.utc)
+            
+            await self.db.commit()
+            logger.info(
+                f"Updated PnL for user {user_id}: "
+                f"unrealized={unrealized_pnl}, realized={realized_pnl}, "
+                f"unrealized%={unrealized_pnl_percentage}, realized%={realized_pnl_percentage}"
+            )
+    
+    async def recalculate_user_pnl(self, user_id: str) -> None:
+        """Recalculate and update user's PnL values.
+        
+        This should be called after:
+        - Position is closed
+        - Position is opened
+        - Deposit is made
+        - Withdrawal is made
+        """
+        # Get user balance (wallet)
+        wallet_balance = await self.get_user_balance(user_id)
+        
+        # Get all confirmed deposits
+        all_deposits = await self.get_user_transactions(
+            user_id=user_id,
+            transaction_type=TransactionType.DEPOSIT,
+            status=TransactionStatus.CONFIRMED
+        )
+        total_deposited = sum(t.amount_usdc for t in all_deposits)
+        
+        # Get all confirmed withdrawals
+        all_withdrawals = await self.get_user_transactions(
+            user_id=user_id,
+            transaction_type=TransactionType.WITHDRAW,
+            status=TransactionStatus.CONFIRMED
+        )
+        total_withdrawn = sum(t.amount_usdc for t in all_withdrawals)
+        
+        # Calculate net deposited
+        net_deposited = total_deposited - total_withdrawn
+        
+        # Get active positions
+        positions = await self.get_user_positions(user_id, status=PositionStatus.ACTIVE)
+        
+        # Calculate invested amount and current value
+        invested_in_pools = sum(p.entry_amount_usdc or Decimal(0) for p in positions)
+        current_positions_value = sum(p.current_value_usdc or Decimal(0) for p in positions)
+        
+        # Calculate total portfolio value
+        total_portfolio_value = wallet_balance + current_positions_value
+        
+        # Calculate PnLs
+        unrealized_pnl = current_positions_value - invested_in_pools
+        realized_pnl = (total_portfolio_value - net_deposited) - unrealized_pnl
+        
+        # Calculate percentages
+        if invested_in_pools > 0:
+            unrealized_pnl_percentage = (unrealized_pnl / invested_in_pools) * Decimal(100)
+        else:
+            unrealized_pnl_percentage = Decimal(0)
+        
+        if net_deposited > 0:
+            realized_pnl_percentage = (realized_pnl / net_deposited) * Decimal(100)
+        else:
+            realized_pnl_percentage = Decimal(0)
+        
+        # Update user PnL values
+        await self.update_user_pnl(
+            user_id=user_id,
+            unrealized_pnl=unrealized_pnl,
+            realized_pnl=realized_pnl,
+            unrealized_pnl_percentage=unrealized_pnl_percentage,
+            realized_pnl_percentage=realized_pnl_percentage
+        )
     
     async def calculate_user_performance(self, user_id: str) -> Dict[str, Any]:
         """Calculate comprehensive performance metrics for a user."""

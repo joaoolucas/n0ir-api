@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import List, TYPE_CHECKING
-from sqlalchemy import Column, String, DateTime, Enum as SQLEnum, Index
+from sqlalchemy import Column, String, DateTime, Enum as SQLEnum, Index, Numeric
 from sqlalchemy.orm import relationship, Mapped
 import enum
 from app.database.base import Base
@@ -28,6 +28,12 @@ class User(Base):
     
     # User status
     status = Column(SQLEnum(UserStatus), default=UserStatus.ACTIVE, nullable=False)
+    
+    # PnL tracking fields
+    unrealized_pnl_usdc = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
+    realized_pnl_usdc = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
+    unrealized_pnl_percentage = Column(Numeric(precision=10, scale=2), default=0, nullable=False)
+    realized_pnl_percentage = Column(Numeric(precision=10, scale=2), default=0, nullable=False)
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
