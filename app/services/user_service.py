@@ -514,6 +514,9 @@ class UserService:
         await self.db.commit()
         await self.db.refresh(position)
         
+        # Recalculate user PnL after creating position
+        await self.recalculate_user_pnl(user_id)
+        
         logger.info(f"Created position {nft_token_id} for user {user_id}, deducted {entry_amount_usdc} USDC")
         return position
     

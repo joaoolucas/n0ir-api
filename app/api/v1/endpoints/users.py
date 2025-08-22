@@ -529,14 +529,8 @@ async def get_balance(
     else:
         realized_pnl_percentage = Decimal(0)
     
-    # Update user's PnL values in the database
-    await service.update_user_pnl(
-        user_id=user_id,
-        unrealized_pnl=unrealized_pnl,
-        realized_pnl=realized_pnl,
-        unrealized_pnl_percentage=unrealized_pnl_percentage,
-        realized_pnl_percentage=realized_pnl_percentage
-    )
+    # Note: PnL values are stored in the database and updated when transactions occur
+    # The balance endpoint only reads and calculates current values, it doesn't update the DB
     
     return BalanceResponse(
         user_id=user_id,
@@ -698,7 +692,11 @@ async def get_pnl(
     user_id: str,
     db: AsyncSession = Depends(get_db)
 ):
-    """Get user P&L summary."""
+    """Get user P&L summary from stored values.
+    
+    Returns the last calculated PnL values stored in the database.
+    These values are updated when transactions occur (deposits, withdrawals, position changes).
+    """
     service = UserService(db)
     
     # Verify user exists
@@ -706,37 +704,44 @@ async def get_pnl(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    pnl = await service.calculate_user_pnl(user_id)
-    
-    # Get protocol fees
+    # Get fees and rewards from positions for additional metrics
     positions = await service.get_user_positions(user_id)
+    
+    # Calculate total fees and rewards from all positions
+    total_fees_earned = sum(p.fees_earned_usdc or Decimal(0) for p in positions)
+    total_rewards_earned = sum(p.rewards_earned_usdc or Decimal(0) for p in positions)
+    
+    # Get protocol fees pending
     protocol_fees_pending = sum(
         p.protocol_fee_amount for p in positions 
         if p.protocol_fee_amount and not p.protocol_fee_collected
     )
     
-    net_pnl = pnl['total'] - protocol_fees_pending
+    # Calculate total PnL (realized + unrealized)
+    total_pnl = user.realized_pnl_usdc + user.unrealized_pnl_usdc
+    
+    # Net PnL after protocol fees
+    net_pnl = total_pnl - protocol_fees_pending
     
     return PnLResponse(
-        realized_pnl_usdc=pnl['realized'],
-        unrealized_pnl_usdc=pnl['unrealized'],
-        fees_earned_usdc=pnl['fees'],
-        rewards_earned_usdc=pnl['rewards'],
-        total_pnl_usdc=pnl['total'],
+        realized_pnl_usdc=user.realized_pnl_usdc,
+        unrealized_pnl_usdc=user.unrealized_pnl_usdc,
+        fees_earned_usdc=total_fees_earned,
+        rewards_earned_usdc=total_rewards_earned,
+        total_pnl_usdc=total_pnl,
         protocol_fees_pending_usdc=protocol_fees_pending,
         net_pnl_usdc=net_pnl
     )
 
 
-@router.get("/{user_id}/pnl", response_model=Dict[str, Decimal])
-async def get_user_pnl(
+@router.get("/{user_id}/pnl-details", response_model=Dict[str, Decimal])
+async def get_pnl_details(
     user_id: str,
     db: AsyncSession = Depends(get_db)
 ):
-    """Get user's stored PnL values (fast, no recalculation).
+    """Get detailed PnL values including percentages.
     
-    Returns the last calculated PnL values stored in the database.
-    For fresh calculations, use the /balance endpoint.
+    Returns all stored PnL metrics including percentages.
     """
     service = UserService(db)
     user = await service.get_user(user_id)
@@ -745,6 +750,40 @@ async def get_user_pnl(
         raise HTTPException(status_code=404, detail="User not found")
     
     return {
+        "unrealized_pnl_usdc": user.unrealized_pnl_usdc,
+        "realized_pnl_usdc": user.realized_pnl_usdc,
+        "unrealized_pnl_percentage": user.unrealized_pnl_percentage,
+        "realized_pnl_percentage": user.realized_pnl_percentage,
+        "last_updated": user.updated_at
+    }
+
+
+@router.post("/{user_id}/sync-pnl", status_code=200)
+async def sync_user_pnl(
+    user_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """Manually trigger PnL recalculation for a user.
+    
+    This will fetch current balances, positions, and transactions to recalculate
+    and update the stored PnL values. Normally this happens automatically on
+    deposits, withdrawals, and position changes.
+    """
+    service = UserService(db)
+    
+    # Verify user exists
+    user = await service.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Recalculate and update PnL
+    await service.recalculate_user_pnl(user_id)
+    
+    # Return updated values
+    await db.refresh(user)
+    
+    return {
+        "message": "PnL values synced successfully",
         "unrealized_pnl_usdc": user.unrealized_pnl_usdc,
         "realized_pnl_usdc": user.realized_pnl_usdc,
         "unrealized_pnl_percentage": user.unrealized_pnl_percentage,
