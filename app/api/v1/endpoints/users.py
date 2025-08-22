@@ -487,50 +487,8 @@ async def get_balance(
     # Calculate total portfolio value (wallet + positions)
     total_portfolio_value = wallet_balance + current_positions_value
     
-    # PNL Calculation Logic:
-    # - Unrealized PNL: Profit/Loss from ACTIVE positions that haven't been closed yet
-    #   Formula: Current Value of Positions - Amount Invested in those positions
-    # - Realized PNL: Profit/Loss that has been "locked in" through closed positions or withdrawals
-    #   Formula: (Total Portfolio Value - Net Deposited) - Unrealized PNL
-    #
-    # Examples:
-    # 1. User deposits $20, withdraws $15 (max available):
-    #    - Net deposited: $20 - $15 = $5
-    #    - Portfolio value: $0 (nothing left)
-    #    - Unrealized PNL: $0 (no positions)
-    #    - Realized PNL: ($0 - $5) - $0 = -$5 (lost $5)
-    #
-    # 2. User deposits $20, has portfolio worth $25:
-    #    - Net deposited: $20
-    #    - Portfolio value: $25
-    #    - If $15 in positions (entry cost) now worth $20:
-    #      - Unrealized PNL: $20 - $15 = $5
-    #      - Realized PNL: ($25 - $20) - $5 = $0
-    #    - If all $20 was invested and positions are now worth $20:
-    #      - Unrealized PNL: $20 - $20 = $0
-    #      - Realized PNL: ($25 - $20) - $0 = $5 (gained from closed positions)
-    
-    # Calculate unrealized PNL: Only from active positions (current value - invested amount)
-    unrealized_pnl = current_positions_value - invested_in_pools
-    
-    # Calculate realized PNL: Total Portfolio Value - Net Deposited - Unrealized PNL
-    # This represents the actual gains/losses that have been realized through closed positions and withdrawals
-    realized_pnl = (total_portfolio_value - net_deposited) - unrealized_pnl
-    
-    # Calculate unrealized PNL percentage based on invested amount (only if there are active positions)
-    if invested_in_pools > 0:
-        unrealized_pnl_percentage = (unrealized_pnl / invested_in_pools) * Decimal(100)
-    else:
-        unrealized_pnl_percentage = Decimal(0)
-    
-    # Calculate realized PNL percentage based on net deposited (only if user has deposited)
-    if net_deposited > 0:
-        realized_pnl_percentage = (realized_pnl / net_deposited) * Decimal(100)
-    else:
-        realized_pnl_percentage = Decimal(0)
-    
-    # Note: PnL values are stored in the database and updated when transactions occur
-    # The balance endpoint only reads and calculates current values, it doesn't update the DB
+    # Balance endpoint now only returns portfolio balances without PnL calculations
+    # PnL calculations are available through the dedicated /pnl endpoint
     
     return BalanceResponse(
         user_id=user_id,
@@ -539,11 +497,6 @@ async def get_balance(
         invested_amount_usdc=invested_in_pools,  # Amount actually invested in pools
         current_positions_value_usdc=current_positions_value,
         total_portfolio_value_usdc=total_portfolio_value,
-        realized_pnl_usdc=realized_pnl,  # Realized P&L from closed positions and withdrawals
-        unrealized_pnl_usdc=unrealized_pnl,  # Unrealized P&L from active positions only
-        unrealized_pnl_percentage=unrealized_pnl_percentage,  # Unrealized PNL as percentage of invested amount
-        realized_pnl_percentage=realized_pnl_percentage,  # Realized PNL as percentage of net deposited
-        pnl_percentage=unrealized_pnl_percentage,  # Deprecated field kept for backward compatibility
         pending_deposits_usdc=pending_deposits_amount,
         pending_withdrawals_usdc=pending_withdrawals_amount
     )

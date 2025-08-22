@@ -119,11 +119,6 @@ class BalanceResponse(BaseModel):
     invested_amount_usdc: Decimal = Field(..., description="Total amount invested in active positions")
     current_positions_value_usdc: Decimal = Field(..., description="Real-time total value of all positions")
     total_portfolio_value_usdc: Decimal = Field(..., description="Wallet balance + positions value")
-    realized_pnl_usdc: Decimal = Field(..., description="Realized P&L from closed positions and withdrawals")
-    unrealized_pnl_usdc: Decimal = Field(..., description="Unrealized P&L from active positions only")
-    unrealized_pnl_percentage: Decimal = Field(..., description="Unrealized PNL as percentage of invested amount")
-    realized_pnl_percentage: Decimal = Field(..., description="Realized PNL as percentage of net deposited")
-    pnl_percentage: Decimal = Field(..., description="Unrealized PNL as percentage of invested amount (deprecated, use unrealized_pnl_percentage)")
     pending_deposits_usdc: Decimal
     pending_withdrawals_usdc: Decimal
 
