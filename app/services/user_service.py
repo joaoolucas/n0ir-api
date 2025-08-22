@@ -501,11 +501,13 @@ class UserService:
             user_id=user_id,
             transaction_type=TransactionType.POSITION_ENTRY,
             amount_usdc=entry_amount_usdc,  # Store as positive, type indicates debit
+            pool_name=pool_name,  # Add pool name to transaction
             tx_hash=entry_tx_hash,
             status=TransactionStatus.CONFIRMED,
             tx_metadata=json.dumps({
                 "nft_token_id": nft_token_id,
                 "pool_address": pool_address,
+                "pool_name": pool_name,
                 "action": "position_opened"
             }),
             confirmed_at=datetime.now(timezone.utc)
@@ -707,11 +709,13 @@ class UserService:
             user_id=user_id,
             transaction_type=TransactionType.POSITION_EXIT,
             amount_usdc=amount_returned,  # Amount returned to user
+            pool_name=position.pool_name,  # Add pool name from position
             tx_hash=exit_tx_hash,
             status=TransactionStatus.CONFIRMED,
             tx_metadata=json.dumps({
                 "nft_token_id": nft_token_id,
                 "pool_address": position.pool_address,
+                "pool_name": position.pool_name,
                 "action": "position_closed",
                 "realized_pnl": str(realized_pnl_usdc),
                 "protocol_fee": str(position.protocol_fee_amount) if position.protocol_fee_amount else "0"

@@ -130,6 +130,7 @@ class TransactionResponse(BaseModel):
     user_id: str
     transaction_type: TransactionType
     amount_usdc: Decimal
+    pool_name: Optional[str] = Field(None, description="Pool name for position entry/exit transactions")
     tx_hash: Optional[str]
     block_number: Optional[int]
     gas_used: Optional[int]

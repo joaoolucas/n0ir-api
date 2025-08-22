@@ -40,6 +40,9 @@ class Transaction(Base):
     transaction_type = Column(SQLEnum(TransactionType), nullable=False)
     amount_usdc = Column(Numeric(precision=20, scale=6), nullable=False)
     
+    # Pool information (for position entry/exit transactions)
+    pool_name = Column(String, nullable=True)  # e.g., "WETH-USDC"
+    
     # Related position (for entry/exit/fee transactions)
     related_position_id = Column(Integer, ForeignKey("positions.nft_token_id"), nullable=True, index=True)
     
