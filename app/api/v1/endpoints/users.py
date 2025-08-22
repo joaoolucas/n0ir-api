@@ -28,8 +28,38 @@ async def enrich_position_with_pool_data(position) -> dict:
     """Enrich position with pool information, PNL, APR, and calculated values from blockchain."""
     position_dict = PositionResponse.model_validate(position).model_dump()
     
+    # Skip blockchain fetch for closed positions - they don't exist on-chain anymore
+    if position.status == DBPositionStatus.CLOSED:
+        # For closed positions, use database values and calculate final PNL
+        try:
+            # Get token info for pool name
+            token0_info = await pools_service.get_token_info(position.token0_address)
+            token1_info = await pools_service.get_token_info(position.token1_address)
+            
+            # Create pool name from token symbols  
+            token0_symbol = token0_info.get('symbol', '???')
+            token1_symbol = token1_info.get('symbol', '???')
+            position_dict['pool_name'] = f"{token0_symbol}/{token1_symbol}"
+        except:
+            position_dict['pool_name'] = "Unknown/Unknown"
+        
+        # Use stored values for closed positions
+        position_dict['current_value_usdc'] = position.current_value_usdc or Decimal(0)
+        position_dict['current_total_value'] = position.current_value_usdc or Decimal(0)
+        position_dict['total_pnl_usdc'] = position.realized_pnl_usdc + position.fees_earned_usdc + position.rewards_earned_usdc
+        
+        if position.entry_amount_usdc and position.entry_amount_usdc > 0:
+            position_dict['pnl_percentage'] = (position_dict['total_pnl_usdc'] / position.entry_amount_usdc) * Decimal(100)
+        else:
+            position_dict['pnl_percentage'] = Decimal(0)
+        
+        position_dict['pool_base_apr'] = Decimal(0)
+        position_dict['effective_apr'] = Decimal(0)
+        
+        return position_dict
+    
     try:
-        # Get real-time position data from blockchain using the singleton service
+        # Get real-time position data from blockchain using the singleton service (only for ACTIVE positions)
         try:
             position_info = await positions_service.get_position_by_id(position.nft_token_id)
         except Exception as e:
