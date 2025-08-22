@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers
-revision = '005_add_pool_name_to_positions'
+revision = '005_add_pool_name_to_pos'
 down_revision = '004_add_user_pnl_fields'
 branch_labels = None
 depends_on = None
