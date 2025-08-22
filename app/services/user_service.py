@@ -850,19 +850,28 @@ class UserService:
         # Calculate total portfolio value
         total_portfolio_value = wallet_balance + current_positions_value
         
-        # Calculate PnLs
-        unrealized_pnl = current_positions_value - invested_in_pools
-        realized_pnl = (total_portfolio_value - net_deposited) - unrealized_pnl
+        # CORRECT PnL Calculations:
+        # Unrealized PnL = Total Portfolio Value - Total Original Deposits (not net)
+        # This shows how much the portfolio has gained/lost vs original investment
+        unrealized_pnl = total_portfolio_value - total_deposited
+        
+        # Realized PnL = Losses/gains locked in through withdrawals and closed positions
+        # If you deposited $20 and withdrew $15, you realized a portion of any losses
+        # Formula: (Total Withdrawn - Total Deposited) if negative, else track from closed positions
+        if total_withdrawn > 0:
+            # Calculate realized loss from withdrawals
+            # If withdrew less than deposited, that's a realized loss
+            realized_pnl = total_withdrawn - total_deposited
+        else:
+            # No withdrawals yet, so no realized PnL
+            realized_pnl = Decimal(0)
         
         # Calculate percentages
-        if invested_in_pools > 0:
-            unrealized_pnl_percentage = (unrealized_pnl / invested_in_pools) * Decimal(100)
+        if total_deposited > 0:
+            unrealized_pnl_percentage = (unrealized_pnl / total_deposited) * Decimal(100)
+            realized_pnl_percentage = (realized_pnl / total_deposited) * Decimal(100)
         else:
             unrealized_pnl_percentage = Decimal(0)
-        
-        if net_deposited > 0:
-            realized_pnl_percentage = (realized_pnl / net_deposited) * Decimal(100)
-        else:
             realized_pnl_percentage = Decimal(0)
         
         # Update user PnL values
