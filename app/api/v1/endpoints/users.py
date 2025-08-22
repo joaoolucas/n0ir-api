@@ -419,16 +419,11 @@ async def get_balance(
     )
     total_deposited = sum(t.amount_usdc for t in all_deposits)
     
-    # Get all position entry transactions to calculate amount invested in pools
-    position_entries = await service.get_user_transactions(
-        user_id=user_id,
-        transaction_type=DBTransactionType.POSITION_ENTRY,
-        status=DBTransactionStatus.CONFIRMED
-    )
-    invested_in_pools = sum(t.amount_usdc for t in position_entries)
-    
-    # Get active positions to calculate current value
+    # Get active positions to calculate current value and invested amount
     positions = await service.get_user_positions(user_id, status=DBPositionStatus.ACTIVE)
+    
+    # Calculate invested amount from ACTIVE positions only
+    invested_in_pools = sum(p.entry_amount_usdc or Decimal(0) for p in positions)
     
     # Calculate total positions value using real-time blockchain data
     current_positions_value = Decimal(0)
