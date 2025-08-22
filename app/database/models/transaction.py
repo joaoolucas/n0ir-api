@@ -43,6 +43,11 @@ class Transaction(Base):
     # Pool information (for position entry/exit transactions)
     pool_name = Column(String, nullable=True)  # e.g., "WETH-USDC"
     
+    # Realized PnL tracking (for withdrawals and position exits)
+    realized_pnl_usdc = Column(Numeric(precision=20, scale=6), nullable=True)  # PnL realized in this transaction
+    portfolio_value_at_time = Column(Numeric(precision=20, scale=6), nullable=True)  # Portfolio value when transaction occurred
+    cost_basis_withdrawn = Column(Numeric(precision=20, scale=6), nullable=True)  # Proportional cost basis being withdrawn
+    
     # Related position (for entry/exit/fee transactions)
     related_position_id = Column(Integer, ForeignKey("positions.nft_token_id"), nullable=True, index=True)
     

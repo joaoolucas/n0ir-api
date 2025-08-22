@@ -113,7 +113,10 @@ class UserService:
         transaction_type: TransactionType,
         amount_usdc: Decimal,
         tx_hash: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        realized_pnl_usdc: Optional[Decimal] = None,
+        portfolio_value_at_time: Optional[Decimal] = None,
+        cost_basis_withdrawn: Optional[Decimal] = None
     ) -> Transaction:
         """Create a new transaction record."""
         transaction = Transaction(
@@ -122,7 +125,10 @@ class UserService:
             amount_usdc=amount_usdc,
             tx_hash=tx_hash,
             status=TransactionStatus.PENDING,
-            tx_metadata=json.dumps(metadata) if metadata else None
+            tx_metadata=json.dumps(metadata) if metadata else None,
+            realized_pnl_usdc=realized_pnl_usdc,
+            portfolio_value_at_time=portfolio_value_at_time,
+            cost_basis_withdrawn=cost_basis_withdrawn
         )
         
         self.db.add(transaction)
@@ -327,15 +333,43 @@ class UserService:
             if not tx_hash:
                 raise ValueError("Withdrawal executed but no transaction hash returned")
         
-        # Create withdrawal transaction record
+        # Calculate realized PnL for this withdrawal
+        # Get total deposits and current portfolio value
+        all_deposits = await self.get_user_transactions(
+            user_id=user_id,
+            transaction_type=TransactionType.DEPOSIT,
+            status=TransactionStatus.CONFIRMED
+        )
+        total_deposited = sum(t.amount_usdc for t in all_deposits)
+        
+        # Get current portfolio value before withdrawal
+        wallet_balance_before = await self.get_user_balance(user_id)
+        active_positions = await self.get_user_positions(user_id, status=PositionStatus.ACTIVE)
+        positions_value = sum(p.current_value_usdc or p.entry_amount_usdc for p in active_positions)
+        portfolio_value_before = wallet_balance_before + positions_value
+        
+        # Calculate proportional cost basis being withdrawn
+        if portfolio_value_before > 0 and total_deposited > 0:
+            withdrawal_percentage = amount / portfolio_value_before
+            cost_basis_withdrawn = total_deposited * withdrawal_percentage
+            realized_pnl_amount = amount - cost_basis_withdrawn
+        else:
+            cost_basis_withdrawn = amount
+            realized_pnl_amount = Decimal(0)
+        
+        # Create withdrawal transaction record with realized PnL tracking
         transaction = await self.create_transaction(
             user_id=user_id,
             transaction_type=TransactionType.WITHDRAW,
             amount_usdc=amount,
             tx_hash=tx_hash,
+            realized_pnl_usdc=realized_pnl_amount,
+            portfolio_value_at_time=portfolio_value_before,
+            cost_basis_withdrawn=cost_basis_withdrawn,
             metadata={
                 "type": "withdrawal",
-                "to_address": to_address or user_id
+                "to_address": to_address or user_id,
+                "withdrawal_percentage": str(withdrawal_percentage) if portfolio_value_before > 0 else "0"
             }
         )
         
@@ -704,12 +738,13 @@ class UserService:
         else:
             amount_returned = final_value_usdc
         
-        # Create transaction record for position exit (credit)
+        # Create transaction record for position exit (credit) with realized PnL
         transaction = Transaction(
             user_id=user_id,
             transaction_type=TransactionType.POSITION_EXIT,
             amount_usdc=amount_returned,  # Amount returned to user
             pool_name=position.pool_name,  # Add pool name from position
+            realized_pnl_usdc=realized_pnl_usdc,  # Track realized PnL from this position
             tx_hash=exit_tx_hash,
             status=TransactionStatus.CONFIRMED,
             tx_metadata=json.dumps({
@@ -855,16 +890,31 @@ class UserService:
         # This shows how much the portfolio has gained/lost vs original investment
         unrealized_pnl = total_portfolio_value - total_deposited
         
-        # Realized PnL = Losses/gains locked in through withdrawals and closed positions
-        # If you deposited $20 and withdrew $15, you realized a portion of any losses
-        # Formula: (Total Withdrawn - Total Deposited) if negative, else track from closed positions
-        if total_withdrawn > 0:
-            # Calculate realized loss from withdrawals
-            # If withdrew less than deposited, that's a realized loss
-            realized_pnl = total_withdrawn - total_deposited
-        else:
-            # No withdrawals yet, so no realized PnL
-            realized_pnl = Decimal(0)
+        # Realized PnL = Sum of realized PnL from all withdrawal transactions
+        # This tracks the actual profit/loss locked in at withdrawal time
+        withdrawal_txns = await self.get_user_transactions(
+            user_id=user_id,
+            transaction_type=TransactionType.WITHDRAW,
+            status=TransactionStatus.CONFIRMED
+        )
+        
+        # Sum up all realized PnL from withdrawals
+        realized_pnl = sum(
+            t.realized_pnl_usdc or Decimal(0) 
+            for t in withdrawal_txns
+        )
+        
+        # Also add realized PnL from closed positions
+        position_exit_txns = await self.get_user_transactions(
+            user_id=user_id,
+            transaction_type=TransactionType.POSITION_EXIT,
+            status=TransactionStatus.CONFIRMED
+        )
+        
+        realized_pnl += sum(
+            t.realized_pnl_usdc or Decimal(0)
+            for t in position_exit_txns
+        )
         
         # Calculate percentages
         if total_deposited > 0:
