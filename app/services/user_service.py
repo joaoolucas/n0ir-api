@@ -822,10 +822,9 @@ class UserService:
                     current_value_usd = Decimal(str(position_info.current_value_usd or 0))
                     unclaimed_fees_usd = Decimal(str(position_info.unclaimed_fees_usd or 0))
                     
-                    # Calculate total position value
+                    # Calculate total position value (liquidity + unclaimed fees only)
+                    # Do NOT add fees_earned_usdc or rewards_earned_usdc as those are already collected
                     position_total = current_value_usd + unclaimed_fees_usd
-                    position_total += (position.rewards_earned_usdc or Decimal(0))
-                    position_total += (position.fees_earned_usdc or Decimal(0))
                     
                     current_positions_value += position_total
                     
