@@ -13,6 +13,7 @@ from app.database.models.user import UserStatus
 from app.database.models.transaction import TransactionType, TransactionStatus
 from app.database.models.position import PositionStatus
 from app.core.logger import logger
+from app.core.positions_service import positions_service
 
 
 class UserService:
@@ -603,8 +604,28 @@ class UserService:
         
         # Calculate final value if not provided
         if final_value_usdc is None:
-            # Use current_value_usdc from database or entry amount as fallback
-            final_value_usdc = position.current_value_usdc or position.entry_amount_usdc
+            # Try to fetch actual value from blockchain
+            try:
+                logger.info(f"Fetching actual value from blockchain for position {nft_token_id}")
+                position_info = await positions_service.get_position_by_id(nft_token_id)
+                
+                if position_info and position_info.current_value_usd:
+                    # Use the actual value from blockchain
+                    final_value_usdc = Decimal(str(position_info.current_value_usd))
+                    
+                    # Add any unclaimed fees to the final value
+                    if position_info.unclaimed_fees_usd:
+                        final_value_usdc += Decimal(str(position_info.unclaimed_fees_usd))
+                    
+                    logger.info(f"Using blockchain value for position {nft_token_id}: {final_value_usdc} USDC")
+                else:
+                    # Fallback to database value if blockchain fetch fails
+                    logger.warning(f"Could not fetch blockchain value for position {nft_token_id}, using database value")
+                    final_value_usdc = position.current_value_usdc or position.entry_amount_usdc
+            except Exception as e:
+                # If blockchain fetch fails, use database value as fallback
+                logger.error(f"Error fetching position {nft_token_id} from blockchain: {e}")
+                final_value_usdc = position.current_value_usdc or position.entry_amount_usdc
         
         # Calculate realized P&L if not provided
         if realized_pnl_usdc is None:
