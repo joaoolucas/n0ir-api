@@ -654,10 +654,10 @@ async def get_pnl(
     user_id: str,
     db: AsyncSession = Depends(get_db)
 ):
-    """Get user P&L summary from stored values.
+    """Get user P&L summary with real-time position values.
     
-    Returns the last calculated PnL values stored in the database.
-    These values are updated when transactions occur (deposits, withdrawals, position changes).
+    This endpoint recalculates PnL using current blockchain position values
+    to ensure accurate unrealized PnL based on market conditions.
     """
     service = UserService(db)
     
@@ -665,6 +665,12 @@ async def get_pnl(
     user = await service.get_user(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    
+    # Recalculate PnL with real-time position values from blockchain
+    await service.recalculate_user_pnl(user_id)
+    
+    # Refresh user to get updated values
+    await db.refresh(user)
     
     # Get fees and rewards from positions for additional metrics
     positions = await service.get_user_positions(user_id)
@@ -703,15 +709,22 @@ async def get_pnl_details(
     user_id: str,
     db: AsyncSession = Depends(get_db)
 ):
-    """Get detailed PnL values including percentages.
+    """Get detailed PnL values with real-time position values.
     
-    Returns all stored PnL metrics including percentages.
+    Returns all PnL metrics including percentages, recalculated with
+    current blockchain position values.
     """
     service = UserService(db)
     user = await service.get_user(user_id)
     
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    
+    # Recalculate PnL with real-time position values
+    await service.recalculate_user_pnl(user_id)
+    
+    # Refresh user to get updated values
+    await db.refresh(user)
     
     return {
         "unrealized_pnl_usdc": user.unrealized_pnl_usdc,
