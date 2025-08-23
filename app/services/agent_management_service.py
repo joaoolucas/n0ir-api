@@ -88,9 +88,9 @@ class AgentManagementService:
         try:
             # Create pubsub with async client
             self._pubsub = self.async_redis_client.pubsub()
-            # Listen for wallet_created, wallet_ready, agent_responses, and transaction_complete
-            await self._pubsub.subscribe('wallet_created', 'wallet_ready', 'agent_responses', 'transaction_complete')
-            logger.info("Subscribed to channels: wallet_created, wallet_ready, agent_responses, transaction_complete")
+            # Listen for wallet_created, wallet_ready, agent_responses, transaction_complete, and position:created
+            await self._pubsub.subscribe('wallet_created', 'wallet_ready', 'agent_responses', 'transaction_complete', 'position:created')
+            logger.info("Subscribed to channels: wallet_created, wallet_ready, agent_responses, transaction_complete, position:created")
             
             # Use async iterator for messages
             async for message in self._pubsub.listen():
@@ -131,6 +131,10 @@ class AgentManagementService:
                                     del self.wallet_callbacks[callback_key]
                                     logger.info(f"Processed withdrawal callback for user {user_id}")
                         
+                        # Handle position:created events
+                        elif message['channel'] == 'position:created':
+                            await self._handle_position_created(data)
+                        
                         # Handle both wallet_created and agent_responses messages for callbacks
                         elif user_id in self.wallet_callbacks:
                             # Check if this is a successful response with wallet
@@ -154,6 +158,65 @@ class AgentManagementService:
             if self._pubsub:
                 await self._pubsub.unsubscribe()
                 await self._pubsub.close()
+    
+    async def _handle_position_created(self, data: Dict) -> None:
+        """Handle position created event from executor.
+        
+        Args:
+            data: Position event data from executor
+        """
+        try:
+            user_id = data.get("user_id")
+            if not user_id:
+                logger.error("Position event missing user_id")
+                return
+            
+            # Extract position data
+            nft_token_id = data.get("nft_token_id")
+            pool_address = data.get("pool_address")
+            entry_amount_usdc = data.get("entry_amount_usdc", 0)
+            
+            logger.info(f"Processing position:created event for user {user_id}, token_id: {nft_token_id}")
+            
+            # Get pool info to get token addresses and tick spacing
+            # For now, we'll use placeholder values - in production, fetch from pool contract
+            # TODO: Fetch actual pool data from blockchain or cache
+            
+            from app.services.user_service import UserService
+            from app.database.session import get_db
+            from decimal import Decimal
+            
+            async for db in get_db():
+                try:
+                    user_service = UserService(db)
+                    
+                    # Create position in database
+                    position = await user_service.create_position(
+                        user_id=user_id,
+                        nft_token_id=nft_token_id,
+                        pool_address=pool_address,
+                        token0_address="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",  # USDC on Base
+                        token1_address="0x4200000000000000000000000000000000000006",  # WETH on Base
+                        tick_lower=data.get("lower_tick", 0),
+                        tick_upper=data.get("upper_tick", 0),
+                        tick_spacing=100,  # Default tick spacing, should fetch from pool
+                        liquidity=str(data.get("liquidity", 0)),
+                        entry_amount_usdc=Decimal(str(entry_amount_usdc)),
+                        entry_tx_hash=data.get("tx_hash"),
+                        staked=data.get("staked", False),
+                        gauge_address=data.get("gauge_address"),
+                        pool_name=None  # Will be set by the service
+                    )
+                    
+                    logger.info(f"Successfully created position record for token_id: {nft_token_id}")
+                    break
+                    
+                except Exception as e:
+                    logger.error(f"Failed to create position in database: {e}")
+                    break
+                    
+        except Exception as e:
+            logger.error(f"Error handling position:created event: {e}")
     
     async def start_agent(self, user_id: str, wait_for_wallet: bool = True) -> Dict:
         """Smart agent start - handles wallet creation if needed.

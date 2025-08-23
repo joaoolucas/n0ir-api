@@ -287,10 +287,12 @@ class StrategyOrchestrator:
             
             # Use recommended allocation or calculate based on available capital
             # For small balances, use most of the capital in a single position
-            if available_capital < 30:
+            if available_capital < 250:
                 amount = available_capital * 0.95  # Use 95% of capital for single position
-            elif available_capital < 100:
-                amount = min(recommended_allocation, available_capital * 0.5)  # Use up to 50%
+            elif available_capital < 500:
+                amount = available_capital * 0.45  # Use 45% per position (2 positions)
+            elif available_capital < 1000:
+                amount = available_capital * 0.30  # Use 30% per position (3 positions)
             else:
                 amount = min(recommended_allocation, available_capital)
             
@@ -473,10 +475,12 @@ class StrategyOrchestrator:
         
         # Calculate optimal capital allocation
         # For small balances, use fewer positions to avoid gas cost issues
-        if available_capital < 30:
-            optimal_positions = 1  # Single position for very small balances
-        elif available_capital < 100:
-            optimal_positions = min(2, max(1, int(available_capital / 30)))  # 1-2 positions
+        if available_capital < 250:
+            optimal_positions = 1  # Single position for balances under $250
+        elif available_capital < 500:
+            optimal_positions = 2  # Two positions for $250-500
+        elif available_capital < 1000:
+            optimal_positions = 3  # Three positions for $500-1000
         else:
             optimal_positions = min(
                 max(3, int((available_capital / 1000) ** 0.5)),  # Square root rule for larger amounts
