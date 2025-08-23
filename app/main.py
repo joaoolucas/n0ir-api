@@ -25,8 +25,11 @@ async def lifespan(app: FastAPI):
             logger.info("Publishing initial balance events for existing users...")
             from app.services.user_service import UserService
             from app.database.session import get_db
+            from app.database.schema_fixes import ensure_schema_compatibility
             
             async for db in get_db():
+                # Ensure schema compatibility first
+                await ensure_schema_compatibility(db)
                 user_service = UserService(db)
                 users = await user_service.list_all_users()
                 
