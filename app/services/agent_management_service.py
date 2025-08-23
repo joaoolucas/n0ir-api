@@ -377,7 +377,7 @@ class AgentManagementService:
             'user_id': user_id,
             'amount_usdc': amount,
             'to_address': to_address,
-            'positions_to_close': positions_to_close or [],  # Tell agent which positions need closing
+            'positions_to_close': json.dumps(positions_to_close or []),  # Serialize list to JSON string
             'timestamp': datetime.utcnow().isoformat()
         }
         
