@@ -153,6 +153,54 @@ async def ensure_schema_compatibility(session: AsyncSession):
             await session.commit()
             logger.info("Created agent_events table")
         
+        # 6. Add protocol fee columns to positions table if missing
+        logger.info("Checking for protocol fee columns in positions table...")
+        
+        # Check which columns exist
+        result = await session.execute(text("""
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name = 'positions' 
+            AND column_name IN ('protocol_fee_amount', 'protocol_fee_collected', 'protocol_fee_tx_hash')
+        """))
+        existing_columns = [row[0] for row in result.fetchall()]
+        
+        # Add missing columns
+        if 'protocol_fee_amount' not in existing_columns:
+            logger.info("Adding protocol_fee_amount column to positions table...")
+            await session.execute(text("""
+                ALTER TABLE positions 
+                ADD COLUMN protocol_fee_amount DECIMAL(20, 8) DEFAULT 0
+            """))
+            await session.commit()
+            logger.info("Added protocol_fee_amount column")
+        
+        if 'protocol_fee_collected' not in existing_columns:
+            logger.info("Adding protocol_fee_collected column to positions table...")
+            await session.execute(text("""
+                ALTER TABLE positions
+                ADD COLUMN protocol_fee_collected BOOLEAN DEFAULT FALSE
+            """))
+            await session.commit()
+            logger.info("Added protocol_fee_collected column")
+        
+        if 'protocol_fee_tx_hash' not in existing_columns:
+            logger.info("Adding protocol_fee_tx_hash column to positions table...")
+            await session.execute(text("""
+                ALTER TABLE positions
+                ADD COLUMN protocol_fee_tx_hash VARCHAR(255)
+            """))
+            await session.commit()
+            logger.info("Added protocol_fee_tx_hash column")
+        
+        # Add index for better query performance
+        await session.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_positions_protocol_fee_collected 
+            ON positions(protocol_fee_collected) 
+            WHERE protocol_fee_collected = FALSE
+        """))
+        await session.commit()
+        
         logger.info("Schema compatibility check completed")
         
     except Exception as e:
