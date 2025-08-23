@@ -19,6 +19,35 @@ async def lifespan(app: FastAPI):
         if agent_service.redis_client:
             await agent_service.start_listener()
             logger.info("Agent management service listener started successfully")
+            
+            # Publish balance events for existing users with balance > 0
+            # This ensures agents start for users who already have sufficient balance
+            logger.info("Publishing initial balance events for existing users...")
+            from app.services.user_service import UserService
+            from app.database.session import get_db
+            
+            async for db in get_db():
+                user_service = UserService(db)
+                users = await user_service.list_all_users()
+                
+                for user in users:
+                    try:
+                        # Get user's current balance
+                        balance = await user_service.get_user_balance(user.user_id)
+                        
+                        if balance and balance > 0:
+                            # Publish balance event to trigger agent startup if balance >= 10
+                            await agent_service.publish_balance_event(
+                                user_id=user.user_id,
+                                balance=float(balance),
+                                event_type='startup_check'
+                            )
+                            logger.info(f"Published startup balance event for {user.user_id}: {balance} USDC")
+                    except Exception as e:
+                        logger.error(f"Error publishing balance event for {user.user_id}: {e}")
+                
+                logger.info("Initial balance events published")
+                break  # Exit the async generator after first iteration
         else:
             logger.warning("Agent management service running without Redis")
     except Exception as e:
