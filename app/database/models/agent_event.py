@@ -26,7 +26,7 @@ class AgentEvent(Base):
     balance_at_event = Column(Numeric(precision=20, scale=6), nullable=True)
     agent_status = Column(String(20), nullable=True)
     error_message = Column(Text, nullable=True)
-    metadata = Column(JSON, nullable=True)
+    event_metadata = Column(JSON, nullable=True)
     
     # Timestamp
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)

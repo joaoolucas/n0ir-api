@@ -39,7 +39,7 @@ def upgrade() -> None:
         sa.Column('balance_at_event', sa.Numeric(precision=20, scale=6), nullable=True),
         sa.Column('agent_status', sa.String(20), nullable=True),
         sa.Column('error_message', sa.Text(), nullable=True),
-        sa.Column('metadata', sa.JSON(), nullable=True),
+        sa.Column('event_metadata', sa.JSON(), nullable=True),
         sa.Column('created_at', sa.DateTime(), nullable=False, server_default=sa.func.now()),
         sa.ForeignKeyConstraint(['user_id'], ['users.user_id'], ondelete='CASCADE'),
     )
