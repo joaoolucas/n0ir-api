@@ -94,6 +94,9 @@ class StrategyService:
         """
         Find and rank pool opportunities based on the quantitative scoring model.
         """
+        # Strip whitespace from executor address to prevent validation errors
+        request.executor_address = request.executor_address.strip()
+        
         # Check cache
         import hashlib
         cache_key = f"strategy_opportunities:{hashlib.md5(str(request.dict()).encode()).hexdigest()}"

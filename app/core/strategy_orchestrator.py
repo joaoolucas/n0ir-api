@@ -55,6 +55,9 @@ class StrategyOrchestrator:
         """
         start_time = time.time()
         
+        # Strip whitespace from executor address to prevent validation errors
+        executor_address = executor_address.strip()
+        
         # Check cache first
         cache_key = self._build_cache_key(executor_address, available_capital)
         cached_result = await self.cache_manager.get_custom(cache_key)
@@ -150,6 +153,9 @@ class StrategyOrchestrator:
         
         Returns dict with positions and calculated values.
         """
+        # Ensure address is clean
+        executor_address = executor_address.strip()
+        
         tasks = [
             self.positions_service.get_positions_by_owner(executor_address)
         ]

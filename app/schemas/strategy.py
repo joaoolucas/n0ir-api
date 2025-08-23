@@ -47,6 +47,11 @@ class OpportunitiesRequest(BaseModel):
     """Request for finding pool opportunities."""
     executor_address: str
     available_capital: float = Field(..., gt=0)
+    
+    @validator('executor_address')
+    def strip_executor_address(cls, v: str) -> str:
+        """Strip whitespace from executor address."""
+        return v.strip() if v else v
 
 
 class AnalyzeEntryRequest(BaseModel):
