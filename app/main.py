@@ -26,6 +26,11 @@ async def lifespan(app: FastAPI):
     try:
         # Get the singleton instance
         agent_service = get_agent_service()
+        
+        # Initialize the Redis connection first
+        await agent_service._ensure_initialized()
+        
+        # Now check if Redis client exists after initialization
         if agent_service.redis_client:
             await agent_service.start_listener()
             logger.info("Agent management service listener started successfully")
