@@ -286,7 +286,13 @@ class StrategyOrchestrator:
                 safety_score = opportunity.get('safety_score', 0)
             
             # Use recommended allocation or calculate based on available capital
-            amount = min(recommended_allocation, available_capital)
+            # For small balances, use most of the capital in a single position
+            if available_capital < 30:
+                amount = available_capital * 0.95  # Use 95% of capital for single position
+            elif available_capital < 100:
+                amount = min(recommended_allocation, available_capital * 0.5)  # Use up to 50%
+            else:
+                amount = min(recommended_allocation, available_capital)
             
             request = AnalyzeEntryRequest(
                 pool_address=pool_address,
@@ -466,10 +472,16 @@ class StrategyOrchestrator:
                 })
         
         # Calculate optimal capital allocation
-        optimal_positions = min(
-            max(3, int((available_capital / 1000) ** 0.5)),  # Square root rule
-            10  # Max positions
-        )
+        # For small balances, use fewer positions to avoid gas cost issues
+        if available_capital < 30:
+            optimal_positions = 1  # Single position for very small balances
+        elif available_capital < 100:
+            optimal_positions = min(2, max(1, int(available_capital / 30)))  # 1-2 positions
+        else:
+            optimal_positions = min(
+                max(3, int((available_capital / 1000) ** 0.5)),  # Square root rule for larger amounts
+                10  # Max positions
+            )
         
         allocation_per_position = available_capital / optimal_positions if optimal_positions > 0 else 0
         
