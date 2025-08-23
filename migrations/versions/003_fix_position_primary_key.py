@@ -1,109 +1,166 @@
-"""Fix position table primary key - use nft_token_id instead of position_id
+"""Fix position primary key
 
 Revision ID: 003_fix_position_primary_key
 Revises: 002_simplify_schema
-Create Date: 2025-08-21
+Create Date: 2025-08-22 12:00:00.000000
 
 """
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
+from sqlalchemy import text
 
 # revision identifiers, used by Alembic.
 revision = '003_fix_position_primary_key'
-down_revision = 'd8de59893c30'
+down_revision = '002_simplify_schema'
 branch_labels = None
 depends_on = None
 
 
-def upgrade():
-    """Change primary key from position_id to nft_token_id."""
+def upgrade() -> None:
+    """Change positions table to use nft_token_id as primary key."""
     
-    # Check if we need to do the migration by checking if position_id column exists
+    # Get the connection
     conn = op.get_bind()
-    inspector = sa.inspect(conn)
-    columns = [col['name'] for col in inspector.get_columns('positions')]
     
-    # If position_id doesn't exist, the migration was already applied
-    if 'position_id' not in columns:
-        print("Migration already applied - position_id column not found")
+    # Check if position_id column exists
+    result = conn.execute(text("""
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = 'positions' 
+        AND column_name = 'position_id'
+    """))
+    has_position_id = result.fetchone() is not None
+    
+    if not has_position_id:
+        print("position_id column doesn't exist, skipping migration")
         return
     
-    # Get existing constraints to check their names
-    constraints = inspector.get_pk_constraint('positions')
-    pk_name = constraints['name'] if constraints else None
+    # Check for existing primary key constraint
+    result = conn.execute(text("""
+        SELECT constraint_name 
+        FROM information_schema.table_constraints 
+        WHERE table_name = 'positions' 
+        AND constraint_type = 'PRIMARY KEY'
+    """))
+    pk_constraint = result.fetchone()
     
-    # 1. Drop foreign key constraints that reference position_id (if exists)
-    try:
+    # Check for foreign key constraint
+    result = conn.execute(text("""
+        SELECT constraint_name 
+        FROM information_schema.table_constraints 
+        WHERE table_name = 'transactions' 
+        AND constraint_name = 'fk_transaction_position'
+    """))
+    has_fk = result.fetchone() is not None
+    
+    # 1. Drop foreign key constraint if it exists
+    if has_fk:
         op.drop_constraint('fk_transaction_position', 'transactions', type_='foreignkey')
-    except:
-        pass  # Constraint might not exist
     
     # 2. Drop the primary key constraint if it exists
-    if pk_name:
-        try:
-            op.drop_constraint(pk_name, 'positions', type_='primary')
-        except:
-            pass  # Constraint might not exist or already dropped
+    if pk_constraint:
+        op.drop_constraint(pk_constraint[0], 'positions', type_='primary')
     
     # 3. Drop the position_id column
-    try:
-        op.drop_column('positions', 'position_id')
-    except:
-        pass  # Column might not exist
+    op.drop_column('positions', 'position_id')
     
-    # 4. Create new primary key on nft_token_id
-    try:
+    # 4. Check if nft_token_id already has a primary key
+    result = conn.execute(text("""
+        SELECT constraint_name 
+        FROM information_schema.table_constraints 
+        WHERE table_name = 'positions' 
+        AND constraint_type = 'PRIMARY KEY'
+        AND constraint_name = 'positions_pkey'
+    """))
+    has_new_pk = result.fetchone() is not None
+    
+    if not has_new_pk:
+        # Create new primary key on nft_token_id
         op.create_primary_key('positions_pkey', 'positions', ['nft_token_id'])
-    except:
-        pass  # Primary key might already exist
     
-    # 5. Create unique index on nft_token_id for better performance (if not exists)
-    try:
+    # 5. Check if index already exists
+    result = conn.execute(text("""
+        SELECT indexname 
+        FROM pg_indexes 
+        WHERE tablename = 'positions' 
+        AND indexname = 'idx_position_nft_token_id'
+    """))
+    has_index = result.fetchone() is not None
+    
+    if not has_index:
         op.create_index('idx_position_nft_token_id', 'positions', ['nft_token_id'], unique=True)
-    except:
-        pass  # Index might already exist
     
-    # 6. Recreate the foreign key for transactions using nft_token_id
-    try:
+    # 6. Check if related_position_id column exists in transactions
+    result = conn.execute(text("""
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = 'transactions' 
+        AND column_name = 'related_position_id'
+    """))
+    has_related_position = result.fetchone() is not None
+    
+    if has_related_position:
+        # Recreate the foreign key for transactions using nft_token_id
         op.create_foreign_key(
             'fk_transaction_position',
             'transactions', 'positions',
             ['related_position_id'], ['nft_token_id']
         )
-    except:
-        pass  # Foreign key might already exist
     
     print("Successfully migrated positions table to use nft_token_id as primary key")
 
 
-def downgrade():
+def downgrade() -> None:
     """Revert to using position_id as primary key."""
     
-    # 1. Drop the foreign key constraint
-    op.drop_constraint('fk_transaction_position', 'transactions', type_='foreignkey')
+    # Get the connection
+    conn = op.get_bind()
     
-    # 2. Drop the unique index on nft_token_id
-    op.drop_index('idx_position_nft_token_id', table_name='positions')
+    # Check if foreign key exists
+    result = conn.execute(text("""
+        SELECT constraint_name 
+        FROM information_schema.table_constraints 
+        WHERE table_name = 'transactions' 
+        AND constraint_name = 'fk_transaction_position'
+    """))
+    has_fk = result.fetchone() is not None
     
-    # 3. Drop the primary key on nft_token_id
+    if has_fk:
+        op.drop_constraint('fk_transaction_position', 'transactions', type_='foreignkey')
+    
+    # Drop the primary key on nft_token_id
     op.drop_constraint('positions_pkey', 'positions', type_='primary')
     
-    # 4. Add position_id column back
-    op.add_column('positions',
-        sa.Column('position_id', postgresql.UUID(as_uuid=True), 
-                  server_default=sa.text('gen_random_uuid()'), nullable=False))
+    # Drop the index if it exists
+    result = conn.execute(text("""
+        SELECT indexname 
+        FROM pg_indexes 
+        WHERE tablename = 'positions' 
+        AND indexname = 'idx_position_nft_token_id'
+    """))
+    has_index = result.fetchone() is not None
     
-    # 5. Create primary key on position_id
-    op.create_primary_key('positions_pkey', 'positions', ['position_id'])
+    if has_index:
+        op.drop_index('idx_position_nft_token_id', 'positions')
     
-    # 6. Recreate the foreign key using position_id
-    # Note: This will fail if related_position_id has integer values
-    # Would need data migration to convert integer token IDs to UUIDs
-    op.create_foreign_key(
-        'fk_transaction_position',
-        'transactions', 'positions',
-        ['related_position_id'], ['position_id']
-    )
+    # Add back the position_id column
+    op.add_column('positions', sa.Column('position_id', sa.UUID(), nullable=False))
     
-    print("Reverted positions table to use position_id as primary key")
+    # Create primary key on position_id
+    op.create_primary_key('pk_positions', 'positions', ['position_id'])
+    
+    # Recreate the foreign key for transactions using position_id
+    result = conn.execute(text("""
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = 'transactions' 
+        AND column_name = 'related_position_id'
+    """))
+    has_related_position = result.fetchone() is not None
+    
+    if has_related_position:
+        op.create_foreign_key(
+            'fk_transaction_position',
+            'transactions', 'positions',
+            ['related_position_id'], ['position_id']
+        )
