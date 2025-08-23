@@ -9,18 +9,42 @@ async def ensure_schema_compatibility(session: AsyncSession):
     """Ensure all required schema elements exist in the database."""
     
     try:
-        # 1. Check and create AgentStatus enum if it doesn't exist
+        # 1. Check for existing agent status enum types
         result = await session.execute(text("""
-            SELECT EXISTS (
-                SELECT 1 FROM pg_type WHERE typname = 'agentstatus'
-            )
+            SELECT typname FROM pg_type 
+            WHERE typname IN ('agentstatus', 'agent_status_enum')
         """))
-        has_agent_status = result.scalar()
+        existing_enums = [row[0] for row in result.fetchall()]
         
-        if not has_agent_status:
-            logger.info("Creating AgentStatus enum...")
-            await session.execute(text("""
-                CREATE TYPE agentstatus AS ENUM (
+        # Determine which enum to use and clean up duplicates
+        if 'agent_status_enum' in existing_enums:
+            enum_name = 'agent_status_enum'
+            logger.info("Using existing agent_status_enum type")
+            
+            # Drop the duplicate agentstatus type if it exists
+            if 'agentstatus' in existing_enums:
+                try:
+                    await session.execute(text("DROP TYPE IF EXISTS agentstatus CASCADE"))
+                    await session.commit()
+                    logger.info("Dropped duplicate agentstatus type")
+                except:
+                    pass  # Ignore if we can't drop it
+        elif 'agentstatus' in existing_enums:
+            # Rename agentstatus to agent_status_enum for consistency
+            try:
+                await session.execute(text("ALTER TYPE agentstatus RENAME TO agent_status_enum"))
+                await session.commit()
+                enum_name = 'agent_status_enum'
+                logger.info("Renamed agentstatus to agent_status_enum")
+            except:
+                enum_name = 'agentstatus'
+                logger.info("Using existing agentstatus type")
+        else:
+            # Create the enum if neither exists
+            enum_name = 'agent_status_enum'
+            logger.info(f"Creating {enum_name} enum...")
+            await session.execute(text(f"""
+                CREATE TYPE {enum_name} AS ENUM (
                     'not_started',
                     'starting',
                     'running',
@@ -30,7 +54,7 @@ async def ensure_schema_compatibility(session: AsyncSession):
                 )
             """))
             await session.commit()
-            logger.info("Created AgentStatus enum")
+            logger.info(f"Created {enum_name} enum")
         
         # 2. Check and add agent_status columns to users table if they don't exist
         result = await session.execute(text("""
@@ -42,10 +66,10 @@ async def ensure_schema_compatibility(session: AsyncSession):
         has_agent_status_col = result.fetchone() is not None
         
         if not has_agent_status_col:
-            logger.info("Adding agent_status columns to users table...")
-            await session.execute(text("""
+            logger.info(f"Adding agent_status columns to users table using {enum_name}...")
+            await session.execute(text(f"""
                 ALTER TABLE users
-                ADD COLUMN IF NOT EXISTS agent_status agentstatus DEFAULT 'not_started',
+                ADD COLUMN IF NOT EXISTS agent_status {enum_name} DEFAULT 'not_started',
                 ADD COLUMN IF NOT EXISTS agent_started_at TIMESTAMP WITH TIME ZONE,
                 ADD COLUMN IF NOT EXISTS agent_stopped_at TIMESTAMP WITH TIME ZONE,
                 ADD COLUMN IF NOT EXISTS last_balance_check TIMESTAMP WITH TIME ZONE

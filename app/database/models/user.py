@@ -46,7 +46,7 @@ class User(Base):
     realized_pnl_percentage = Column(Numeric(precision=10, scale=2), default=0, nullable=False)
     
     # Agent state tracking
-    agent_status = Column(SQLEnum(AgentStatus), default=AgentStatus.not_started, nullable=False)
+    agent_status = Column(SQLEnum(AgentStatus, name='agent_status_enum'), default=AgentStatus.not_started, nullable=False)
     agent_started_at = Column(DateTime(timezone=True), nullable=True)
     agent_stopped_at = Column(DateTime(timezone=True), nullable=True)
     last_balance_check = Column(DateTime(timezone=True), nullable=True)
