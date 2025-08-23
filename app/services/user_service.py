@@ -69,6 +69,12 @@ class UserService:
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
     
+    async def list_all_users(self) -> List[User]:
+        """List all users."""
+        stmt = select(User).where(User.status == UserStatus.ACTIVE)
+        result = await self.db.execute(stmt)
+        return result.scalars().all()
+    
     async def get_user_by_wallet(self, wallet_address: str) -> Optional[User]:
         """Get user by wallet address."""
         stmt = select(User).where(User.wallet_address == wallet_address)

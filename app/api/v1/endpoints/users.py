@@ -176,6 +176,28 @@ async def enrich_position_with_pool_data(position) -> dict:
 
 
 # User Management Endpoints
+@router.get("", response_model=List[UserResponse])
+async def list_users(
+    db: AsyncSession = Depends(get_db)
+):
+    """List all users with their current balances.
+    
+    This endpoint is used by the balance monitor to track which agents should be running.
+    """
+    service = UserService(db)
+    users = await service.list_all_users()
+    
+    # Get balance for each user
+    users_with_balance = []
+    for user in users:
+        balance = await service.get_user_balance(user.user_id)
+        user_dict = UserResponse.model_validate(user).model_dump()
+        user_dict['usdc_balance'] = float(balance)
+        users_with_balance.append(user_dict)
+    
+    return users_with_balance
+
+
 @router.post("", response_model=UserResponse, status_code=201)
 async def create_user(
     request: CreateUserRequest,

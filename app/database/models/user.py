@@ -18,12 +18,12 @@ class UserStatus(enum.Enum):
 
 
 class AgentStatus(enum.Enum):
-    NOT_STARTED = "not_started"
-    STARTING = "starting"
-    RUNNING = "running"
-    STOPPING = "stopping"
-    STOPPED = "stopped"
-    FAILED = "failed"
+    not_started = "not_started"
+    starting = "starting"
+    running = "running"
+    stopping = "stopping"
+    stopped = "stopped"
+    failed = "failed"
 
 
 class User(Base):
@@ -46,7 +46,7 @@ class User(Base):
     realized_pnl_percentage = Column(Numeric(precision=10, scale=2), default=0, nullable=False)
     
     # Agent state tracking
-    agent_status = Column(SQLEnum(AgentStatus), default=AgentStatus.NOT_STARTED, nullable=False)
+    agent_status = Column(SQLEnum(AgentStatus), default=AgentStatus.not_started, nullable=False)
     agent_started_at = Column(DateTime(timezone=True), nullable=True)
     agent_stopped_at = Column(DateTime(timezone=True), nullable=True)
     last_balance_check = Column(DateTime(timezone=True), nullable=True)
