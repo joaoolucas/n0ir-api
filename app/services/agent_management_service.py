@@ -266,6 +266,43 @@ class AgentManagementService:
             logger.error(f"Error getting agent status: {e}")
             return None
     
+    async def publish_balance_event(
+        self, 
+        user_id: str, 
+        balance: float,
+        event_type: str = 'balance_changed'
+    ) -> bool:
+        """Publish a balance change event to trigger agent lifecycle management.
+        
+        Args:
+            user_id: User's wallet address
+            balance: New balance amount
+            event_type: Type of event ('deposit', 'withdrawal', or 'balance_changed')
+        
+        Returns:
+            True if event was published successfully
+        """
+        await self._ensure_initialized()
+        if not self.redis_client:
+            logger.warning("Redis not available, cannot publish balance event")
+            return False
+        
+        event_data = {
+            'user_id': user_id,
+            'balance': str(balance),
+            'event_type': event_type,
+            'timestamp': datetime.utcnow().isoformat()
+        }
+        
+        try:
+            # Publish to balance change channel
+            self.redis_client.publish('user:balance:changed', json.dumps(event_data))
+            logger.info(f"Published balance event for {user_id}: {event_type} -> {balance} USDC")
+            return True
+        except Exception as e:
+            logger.error(f"Error publishing balance event: {e}")
+            return False
+    
     async def list_all_agents(self) -> list:
         """List all agents and their statuses."""
         await self._ensure_initialized()

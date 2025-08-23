@@ -14,6 +14,7 @@ from app.database.models.transaction import TransactionType, TransactionStatus
 from app.database.models.position import PositionStatus
 from app.core.logger import logger
 from app.core.positions_service import positions_service
+from app.services.agent_management_service import get_agent_service
 
 
 class UserService:
@@ -247,6 +248,16 @@ class UserService:
         # Recalculate user PnL after deposit
         if tx_hash:  # Only recalculate for confirmed deposits
             await self.recalculate_user_pnl(user_id)
+            
+            # Publish balance change event for confirmed deposits
+            new_balance = await self.get_user_balance(user_id)
+            agent_service = get_agent_service()
+            await agent_service.publish_balance_event(
+                user_id=user_id,
+                balance=float(new_balance),
+                event_type='deposit'
+            )
+            logger.info(f"Published balance event after deposit for {user_id}: {new_balance} USDC")
         
         logger.info(f"Processed deposit of {amount} USDC for user {user_id}")
         return transaction
@@ -410,6 +421,16 @@ class UserService:
         # Recalculate user PnL after withdrawal
         if tx_hash:  # Only recalculate for confirmed withdrawals
             await self.recalculate_user_pnl(user_id)
+            
+            # Publish balance change event for confirmed withdrawals
+            new_balance = await self.get_user_balance(user_id)
+            agent_service = get_agent_service()
+            await agent_service.publish_balance_event(
+                user_id=user_id,
+                balance=float(new_balance),
+                event_type='withdrawal'
+            )
+            logger.info(f"Published balance event after withdrawal for {user_id}: {new_balance} USDC")
         
         logger.info(f"Processed withdrawal of {amount} USDC for user {user_id} (tx: {tx_hash})")
         return transaction

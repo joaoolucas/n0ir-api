@@ -6,7 +6,6 @@ from loguru import logger
 from app.database.session import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.user_service import UserService
-from app.services.agent_management_service import get_agent_service
 from app.core.pools_service import pools_service
 from app.core.positions_service import positions_service
 from app.schemas.users import (
@@ -219,27 +218,9 @@ async def create_user(
             cdp_wallet_name=f"n0ir-agent-{request.user_id[:8]}"  # Shortened for readability
         )
         
-        # Start agent if requested
-        if request.start_agent:
-            agent_service = get_agent_service()
-            logger.info(f"Starting agent for user {request.user_id}")
-            agent_result = await agent_service.start_agent(request.user_id, wait_for_wallet=True)
-            
-            if agent_result.get('success'):
-                wallet_address = agent_result.get('wallet_address')
-                if wallet_address:
-                    logger.info(f"CDP wallet created for user {request.user_id}: {wallet_address}")
-                    # Update user with actual wallet information
-                    user.cdp_wallet_address = wallet_address
-                    # Commit the wallet address update to database
-                    await db.commit()
-                    await db.refresh(user)
-                else:
-                    logger.warning(f"Agent started but no CDP wallet address returned for {request.user_id}")
-            else:
-                # Log warning but don't fail user creation
-                logger.warning(f"Agent start failed for user {request.user_id}: {agent_result.get('error', 'Unknown error')}")
-                # User is still created, they can start agent later
+        # Agents are now automatically started based on balance
+        # No manual agent start needed
+        logger.info(f"User {request.user_id} created successfully. Agent will auto-start when balance > {10} USDC")
         
         return UserResponse.model_validate(user)
         
@@ -263,58 +244,6 @@ async def get_user(
     return UserResponse.model_validate(user)
 
 
-@router.post("/{user_id}/retry-wallet", response_model=UserResponse)
-async def retry_wallet_creation(
-    user_id: str,
-    db: AsyncSession = Depends(get_db)
-):
-    """Retry CDP wallet creation for an existing user.
-    
-    Use this endpoint when:
-    - User was created but wallet creation timed out
-    - Agent-manager was down during initial user creation
-    - CDP wallet is still 'pending'
-    """
-    service = UserService(db)
-    user = await service.get_user(user_id)
-    
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # Check if wallet already exists
-    if user.cdp_wallet_address and not user.cdp_wallet_address.startswith("pending_"):
-        raise HTTPException(
-            status_code=400, 
-            detail=f"User already has CDP wallet: {user.cdp_wallet_address}"
-        )
-    
-    # Try to create wallet via agent
-    agent_service = get_agent_service()
-    logger.info(f"Retrying CDP wallet creation for user {user_id}")
-    
-    agent_result = await agent_service.start_agent(user_id, wait_for_wallet=True)
-    
-    if agent_result.get('success'):
-        wallet_address = agent_result.get('wallet_address')
-        if wallet_address:
-            logger.info(f"CDP wallet created for user {user_id}: {wallet_address}")
-            
-            # Update user with wallet address
-            user.cdp_wallet_address = wallet_address
-            await db.commit()
-            await db.refresh(user)
-            
-            return UserResponse.model_validate(user)
-        else:
-            raise HTTPException(
-                status_code=500,
-                detail="Agent started but no wallet address returned"
-            )
-    else:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Wallet creation failed: {agent_result.get('error', 'Unknown error')}"
-        )
 
 
 # Financial Operations

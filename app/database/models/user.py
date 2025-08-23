@@ -1,6 +1,6 @@
 from datetime import datetime
-from typing import List, TYPE_CHECKING
-from sqlalchemy import Column, String, DateTime, Enum as SQLEnum, Index, Numeric
+from typing import List, TYPE_CHECKING, Optional
+from sqlalchemy import Column, String, DateTime, Enum as SQLEnum, Index, Numeric, JSON
 from sqlalchemy.orm import relationship, Mapped
 import enum
 from app.database.base import Base
@@ -8,12 +8,22 @@ from app.database.base import Base
 if TYPE_CHECKING:
     from app.database.models.transaction import Transaction
     from app.database.models.position import Position
+    from app.database.models.agent_event import AgentEvent
 
 
 class UserStatus(enum.Enum):
     ACTIVE = "active"
     SUSPENDED = "suspended"
     CLOSED = "closed"
+
+
+class AgentStatus(enum.Enum):
+    NOT_STARTED = "not_started"
+    STARTING = "starting"
+    RUNNING = "running"
+    STOPPING = "stopping"
+    STOPPED = "stopped"
+    FAILED = "failed"
 
 
 class User(Base):
@@ -35,6 +45,13 @@ class User(Base):
     unrealized_pnl_percentage = Column(Numeric(precision=10, scale=2), default=0, nullable=False)
     realized_pnl_percentage = Column(Numeric(precision=10, scale=2), default=0, nullable=False)
     
+    # Agent state tracking
+    agent_status = Column(SQLEnum(AgentStatus), default=AgentStatus.NOT_STARTED, nullable=False)
+    agent_started_at = Column(DateTime(timezone=True), nullable=True)
+    agent_stopped_at = Column(DateTime(timezone=True), nullable=True)
+    last_balance_check = Column(DateTime(timezone=True), nullable=True)
+    agent_metadata = Column(JSON, nullable=True)
+    
     # Timestamps
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -49,6 +66,13 @@ class User(Base):
     
     positions: Mapped[List["Position"]] = relationship(
         "Position",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        lazy="select"
+    )
+    
+    agent_events: Mapped[List["AgentEvent"]] = relationship(
+        "AgentEvent",
         back_populates="user",
         cascade="all, delete-orphan",
         lazy="select"
