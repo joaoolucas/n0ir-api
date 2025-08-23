@@ -184,12 +184,9 @@ class AgentManagementService:
             self.wallet_callbacks[user_id] = wallet_future
             
             try:
-                # Publish command and check if anyone is listening
-                num_subscribers = await self.async_redis_client.publish('agent_commands', json.dumps(command))
-                logger.info(f"Published start command for {user_id} to {num_subscribers} subscribers, waiting for wallet...")
-                
-                if num_subscribers == 0:
-                    logger.error(f"No subscribers listening on 'agent_commands' channel! Agent manager may not be running or connected.")
+                # Use Redis Stream instead of pub/sub
+                stream_id = await self.async_redis_client.xadd('agent:commands:stream', command)
+                logger.info(f"Added start command for {user_id} to stream: {stream_id}, waiting for wallet...")
                 
                 # Wait for wallet creation or confirmation
                 wallet_data = await asyncio.wait_for(wallet_future, timeout=60)
@@ -214,8 +211,8 @@ class AgentManagementService:
         else:
             # Just start the agent without waiting
             try:
-                await self.async_redis_client.publish('agent_commands', json.dumps(command))
-                logger.info(f"Published start command for {user_id} (no wait)")
+                stream_id = await self.async_redis_client.xadd('agent:commands:stream', command)
+                logger.info(f"Added start command for {user_id} to stream: {stream_id} (no wait)")
                 
                 return {
                     'success': True,
@@ -241,7 +238,8 @@ class AgentManagementService:
         }
         
         try:
-            await self.async_redis_client.publish('agent_commands', json.dumps(command))
+            stream_id = await self.async_redis_client.xadd('agent:commands:stream', command)
+            logger.info(f"Added stop command for {user_id} to stream: {stream_id}")
             return True
         except Exception as e:
             logger.error(f"Error requesting agent stop: {e}")
@@ -342,7 +340,8 @@ class AgentManagementService:
         }
         
         try:
-            await self.async_redis_client.publish('agent_commands', json.dumps(command))
+            stream_id = await self.async_redis_client.xadd('agent:commands:stream', command)
+            logger.info(f"Added restart command for {user_id} to stream: {stream_id}")
             return {
                 'success': True,
                 'user_id': user_id,
@@ -387,14 +386,9 @@ class AgentManagementService:
         self.wallet_callbacks[f"{user_id}:withdraw"] = withdrawal_future
         
         try:
-            # Publish withdrawal command using async client
-            num_subscribers = await self.async_redis_client.publish('agent_commands', json.dumps(command))
-            logger.info(f"Published withdraw command for {user_id} ({amount} USDC) to {num_subscribers} subscribers")
-            
-            if num_subscribers == 0:
-                logger.error("No subscribers on 'agent_commands' channel! Agent manager may not be running.")
-                del self.wallet_callbacks[f"{user_id}:withdraw"]
-                return {'success': False, 'error': 'Agent manager not available'}
+            # Use Redis Stream instead of pub/sub
+            stream_id = await self.async_redis_client.xadd('agent:commands:stream', command)
+            logger.info(f"Added withdraw command for {user_id} ({amount} USDC) to stream: {stream_id}")
             
             # Wait for transaction result (timeout after 30 seconds)
             result = await asyncio.wait_for(withdrawal_future, timeout=30)
