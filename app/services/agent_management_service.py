@@ -245,6 +245,61 @@ class AgentManagementService:
             logger.error(f"Error requesting agent stop: {e}")
             return False
     
+    async def create_wallet_for_user(self, user_id: str) -> Dict:
+        """Request CDP wallet creation for a user without starting the full agent.
+        
+        Args:
+            user_id: The user's wallet address (used as ID)
+        
+        Returns:
+            Dict with wallet creation status and address
+        """
+        await self._ensure_initialized()
+        if not self.redis_client:
+            logger.warning("Redis not available, cannot create wallet")
+            return {'success': False, 'error': 'Redis not available'}
+        
+        # Prepare wallet creation command
+        command = {
+            'action': 'create_wallet',
+            'user_id': user_id,
+            'timestamp': datetime.utcnow().isoformat()
+        }
+        
+        # Set up callback to wait for wallet creation
+        wallet_future = asyncio.Future()
+        self.wallet_callbacks[user_id] = wallet_future
+        
+        try:
+            # Send command to agent manager
+            stream_id = await self.async_redis_client.xadd('agent:commands:stream', command)
+            logger.info(f"Sent create_wallet command for {user_id} to stream: {stream_id}")
+            
+            # Wait for wallet creation with 5-second timeout
+            wallet_data = await asyncio.wait_for(wallet_future, timeout=5.0)
+            
+            return {
+                'success': True,
+                'user_id': user_id,
+                'wallet_address': wallet_data.get('wallet_address'),
+                'wallet_created': True
+            }
+            
+        except asyncio.TimeoutError:
+            if user_id in self.wallet_callbacks:
+                del self.wallet_callbacks[user_id]
+            logger.warning(f"Timeout waiting for wallet creation for {user_id} - will update async")
+            return {
+                'success': False,
+                'error': 'timeout',
+                'message': 'Wallet creation in progress, will update asynchronously'
+            }
+        except Exception as e:
+            if user_id in self.wallet_callbacks:
+                del self.wallet_callbacks[user_id]
+            logger.error(f"Error in create_wallet_for_user: {e}")
+            return {'success': False, 'error': str(e)}
+    
     async def get_agent_status(self, user_id: str) -> Optional[Dict]:
         """Get agent status from Redis."""
         await self._ensure_initialized()

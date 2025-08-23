@@ -240,8 +240,25 @@ async def create_user(
             cdp_wallet_name=f"n0ir-agent-{request.user_id[:8]}"  # Shortened for readability
         )
         
-        # Agents are now automatically started based on balance
-        # No manual agent start needed
+        # Immediately request CDP wallet creation from agent manager
+        from app.services.agent_management_service import get_agent_service
+        agent_service = get_agent_service()
+        
+        logger.info(f"Requesting CDP wallet creation for user {request.user_id}")
+        wallet_result = await agent_service.create_wallet_for_user(request.user_id)
+        
+        if wallet_result.get('success') and wallet_result.get('wallet_address'):
+            # Update user with real wallet address
+            await user_service.update_user_wallet(request.user_id, wallet_result['wallet_address'])
+            user.cdp_wallet_address = wallet_result['wallet_address']
+            logger.info(f"CDP wallet created immediately for {request.user_id}: {wallet_result['wallet_address']}")
+        elif wallet_result.get('error') == 'timeout':
+            logger.info(f"CDP wallet creation timed out for {request.user_id}, will update asynchronously")
+            # Continue with pending address - will be updated via event listener
+        else:
+            logger.warning(f"Failed to create CDP wallet for {request.user_id}: {wallet_result.get('error')}")
+            # Continue with pending address
+        
         logger.info(f"User {request.user_id} created successfully. Agent will auto-start when balance > {10} USDC")
         
         return UserResponse.model_validate(user)
