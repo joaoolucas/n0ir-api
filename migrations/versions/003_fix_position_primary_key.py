@@ -41,13 +41,22 @@ def upgrade():
     
     # 2. Drop the primary key constraint if it exists
     if pk_name:
-        op.drop_constraint(pk_name, 'positions', type_='primary')
+        try:
+            op.drop_constraint(pk_name, 'positions', type_='primary')
+        except:
+            pass  # Constraint might not exist or already dropped
     
     # 3. Drop the position_id column
-    op.drop_column('positions', 'position_id')
+    try:
+        op.drop_column('positions', 'position_id')
+    except:
+        pass  # Column might not exist
     
     # 4. Create new primary key on nft_token_id
-    op.create_primary_key('positions_pkey', 'positions', ['nft_token_id'])
+    try:
+        op.create_primary_key('positions_pkey', 'positions', ['nft_token_id'])
+    except:
+        pass  # Primary key might already exist
     
     # 5. Create unique index on nft_token_id for better performance (if not exists)
     try:
@@ -56,11 +65,14 @@ def upgrade():
         pass  # Index might already exist
     
     # 6. Recreate the foreign key for transactions using nft_token_id
-    op.create_foreign_key(
-        'fk_transaction_position',
-        'transactions', 'positions',
-        ['related_position_id'], ['nft_token_id']
-    )
+    try:
+        op.create_foreign_key(
+            'fk_transaction_position',
+            'transactions', 'positions',
+            ['related_position_id'], ['nft_token_id']
+        )
+    except:
+        pass  # Foreign key might already exist
     
     print("Successfully migrated positions table to use nft_token_id as primary key")
 
