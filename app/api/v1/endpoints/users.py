@@ -11,7 +11,7 @@ from app.core.positions_service import positions_service
 from app.schemas.users import (
     CreateUserRequest, UpdateUserRequest, DepositRequest, WithdrawRequest, WithdrawPreviewResponse,
     UserResponse, TransactionResponse, TransactionListResponse,
-    PositionResponse, PositionListResponse, CreatePositionRequest,
+    PositionResponse, PositionListResponse, CreatePositionRequest, ClosePositionRequest,
     BalanceResponse, PnLResponse, PerformanceResponse,
     ProtocolFeeListResponse, ProtocolFeeResponse,
     UserStatus, TransactionType, TransactionStatus, PositionStatus
@@ -540,6 +540,7 @@ async def get_positions(
 async def close_position(
     user_id: str,
     nft_token_id: int,
+    request: Optional[ClosePositionRequest] = None,
     db: AsyncSession = Depends(get_db)
 ):
     """Close a position and return funds to user balance."""
@@ -547,7 +548,10 @@ async def close_position(
         service = UserService(db)
         position = await service.close_position(
             user_id=user_id,
-            nft_token_id=nft_token_id
+            nft_token_id=nft_token_id,
+            exit_tx_hash=request.exit_tx_hash if request else None,
+            final_value_usdc=request.final_value_usdc if request else None,
+            realized_pnl_usdc=request.realized_pnl_usdc if request else None
         )
         if not position:
             raise HTTPException(status_code=404, detail="Position not found or already closed")
