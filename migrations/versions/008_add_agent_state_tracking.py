@@ -19,6 +19,13 @@ depends_on = None
 def upgrade() -> None:
     """Add agent state tracking columns to users table."""
     
+    # Create the enum type first
+    agent_status_enum = postgresql.ENUM(
+        'not_started', 'starting', 'running', 'stopping', 'stopped', 'failed',
+        name='agent_status_enum'
+    )
+    agent_status_enum.create(op.get_bind())
+    
     # Add agent state tracking columns to users table
     op.add_column('users', sa.Column('agent_status', 
                                       sa.Enum('not_started', 'starting', 'running', 'stopping', 'stopped', 'failed', 
