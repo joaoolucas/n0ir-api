@@ -11,10 +11,15 @@ import asyncio
 router = APIRouter()
 
 
+from pydantic import BaseModel
+
+class TestWithdrawRequest(BaseModel):
+    amount_usdc: float
+
 @router.post("/{user_id}/test-withdraw")
 async def test_withdraw(
     user_id: str,
-    amount_usdc: float,
+    request: TestWithdrawRequest,
     db: AsyncSession = Depends(get_db)
 ):
     """Test withdrawal endpoint that simulates sending USDC.
@@ -22,6 +27,7 @@ async def test_withdraw(
     This bypasses the agent-manager and simulates a successful withdrawal.
     """
     try:
+        amount_usdc = request.amount_usdc
         logger.info(f"[TEST-WITHDRAW] Starting test withdrawal for {user_id}: {amount_usdc} USDC")
         
         # Get user service
