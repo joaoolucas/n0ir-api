@@ -54,8 +54,10 @@ async def test_withdraw(
                 if total_recovered >= amount_usdc:
                     break
                 positions_to_close.append(position.nft_token_id)
-                total_recovered += float(position.current_value_usd or 0)
-                logger.info(f"[TEST-WITHDRAW] Would close position {position.nft_token_id} for ~{position.current_value_usd} USD")
+                # Position might have different field names
+                value = getattr(position, 'current_value_usd', None) or getattr(position, 'value_usd', None) or 0
+                total_recovered += float(value)
+                logger.info(f"[TEST-WITHDRAW] Would close position {position.nft_token_id} for ~{value} USD")
         
         # Simulate the withdrawal transaction
         logger.info(f"[TEST-WITHDRAW] Simulating transfer of {amount_usdc} USDC to {user_id}")
