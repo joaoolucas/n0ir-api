@@ -95,7 +95,27 @@ async def ensure_schema_compatibility(session: AsyncSession):
             await session.commit()
             logger.info("Added related_position_id to transactions table")
         
-        # 4. Check and create agent_events table if it doesn't exist
+        # 4. Check and drop old cdp_owner columns if they exist
+        result = await session.execute(text("""
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name = 'users' 
+            AND column_name IN ('cdp_owner_wallet_address', 'cdp_owner_wallet_name', 'cdp_owner_wallet_id')
+        """))
+        old_columns = [row[0] for row in result.fetchall()]
+        
+        if old_columns:
+            logger.info(f"Found old cdp_owner columns to remove: {old_columns}")
+            for column in old_columns:
+                try:
+                    await session.execute(text(f"ALTER TABLE users DROP COLUMN IF EXISTS {column}"))
+                    await session.commit()
+                    logger.info(f"Dropped column {column} from users table")
+                except Exception as e:
+                    logger.warning(f"Could not drop column {column}: {e}")
+                    # Don't fail, just continue
+        
+        # 5. Check and create agent_events table if it doesn't exist
         result = await session.execute(text("""
             SELECT table_name 
             FROM information_schema.tables 
