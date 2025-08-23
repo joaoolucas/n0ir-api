@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import pools, tokens, health, positions, wallets, strategy, users, transactions, debug, admin, test_withdraw
+from app.api.v1.endpoints import pools, tokens, health, positions, wallets, strategy, users, transactions, debug, admin
 
 api_router = APIRouter()
 
@@ -56,11 +56,4 @@ api_router.include_router(
     admin.router,
     prefix="/admin",
     tags=["Admin"]
-)
-
-# Test withdrawal endpoint
-api_router.include_router(
-    test_withdraw.router,
-    prefix="/test",
-    tags=["Test"]
 )
