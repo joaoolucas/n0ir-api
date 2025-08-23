@@ -38,12 +38,14 @@ async def test_withdraw(
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         
-        logger.info(f"[TEST-WITHDRAW] User balance: {user.balance_usdc} USDC")
-        logger.info(f"[TEST-WITHDRAW] CDP wallet: {user.cdp_wallet_address}")
+        # Get user balance
+        balance = await user_service.get_user_balance(user_id)
+        logger.info(f"[TEST-WITHDRAW] User balance: {balance} USDC")
+        logger.info(f"[TEST-WITHDRAW] CDP wallet: {user.cdp_wallet_address if hasattr(user, 'cdp_wallet_address') else 'N/A'}")
         
         # Simulate position closing if needed
         positions_to_close = []
-        if user.balance_usdc < amount_usdc:
+        if balance < amount_usdc:
             logger.info(f"[TEST-WITHDRAW] Need to close positions")
             positions = await user_service.get_user_positions(user_id, status="ACTIVE")
             
@@ -65,7 +67,7 @@ async def test_withdraw(
         import hashlib
         import json
         tx_data = json.dumps({
-            "from": user.cdp_wallet_address or "0x0000",
+            "from": user.cdp_wallet_address if hasattr(user, 'cdp_wallet_address') else "0xa449F944aD033D8083564556Fd918C45B716f79c",
             "to": user_id,
             "amount": amount_usdc,
             "timestamp": datetime.utcnow().isoformat()
@@ -80,7 +82,7 @@ async def test_withdraw(
             "message": "Test withdrawal successful (simulated)",
             "amount_usdc": amount_usdc,
             "to_address": user_id,
-            "from_address": user.cdp_wallet_address,
+            "from_address": user.cdp_wallet_address if hasattr(user, 'cdp_wallet_address') else "0xa449F944aD033D8083564556Fd918C45B716f79c",
             "tx_hash": tx_hash,
             "positions_closed": positions_to_close,
             "note": "This is a simulated withdrawal for testing. In production, the agent-manager would handle the actual blockchain transaction."
