@@ -185,7 +185,7 @@ class AgentManagementService:
             
             try:
                 # Publish command and check if anyone is listening
-                num_subscribers = self.redis_client.publish('agent_commands', json.dumps(command))
+                num_subscribers = await self.async_redis_client.publish('agent_commands', json.dumps(command))
                 logger.info(f"Published start command for {user_id} to {num_subscribers} subscribers, waiting for wallet...")
                 
                 if num_subscribers == 0:
@@ -214,7 +214,7 @@ class AgentManagementService:
         else:
             # Just start the agent without waiting
             try:
-                self.redis_client.publish('agent_commands', json.dumps(command))
+                await self.async_redis_client.publish('agent_commands', json.dumps(command))
                 logger.info(f"Published start command for {user_id} (no wait)")
                 
                 return {
@@ -241,7 +241,7 @@ class AgentManagementService:
         }
         
         try:
-            self.redis_client.publish('agent_commands', json.dumps(command))
+            await self.async_redis_client.publish('agent_commands', json.dumps(command))
             return True
         except Exception as e:
             logger.error(f"Error requesting agent stop: {e}")
@@ -296,7 +296,7 @@ class AgentManagementService:
         
         try:
             # Publish to balance change channel
-            self.redis_client.publish('user:balance:changed', json.dumps(event_data))
+            await self.async_redis_client.publish('user:balance:changed', json.dumps(event_data))
             logger.info(f"Published balance event for {user_id}: {event_type} -> {balance} USDC")
             return True
         except Exception as e:
@@ -342,7 +342,7 @@ class AgentManagementService:
         }
         
         try:
-            self.redis_client.publish('agent_commands', json.dumps(command))
+            await self.async_redis_client.publish('agent_commands', json.dumps(command))
             return {
                 'success': True,
                 'user_id': user_id,
@@ -387,8 +387,8 @@ class AgentManagementService:
         self.wallet_callbacks[f"{user_id}:withdraw"] = withdrawal_future
         
         try:
-            # Publish withdrawal command
-            num_subscribers = self.redis_client.publish('agent_commands', json.dumps(command))
+            # Publish withdrawal command using async client
+            num_subscribers = await self.async_redis_client.publish('agent_commands', json.dumps(command))
             logger.info(f"Published withdraw command for {user_id} ({amount} USDC) to {num_subscribers} subscribers")
             
             if num_subscribers == 0:
