@@ -16,7 +16,7 @@ from app.database.base import Base
 
 # Import all models to register them with SQLAlchemy
 from app.database.models import (
-    user, transaction, position, fee,
+    user, transaction, position,
     pool_metrics, executor_stats, strategy_decision, daily_metrics
 )
 

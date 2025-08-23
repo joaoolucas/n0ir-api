@@ -36,11 +36,9 @@ class PositionStatus(str, enum.Enum):
 
 # Request Models
 class CreateUserRequest(BaseModel):
-    user_id: str = Field(..., description="Unique user identifier")
-    wallet_address: str = Field(..., description="CDP wallet address")
-    cdp_wallet_name: str = Field(..., description="CDP wallet name")
-    cdp_owner_wallet_address: str = Field(..., description="Owner EOA address")
-    cdp_owner_wallet_name: str = Field(..., description="Owner EOA name")
+    user_id: str = Field(..., description="User's wallet address (EOA)")
+    start_agent: bool = Field(True, description="Whether to start agent and create CDP wallet")
+    signature: Optional[str] = Field(None, description="Signature to prove wallet ownership (optional)")
 
 
 class UpdateUserRequest(BaseModel):
@@ -54,12 +52,29 @@ class DepositRequest(BaseModel):
 
 class WithdrawRequest(BaseModel):
     amount_usdc: Decimal = Field(..., gt=0, description="Amount to withdraw in USDC")
-    destination_address: Optional[str] = Field(None, description="Destination wallet address")
+    destination_address: Optional[str] = Field(None, description="Destination wallet address (defaults to user's address)")
+    tx_hash: Optional[str] = Field(None, description="Transaction hash if already executed")
+    force_close_positions: bool = Field(True, description="Automatically close positions if needed for withdrawal")
+    max_slippage_percent: Decimal = Field(Decimal("0.5"), description="Maximum acceptable slippage when closing positions (%)")
+
+
+class WithdrawPreviewResponse(BaseModel):
+    requested_amount: Decimal = Field(..., description="Amount requested to withdraw")
+    wallet_balance: Decimal = Field(..., description="Current wallet balance")
+    positions_to_close: int = Field(..., description="Number of positions that need to be closed")
+    positions_value: Decimal = Field(..., description="Total value of positions to be closed")
+    estimated_gas_fees: Decimal = Field(..., description="Estimated gas fees for closing positions")
+    estimated_slippage: Decimal = Field(..., description="Estimated slippage amount")
+    estimated_available: Decimal = Field(..., description="Estimated total available after closing positions")
+    can_withdraw: bool = Field(..., description="Whether withdrawal is possible")
+    requires_position_closing: bool = Field(..., description="Whether positions need to be closed")
+    warning_message: Optional[str] = Field(None, description="Warning message if any")
 
 
 class CreatePositionRequest(BaseModel):
     nft_token_id: int = Field(..., description="Aerodrome NFT position ID")
     pool_address: str = Field(..., description="Pool contract address")
+    pool_name: Optional[str] = Field(None, description="Pool name (e.g., 'WETH-USDC')")
     token0_address: str = Field(..., description="Token0 address")
     token1_address: str = Field(..., description="Token1 address")
     tick_lower: int = Field(..., description="Lower tick")
@@ -89,11 +104,9 @@ class ClosePositionRequest(BaseModel):
 class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     
-    user_id: str
-    wallet_address: str
-    cdp_wallet_name: str
-    cdp_owner_wallet_address: str
-    cdp_owner_wallet_name: str
+    user_id: str  # The user's EOA wallet address
+    cdp_wallet_address: str = Field(..., description="CDP smart wallet managed by agent")
+    cdp_wallet_name: str = Field(..., description="CDP wallet name")
     status: UserStatus
     created_at: datetime
     updated_at: datetime
@@ -101,9 +114,11 @@ class UserResponse(BaseModel):
 
 class BalanceResponse(BaseModel):
     user_id: str
-    balance_usdc: Decimal
-    available_balance_usdc: Decimal
-    locked_in_positions_usdc: Decimal
+    wallet_balance_usdc: Decimal = Field(..., description="Current spendable balance in wallet")
+    available_balance_usdc: Decimal = Field(..., description="Available for withdrawal/trading")
+    invested_amount_usdc: Decimal = Field(..., description="Total amount invested in active positions")
+    current_positions_value_usdc: Decimal = Field(..., description="Real-time total value of all positions")
+    total_portfolio_value_usdc: Decimal = Field(..., description="Wallet balance + positions value")
     pending_deposits_usdc: Decimal
     pending_withdrawals_usdc: Decimal
 
@@ -115,6 +130,7 @@ class TransactionResponse(BaseModel):
     user_id: str
     transaction_type: TransactionType
     amount_usdc: Decimal
+    pool_name: Optional[str] = Field(None, description="Pool name for position entry/exit transactions")
     tx_hash: Optional[str]
     block_number: Optional[int]
     gas_used: Optional[int]
@@ -128,10 +144,10 @@ class TransactionResponse(BaseModel):
 class PositionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     
-    position_id: UUID
+    nft_token_id: int  # Primary key - Aerodrome NFT position ID
     user_id: str
-    nft_token_id: int
     pool_address: str
+    pool_name: Optional[str] = Field(None, description="Pool name (e.g. ZORA/USDC)")
     token0_address: str
     token1_address: str
     tick_lower: int
@@ -142,10 +158,18 @@ class PositionResponse(BaseModel):
     gauge_address: Optional[str]
     entry_amount_usdc: Decimal
     current_value_usdc: Optional[Decimal]
+    current_total_value: Optional[Decimal] = Field(None, description="Total value including position value + staked emissions")
     realized_pnl_usdc: Decimal
     unrealized_pnl_usdc: Decimal
     fees_earned_usdc: Decimal
     rewards_earned_usdc: Decimal
+    total_pnl_usdc: Optional[Decimal] = Field(None, description="Total PNL (unrealized + fees + rewards)")
+    pnl_percentage: Optional[Decimal] = Field(None, description="PNL as percentage of entry amount")
+    pool_base_apr: Optional[Decimal] = Field(None, description="Pool's base APR percentage")
+    effective_apr: Optional[Decimal] = Field(None, description="Effective APR based on position range")
+    protocol_fee_amount: Decimal  # 5% of profits
+    protocol_fee_collected: bool
+    protocol_fee_tx_hash: Optional[str]
     status: PositionStatus
     entry_tx_hash: Optional[str]
     exit_tx_hash: Optional[str]
@@ -157,21 +181,17 @@ class PositionResponse(BaseModel):
 class ProtocolFeeResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     
-    fee_id: UUID
-    user_id: str
-    position_id: UUID
-    position_profit_usdc: Decimal
+    nft_token_id: int  # Aerodrome NFT position ID
     fee_amount_usdc: Decimal
-    fee_percentage: Decimal
     collected: bool
     collection_tx_hash: Optional[str]
-    created_at: datetime
-    collected_at: Optional[datetime]
 
 
 class PnLResponse(BaseModel):
     realized_pnl_usdc: Decimal
     unrealized_pnl_usdc: Decimal
+    unrealized_pnl_percentage: Decimal
+    realized_pnl_percentage: Decimal
     fees_earned_usdc: Decimal
     rewards_earned_usdc: Decimal
     total_pnl_usdc: Decimal
@@ -221,5 +241,5 @@ class PositionListResponse(BaseModel):
 
 class ProtocolFeeListResponse(BaseModel):
     fees: List[ProtocolFeeResponse]
-    total_pending: Decimal
-    total_collected: Decimal
+    total_pending_usdc: Decimal
+    total_collected_usdc: Decimal

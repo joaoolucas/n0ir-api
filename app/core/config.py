@@ -114,6 +114,18 @@ class Settings(BaseSettings):
     etherscan_api_key: Optional[str] = Field(default=None, env="ETHERSCAN_API_KEY")
     base_chain_id: int = Field(default=8453, env="BASE_CHAIN_ID")  # Base mainnet chain ID
     
+    # Agent Manager Configuration
+    agent_manager_url: str = Field(
+        default="http://localhost:8001",
+        env="AGENT_MANAGER_URL"
+    )
+    
+    # Redis Configuration
+    redis_url: str = Field(
+        default="redis://localhost:6379",
+        env="REDIS_URL"
+    )
+    
     @property
     def get_database_url(self) -> Optional[str]:
         """Get the appropriate database URL for Railway."""
