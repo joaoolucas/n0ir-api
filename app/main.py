@@ -13,6 +13,16 @@ async def lifespan(app: FastAPI):
     
     # Startup
     logger.info("Starting API with agent management service listener...")
+    
+    # First, ensure schema compatibility
+    from app.database.session import get_db
+    from app.database.schema_fixes import ensure_schema_compatibility
+    
+    logger.info("Ensuring database schema compatibility...")
+    async for db in get_db():
+        await ensure_schema_compatibility(db)
+        break  # Exit after first iteration
+    
     try:
         # Get the singleton instance
         agent_service = get_agent_service()
@@ -24,12 +34,8 @@ async def lifespan(app: FastAPI):
             # This ensures agents start for users who already have sufficient balance
             logger.info("Publishing initial balance events for existing users...")
             from app.services.user_service import UserService
-            from app.database.session import get_db
-            from app.database.schema_fixes import ensure_schema_compatibility
             
             async for db in get_db():
-                # Ensure schema compatibility first
-                await ensure_schema_compatibility(db)
                 user_service = UserService(db)
                 users = await user_service.list_all_users()
                 
