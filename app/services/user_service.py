@@ -736,8 +736,14 @@ class UserService:
             if not user:
                 raise ValueError(f"User {user_id} not found")
             
-            # Fetch blockchain balance
-            blockchain_balance = await blockchain_service.get_usdc_balance(user_id, use_cache=False)
+            # Fetch blockchain balance from CDP wallet (where the USDC actually is)
+            # Use cdp_wallet_address if it exists and is not a placeholder
+            wallet_to_check = user.cdp_wallet_address
+            if not wallet_to_check or wallet_to_check.startswith("pending_"):
+                # Fallback to user_id if CDP wallet not yet created
+                wallet_to_check = user_id
+                
+            blockchain_balance = await blockchain_service.get_usdc_balance(wallet_to_check, use_cache=False)
             blockchain_balance_decimal = Decimal(str(blockchain_balance))
             
             # Get database balance (from transactions)
@@ -748,6 +754,7 @@ class UserService:
             
             result = {
                 "user_id": user_id,
+                "wallet_checked": wallet_to_check,
                 "blockchain_balance": float(blockchain_balance_decimal),
                 "db_balance": float(db_balance),
                 "difference": float(difference),

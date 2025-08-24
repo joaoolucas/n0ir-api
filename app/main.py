@@ -29,15 +29,17 @@ async def periodic_balance_sync():
                 
                 for user in users:
                     try:
-                        sync_result = await user_service.sync_blockchain_balance(user.user_id)
-                        synced_count += 1
-                        
-                        if sync_result.get("reconciled"):
-                            reconciled_count += 1
-                            logger.info(
-                                f"Reconciled balance for {user.user_id}: "
-                                f"adjustment of {sync_result['adjustment_amount']} USDC"
-                            )
+                        # Skip users with pending wallets
+                        if user.cdp_wallet_address and not user.cdp_wallet_address.startswith("pending_"):
+                            sync_result = await user_service.sync_blockchain_balance(user.user_id)
+                            synced_count += 1
+                            
+                            if sync_result.get("reconciled"):
+                                reconciled_count += 1
+                                logger.info(
+                                    f"Reconciled balance for {user.user_id} (wallet: {sync_result['wallet_checked']}): "
+                                    f"adjustment of {sync_result['adjustment_amount']} USDC"
+                                )
                     except Exception as e:
                         logger.error(f"Error syncing balance for {user.user_id}: {e}")
                 
