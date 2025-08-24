@@ -15,6 +15,7 @@ from app.database.models.position import PositionStatus
 from app.core.logger import logger
 from app.core.positions_service import positions_service
 from app.services.agent_management_service import get_agent_service
+from app.core.blockchain_service import blockchain_service
 
 
 class UserService:
@@ -715,6 +716,101 @@ class UserService:
             logger.info(f"Updated position {nft_token_id} status to {status}")
         
         return position
+    
+    async def sync_blockchain_balance(self, user_id: str) -> Dict[str, Any]:
+        """Sync user's USDC balance from blockchain with database.
+        
+        This method fetches the actual USDC balance from the blockchain
+        and reconciles it with the transaction-based balance in the database.
+        
+        Returns:
+            Dictionary with sync results including:
+            - blockchain_balance: Actual balance on chain
+            - db_balance: Calculated balance from transactions
+            - difference: Difference between blockchain and DB
+            - reconciled: Whether reconciliation was performed
+        """
+        try:
+            # Get user
+            user = await self.get_user(user_id)
+            if not user:
+                raise ValueError(f"User {user_id} not found")
+            
+            # Fetch blockchain balance
+            blockchain_balance = await blockchain_service.get_usdc_balance(user_id, use_cache=False)
+            blockchain_balance_decimal = Decimal(str(blockchain_balance))
+            
+            # Get database balance (from transactions)
+            db_balance = await self.get_user_balance(user_id)
+            
+            # Calculate difference
+            difference = blockchain_balance_decimal - db_balance
+            
+            result = {
+                "user_id": user_id,
+                "blockchain_balance": float(blockchain_balance_decimal),
+                "db_balance": float(db_balance),
+                "difference": float(difference),
+                "reconciled": False,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            
+            # If there's a significant difference (> 0.01 USDC), create an adjustment transaction
+            if abs(difference) > Decimal("0.01"):
+                logger.warning(
+                    f"Balance discrepancy for {user_id}: "
+                    f"Blockchain={blockchain_balance_decimal}, DB={db_balance}, Diff={difference}"
+                )
+                
+                # Create an adjustment transaction to reconcile
+                if difference > 0:
+                    # Blockchain has more than DB - create a deposit adjustment
+                    adjustment = await self.create_transaction(
+                        user_id=user_id,
+                        transaction_type=TransactionType.DEPOSIT,
+                        amount_usdc=difference,
+                        tx_hash=f"BALANCE_SYNC_{datetime.now(timezone.utc).isoformat()}",
+                        metadata={
+                            "type": "balance_sync_adjustment",
+                            "reason": "Blockchain balance reconciliation",
+                            "blockchain_balance": str(blockchain_balance_decimal),
+                            "db_balance_before": str(db_balance)
+                        }
+                    )
+                    
+                    # Mark as confirmed
+                    await self.update_transaction_status(
+                        transaction_id=adjustment.transaction_id,
+                        status=TransactionStatus.CONFIRMED,
+                        tx_hash=adjustment.tx_hash
+                    )
+                    
+                    result["reconciled"] = True
+                    result["adjustment_type"] = "deposit"
+                    result["adjustment_amount"] = float(difference)
+                    
+                    logger.info(f"Created deposit adjustment of {difference} USDC for {user_id}")
+                    
+                elif difference < 0:
+                    # DB has more than blockchain - this shouldn't happen normally
+                    # Log it but don't auto-adjust withdrawals
+                    logger.error(
+                        f"Critical: DB balance exceeds blockchain balance for {user_id}! "
+                        f"Manual investigation required."
+                    )
+                    result["error"] = "DB balance exceeds blockchain balance"
+            else:
+                logger.info(f"Balance for {user_id} is in sync (difference: {difference} USDC)")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error syncing blockchain balance for {user_id}: {e}")
+            return {
+                "user_id": user_id,
+                "error": str(e),
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
     
     async def close_position(
         self,
