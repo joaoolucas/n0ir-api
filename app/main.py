@@ -7,6 +7,7 @@ from app.core.config import settings
 from app.api.v1.api import api_router
 from app.core.logger import logger
 from app.services.agent_management_service import get_agent_service
+from app.services.blockchain_event_consumer import blockchain_consumer
 
 async def periodic_balance_sync():
     """Background task to periodically sync blockchain balances."""
@@ -75,6 +76,14 @@ async def lifespan(app: FastAPI):
     balance_sync_task = asyncio.create_task(periodic_balance_sync())
     logger.info("Started periodic balance sync background task")
     
+    # Initialize and start blockchain event consumer
+    try:
+        await blockchain_consumer.initialize()
+        await blockchain_consumer.start()
+        logger.info("Started blockchain event consumer")
+    except Exception as e:
+        logger.error(f"Failed to start blockchain event consumer: {e}")
+    
     try:
         # Get the singleton instance
         agent_service = get_agent_service()
@@ -122,14 +131,20 @@ async def lifespan(app: FastAPI):
     yield
     
     # Shutdown
-    logger.info("Shutting down agent management service listener...")
+    logger.info("Shutting down services...")
+    
+    # Stop blockchain event consumer
+    await blockchain_consumer.stop()
+    logger.info("Blockchain event consumer stopped")
+    
     # Cancel background task
     balance_sync_task.cancel()
     try:
         await balance_sync_task
     except asyncio.CancelledError:
         logger.info("Balance sync background task cancelled")
-    # Cleanup if needed
+    
+    logger.info("Shutdown complete")
 
 # Create FastAPI application
 app = FastAPI(
