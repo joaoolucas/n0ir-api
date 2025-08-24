@@ -2,7 +2,7 @@
 Blockchain service for fetching on-chain data.
 """
 
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from web3 import Web3
 from web3.exceptions import ContractLogicError
 from decimal import Decimal
@@ -10,13 +10,7 @@ import asyncio
 from functools import lru_cache
 from loguru import logger
 import time
-
-# Base mainnet RPC endpoints
-BASE_RPC_URLS = [
-    "https://base.llamarpc.com",
-    "https://base.drpc.org",
-    "https://mainnet.base.org",
-]
+from app.core.config import settings
 
 # USDC contract on Base
 USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
@@ -45,7 +39,20 @@ class BlockchainService:
         
     def _connect(self):
         """Connect to Base RPC."""
-        for rpc_url in BASE_RPC_URLS:
+        # First try the configured RPC URL from environment
+        primary_rpc = settings.rpc_url
+        
+        # Fallback RPC URLs if primary fails
+        fallback_rpcs = [
+            "https://base.llamarpc.com",
+            "https://base.drpc.org",
+            "https://mainnet.base.org",
+        ]
+        
+        # Build list of RPCs to try (primary first, then fallbacks)
+        rpc_urls = [primary_rpc] + [url for url in fallback_rpcs if url != primary_rpc]
+        
+        for rpc_url in rpc_urls:
             try:
                 self.w3 = Web3(Web3.HTTPProvider(rpc_url))
                 if self.w3.is_connected():
