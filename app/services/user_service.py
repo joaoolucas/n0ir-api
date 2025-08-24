@@ -391,28 +391,23 @@ class UserService:
         positions_value = sum(p.current_value_usdc or p.entry_amount_usdc for p in active_positions)
         portfolio_value_before = wallet_balance_before + positions_value
         
-        # Calculate proportional cost basis being withdrawn
-        if portfolio_value_before > 0 and total_deposited > 0:
-            withdrawal_percentage = amount / portfolio_value_before
-            cost_basis_withdrawn = total_deposited * withdrawal_percentage
-            realized_pnl_amount = amount - cost_basis_withdrawn
-        else:
-            cost_basis_withdrawn = amount
-            realized_pnl_amount = Decimal(0)
+        # Withdrawals don't realize PNL - PNL is tracked at position level
+        # Withdrawals are just cash movements
+        realized_pnl_amount = Decimal(0)
+        cost_basis_withdrawn = Decimal(0)
         
-        # Create withdrawal transaction record with realized PnL tracking
+        # Create withdrawal transaction record without PNL attribution
         transaction = await self.create_transaction(
             user_id=user_id,
             transaction_type=TransactionType.WITHDRAW,
             amount_usdc=amount,
             tx_hash=tx_hash,
-            realized_pnl_usdc=realized_pnl_amount,
+            realized_pnl_usdc=realized_pnl_amount,  # Always 0 for withdrawals
             portfolio_value_at_time=portfolio_value_before,
-            cost_basis_withdrawn=cost_basis_withdrawn,
+            cost_basis_withdrawn=cost_basis_withdrawn,  # Always 0, not used
             metadata={
                 "type": "withdrawal",
-                "to_address": to_address or user_id,
-                "withdrawal_percentage": str(withdrawal_percentage) if portfolio_value_before > 0 else "0"
+                "to_address": to_address or user_id
             }
         )
         
@@ -894,48 +889,34 @@ class UserService:
         await self.db.commit()
     
     async def recalculate_user_pnl(self, user_id: str) -> None:
-        """Recalculate and update user's PnL values.
+        """Recalculate and update user's PnL values based on positions only.
+        
+        PNL is calculated purely from positions:
+        - Realized PNL: Sum of PNL from closed positions
+        - Unrealized PNL: Sum of (current_value - entry_amount) from active positions
         
         This should be called after:
         - Position is closed
         - Position is opened
-        - Deposit is made
-        - Withdrawal is made
+        - Position value is updated
         """
         from app.core.positions_service import positions_service
         
-        # Get user balance (wallet)
-        wallet_balance = await self.get_user_balance(user_id)
+        # Get all positions for the user
+        all_positions = await self.get_user_positions(user_id)
         
-        # Get all confirmed deposits
-        all_deposits = await self.get_user_transactions(
-            user_id=user_id,
-            transaction_type=TransactionType.DEPOSIT,
-            status=TransactionStatus.CONFIRMED
-        )
-        total_deposited = sum(t.amount_usdc for t in all_deposits)
+        # Separate active and closed positions
+        active_positions = [p for p in all_positions if p.status == PositionStatus.ACTIVE]
+        closed_positions = [p for p in all_positions if p.status == PositionStatus.CLOSED]
         
-        # Get all confirmed withdrawals
-        all_withdrawals = await self.get_user_transactions(
-            user_id=user_id,
-            transaction_type=TransactionType.WITHDRAW,
-            status=TransactionStatus.CONFIRMED
-        )
-        total_withdrawn = sum(t.amount_usdc for t in all_withdrawals)
+        # Calculate realized PNL from closed positions only
+        # This is the actual profit/loss that has been locked in
+        realized_pnl = sum(p.realized_pnl_usdc or Decimal(0) for p in closed_positions)
         
-        # Calculate net deposited
-        net_deposited = total_deposited - total_withdrawn
+        # Calculate unrealized PNL from active positions
+        unrealized_pnl = Decimal(0)
         
-        # Get active positions
-        positions = await self.get_user_positions(user_id, status=PositionStatus.ACTIVE)
-        
-        # Calculate invested amount
-        invested_in_pools = sum(p.entry_amount_usdc or Decimal(0) for p in positions)
-        
-        # Calculate current positions value with real-time blockchain data
-        current_positions_value = Decimal(0)
-        
-        for position in positions:
+        for position in active_positions:
             try:
                 # Fetch real-time value from blockchain
                 position_info = await positions_service.get_position_by_id(position.nft_token_id)
@@ -944,69 +925,47 @@ class UserService:
                     current_value_usd = Decimal(str(position_info.current_value_usd or 0))
                     unclaimed_fees_usd = Decimal(str(position_info.unclaimed_fees_usd or 0))
                     
-                    # Calculate total position value (liquidity + unclaimed fees only)
-                    # Do NOT add fees_earned_usdc or rewards_earned_usdc as those are already collected
-                    position_total = current_value_usd + unclaimed_fees_usd
-                    
-                    current_positions_value += position_total
+                    # Calculate total current value
+                    position_current_value = current_value_usd + unclaimed_fees_usd
                     
                     # Update position's current value in DB for caching
-                    position.current_value_usdc = current_value_usd + unclaimed_fees_usd
+                    position.current_value_usdc = position_current_value
+                    
+                    # Calculate unrealized PNL for this position
+                    position_unrealized_pnl = position_current_value - position.entry_amount_usdc
+                    unrealized_pnl += position_unrealized_pnl
                 else:
                     # If blockchain fetch fails, use database value
-                    current_positions_value += (position.current_value_usdc or position.entry_amount_usdc or Decimal(0))
+                    cached_value = position.current_value_usdc or position.entry_amount_usdc or Decimal(0)
+                    position_unrealized_pnl = cached_value - position.entry_amount_usdc
+                    unrealized_pnl += position_unrealized_pnl
                     
             except Exception as e:
                 # Check if position was closed externally
                 if "execution reverted: ID" in str(e) or "ContractLogicError" in str(e):
-                    logger.warning(f"Position {position.nft_token_id} not found on-chain, may be closed")
-                    # Don't add value for positions that don't exist on-chain
+                    logger.warning(f"Position {position.nft_token_id} not found on-chain, may be closed externally")
+                    # Mark position as closed if it doesn't exist on-chain
+                    position.status = PositionStatus.CLOSED
+                    position.realized_pnl_usdc = position.current_value_usdc - position.entry_amount_usdc
+                    # Move its PNL to realized
+                    realized_pnl += position.realized_pnl_usdc or Decimal(0)
                 else:
                     logger.error(f"Error fetching position {position.nft_token_id}: {e}")
-                    # Use database value as fallback
-                    current_positions_value += (position.current_value_usdc or position.entry_amount_usdc or Decimal(0))
+                    # Use database value as fallback for unrealized PNL
+                    cached_value = position.current_value_usdc or position.entry_amount_usdc or Decimal(0)
+                    position_unrealized_pnl = cached_value - position.entry_amount_usdc
+                    unrealized_pnl += position_unrealized_pnl
         
         # Commit any position value updates
         await self.db.commit()
         
-        # Calculate total portfolio value
-        total_portfolio_value = wallet_balance + current_positions_value
+        # Calculate percentages based on total invested amount (not deposits)
+        # This gives a more accurate representation of trading performance
+        total_invested = sum(p.entry_amount_usdc for p in all_positions)
         
-        # CORRECT PnL Calculations:
-        # Unrealized PnL = Total Portfolio Value - Total Original Deposits (not net)
-        # This shows how much the portfolio has gained/lost vs original investment
-        unrealized_pnl = total_portfolio_value - total_deposited
-        
-        # Realized PnL = Sum of realized PnL from all withdrawal transactions
-        # This tracks the actual profit/loss locked in at withdrawal time
-        withdrawal_txns = await self.get_user_transactions(
-            user_id=user_id,
-            transaction_type=TransactionType.WITHDRAW,
-            status=TransactionStatus.CONFIRMED
-        )
-        
-        # Sum up all realized PnL from withdrawals
-        realized_pnl = sum(
-            t.realized_pnl_usdc or Decimal(0) 
-            for t in withdrawal_txns
-        )
-        
-        # Also add realized PnL from closed positions
-        position_exit_txns = await self.get_user_transactions(
-            user_id=user_id,
-            transaction_type=TransactionType.POSITION_EXIT,
-            status=TransactionStatus.CONFIRMED
-        )
-        
-        realized_pnl += sum(
-            t.realized_pnl_usdc or Decimal(0)
-            for t in position_exit_txns
-        )
-        
-        # Calculate percentages
-        if total_deposited > 0:
-            unrealized_pnl_percentage = (unrealized_pnl / total_deposited) * Decimal(100)
-            realized_pnl_percentage = (realized_pnl / total_deposited) * Decimal(100)
+        if total_invested > 0:
+            unrealized_pnl_percentage = (unrealized_pnl / total_invested) * Decimal(100)
+            realized_pnl_percentage = (realized_pnl / total_invested) * Decimal(100)
         else:
             unrealized_pnl_percentage = Decimal(0)
             realized_pnl_percentage = Decimal(0)
@@ -1019,6 +978,8 @@ class UserService:
             unrealized_pnl_percentage=unrealized_pnl_percentage,
             realized_pnl_percentage=realized_pnl_percentage
         )
+        
+        logger.info(f"Updated PNL for user {user_id}: realized={realized_pnl}, unrealized={unrealized_pnl}")
     
     async def calculate_user_performance(self, user_id: str) -> Dict[str, Any]:
         """Calculate comprehensive performance metrics for a user."""
