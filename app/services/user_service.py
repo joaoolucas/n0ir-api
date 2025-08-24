@@ -878,16 +878,10 @@ class UserService:
         position.current_value_usdc = final_value_usdc
         position.unrealized_pnl_usdc = Decimal(0)
         
-        # Calculate protocol fee if position was profitable
-        total_profit = realized_pnl_usdc + position.fees_earned_usdc + position.rewards_earned_usdc
-        if total_profit > 0:
-            # Protocol fee is 5% of profit
-            position.protocol_fee_amount = total_profit * Decimal('0.05')
-            position.protocol_fee_collected = False
-            # Actual amount returned is final value minus protocol fee
-            amount_returned = final_value_usdc - position.protocol_fee_amount
-        else:
-            amount_returned = final_value_usdc
+        # No protocol fee - return full value to user
+        position.protocol_fee_amount = Decimal('0')
+        position.protocol_fee_collected = False
+        amount_returned = final_value_usdc
         
         # Create transaction record for position exit (credit) with realized PnL
         transaction = Transaction(
@@ -904,7 +898,7 @@ class UserService:
                 "pool_name": position.pool_name,
                 "action": "position_closed",
                 "realized_pnl": str(realized_pnl_usdc),
-                "protocol_fee": str(position.protocol_fee_amount) if position.protocol_fee_amount else "0"
+                "protocol_fee": "0"
             }),
             confirmed_at=datetime.now(timezone.utc)
         )
