@@ -225,7 +225,7 @@ class MonitorResponse(BaseModel):
 class ScreenRequest(BaseModel):
     """Request for screening pool opportunities."""
     executor_address: str
-    available_capital: float = Field(..., gt=0)
+    available_capital: Optional[float] = Field(None, description="Available capital in USDC. If not provided, will be fetched from blockchain")
 
 
 class ScreenResponse(BaseModel):

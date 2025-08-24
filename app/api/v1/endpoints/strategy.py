@@ -60,12 +60,36 @@ async def screen_opportunities(request: ScreenRequest):
     - Risk alerts for portfolio health
     
     Includes full analysis automatically.
+    If available_capital is not provided, fetches it from blockchain.
     """
     try:
+        # If available_capital not provided, fetch from blockchain
+        available_capital = request.available_capital
+        if available_capital is None or available_capital <= 0:
+            from app.core.blockchain_service import blockchain_service
+            
+            logger.info(f"Fetching USDC balance from blockchain for {request.executor_address}")
+            try:
+                # Fetch exact balance from blockchain
+                blockchain_balance = await blockchain_service.get_usdc_balance(request.executor_address)
+                
+                # Apply a small safety margin (0.01 USDC) to avoid precision issues
+                # This prevents "PSC" errors when trying to use exact balance
+                available_capital = max(0, blockchain_balance - 0.01)
+                
+                logger.info(
+                    f"Blockchain balance for {request.executor_address}: ${blockchain_balance:.6f} USDC, "
+                    f"using ${available_capital:.6f} for screening"
+                )
+            except Exception as e:
+                logger.error(f"Failed to fetch blockchain balance: {e}")
+                # Default to 0 if we can't fetch
+                available_capital = 0
+        
         # Use comprehensive analysis through strategy service
         result = await strategy_service.comprehensive_analysis(
             executor_address=request.executor_address,
-            available_capital=request.available_capital
+            available_capital=available_capital
         )
         
         # Import enhanced response model

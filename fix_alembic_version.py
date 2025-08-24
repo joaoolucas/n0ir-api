@@ -33,14 +33,13 @@ async def fix_alembic_version():
         # Clear any existing version
         await conn.execute("DELETE FROM alembic_version")
         
-        # Insert the migration AFTER the problematic one
-        # d8de59893c30 is the one that tries to rename wallet_address
-        # We'll mark it as already completed by setting the version to it
+        # Insert the LATEST migration to skip all migrations
+        # since we already have the latest schema from create_tables.py
         await conn.execute("""
             INSERT INTO alembic_version (version_num) 
-            VALUES ('d8de59893c30')
+            VALUES ('008_add_agent_state_tracking')
         """)
-        print("✓ Set alembic version to d8de59893c30 (skipping the problematic migration)")
+        print("✓ Set alembic version to 008_add_agent_state_tracking (latest migration)")
         
         # Verify
         version = await conn.fetchval("SELECT version_num FROM alembic_version")
@@ -57,8 +56,8 @@ async def main():
     print("=" * 60)
     print("FIX ALEMBIC VERSION FOR DEPLOYMENT")
     print("=" * 60)
-    print("\nThis will fix the alembic version to skip the problematic migration")
-    print("that tries to rename wallet_address to cdp_wallet_address.")
+    print("\nThis will set the alembic version to the latest migration")
+    print("to skip all migrations since we have fresh tables with the latest schema.")
     
     await fix_alembic_version()
 
