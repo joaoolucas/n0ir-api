@@ -691,7 +691,7 @@ class UserService:
         rewards_earned_usdc: Optional[Decimal] = None
     ) -> Optional[Position]:
         """Update position value and performance metrics."""
-        stmt = select(Position).where(Position.nft_token_id == nft_token_id)
+        stmt = select(Position).where(Position.token_id == nft_token_id)
         result = await self.db.execute(stmt)
         position = result.scalar_one_or_none()
         
@@ -756,7 +756,7 @@ class UserService:
         status
     ) -> Optional[Position]:
         """Update position status in database."""
-        stmt = select(Position).where(Position.nft_token_id == nft_token_id)
+        stmt = select(Position).where(Position.token_id == nft_token_id)
         result = await self.db.execute(stmt)
         position = result.scalar_one_or_none()
         
@@ -883,7 +883,7 @@ class UserService:
         # Allow closing already closed positions for idempotency
         stmt = select(Position).where(
             and_(
-                Position.nft_token_id == nft_token_id,
+                Position.token_id == nft_token_id,  # Use actual column name
                 Position.user_id == user_id,
                 Position.status.in_(['active', 'closed'])
             )
@@ -896,7 +896,7 @@ class UserService:
             # Try to find it without status filter to debug
             debug_stmt = select(Position).where(
                 and_(
-                    Position.nft_token_id == nft_token_id,
+                    Position.token_id == nft_token_id,  # Use actual column name
                     Position.user_id == user_id
                 )
             )
