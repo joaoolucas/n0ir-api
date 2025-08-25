@@ -380,8 +380,12 @@ class UserService:
                             positions_closed.append(closed_position)
                             logger.info(f"Marked position {position.nft_token_id} as closed in DB")
                     
+                    # Ensure all transactions are committed before checking balance
+                    await self.db.commit()
+                    
                     # Re-check balance after marking positions closed
                     wallet_balance = await self.get_user_balance(user_id)
+                    logger.info(f"Balance after closing {len(positions_closed)} positions: {wallet_balance} USDC")
                     if wallet_balance < amount:
                         # Rollback position closures
                         await self._rollback_position_closures(positions_closed)
@@ -944,6 +948,7 @@ class UserService:
         }
         
         transaction = Transaction(
+            id=uuid.uuid4(),  # Ensure we have a primary key
             user_id=user_id,
             tx_type='POSITION_CLOSED',  # Maps to TransactionType.POSITION_EXIT
             tx_hash=exit_tx_hash,
@@ -957,9 +962,17 @@ class UserService:
         self.db.add(transaction)
         await self.db.commit()
         await self.db.refresh(position)
+        await self.db.refresh(transaction)
         
         # Recalculate user PnL after closing position
         await self.recalculate_user_pnl(user_id)
+        
+        # Log the transaction details for debugging
+        logger.info(f"Created POSITION_CLOSED transaction: id={transaction.id}, amount={float(amount_returned)}, status={transaction.status}")
+        
+        # Double-check the balance immediately after
+        test_balance = await self.get_user_balance(user_id)
+        logger.info(f"Balance after closing position {nft_token_id}: {test_balance} USDC (should be {amount_returned})")
         
         logger.info(f"Closed position {nft_token_id} for user {user_id}, returned {amount_returned} USDC")
         return position
