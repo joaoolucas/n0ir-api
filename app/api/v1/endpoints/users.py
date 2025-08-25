@@ -580,22 +580,19 @@ async def get_positions(
     query = """
         SELECT 
             p.nft_token_id,
-            p.owner_address,
+            p.user_id as owner_address,
             p.pool_address,
             p.tick_lower,
             p.tick_upper,
             p.liquidity,
-            p.tokens_owed0,
-            p.tokens_owed1,
-            p.fee_growth_inside0,
-            p.fee_growth_inside1,
-            p.creation_block,
-            p.last_updated_block,
+            p.token0_address,
+            p.token1_address,
+            p.created_at as creation_block,
+            p.updated_at as last_updated_block,
             p.is_active,
-            u.user_id
+            p.user_id
         FROM blockchain.positions p
-        JOIN public.users u ON u.cdp_wallet_address = p.owner_address
-        WHERE u.user_id = :user_id
+        WHERE p.user_id = :user_id
     """
     
     if status == DBPositionStatus.ACTIVE:
