@@ -290,7 +290,7 @@ def upgrade() -> None:
                         'amount_usdc', amount_usdc,
                         'pool_name', pool_name
                     )
-                WHERE event_data IS NULL OR event_data = '{}'::jsonb;
+                WHERE event_data IS NULL OR event_data::text = '{}';
             END IF;
             
             -- Migrate metadata if columns exist
@@ -304,7 +304,7 @@ def upgrade() -> None:
                         'cost_basis_withdrawn', cost_basis_withdrawn,
                         'gas_price', gas_price
                     )
-                WHERE tx_metadata IS NULL OR tx_metadata = '{}'::jsonb;
+                WHERE tx_metadata IS NULL OR tx_metadata::text = '{}';
             END IF;
             
             -- Migrate timestamps if columns exist
