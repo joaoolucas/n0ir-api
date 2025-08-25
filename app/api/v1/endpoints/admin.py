@@ -21,8 +21,8 @@ async def fix_user_balance(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    One-time endpoint to fix balance discrepancy.
-    This will be removed after fixing the production data.
+    Fix balance discrepancy by creating proper transaction records.
+    Creates both DEPOSIT and POSITION_ENTRY transactions to reflect user's actual state.
     """
     # Calculate position amount from user's actual positions
     from app.database.models.position import Position
@@ -53,20 +53,29 @@ async def fix_user_balance(
         current_balance = await user_service.get_user_balance(user_id)
         logger.info(f"Current calculated balance: {current_balance} USDC")
         
-        # Check if we already have a position entry transaction
-        tx_stmt = select(Transaction).where(
+        # Check if we already have deposit and position entry transactions
+        deposit_stmt = select(Transaction).where(
+            Transaction.user_id == user_id,
+            Transaction.tx_type == 'DEPOSIT'
+        )
+        deposit_result = await db.execute(deposit_stmt)
+        existing_deposit = deposit_result.scalar_one_or_none()
+        
+        position_stmt = select(Transaction).where(
             Transaction.user_id == user_id,
             Transaction.tx_type == 'POSITION_CREATED'
         )
-        result = await db.execute(tx_stmt)
-        existing_tx = result.scalar_one_or_none()
+        position_result = await db.execute(position_stmt)
+        existing_position_tx = position_result.scalar_one_or_none()
         
-        if not existing_tx:
-            # Create missing POSITION_ENTRY transaction to correct the balance
-            position_tx = Transaction(
+        transactions_created = []
+        
+        if not existing_deposit:
+            # Create DEPOSIT transaction (money coming in)
+            deposit_tx = Transaction(
                 id=uuid4(),
                 user_id=user_id,
-                tx_type='DEPOSIT',  # Use DEPOSIT so it credits the user's balance
+                tx_type='DEPOSIT',  # Credits user's balance
                 status='CONFIRMED',
                 event_data={'amount_usdc': float(POSITION_AMOUNT)},
                 tx_metadata={
@@ -76,8 +85,34 @@ async def fix_user_balance(
                 created_at=datetime.now(timezone.utc),
                 processed_at=datetime.now(timezone.utc)
             )
-            db.add(position_tx)
+            db.add(deposit_tx)
+            transactions_created.append(f"DEPOSIT: {POSITION_AMOUNT} USDC")
             logger.info(f"Created DEPOSIT transaction for {POSITION_AMOUNT} USDC")
+        
+        if not existing_position_tx and positions:
+            # Create POSITION_ENTRY transaction for the actual position (money going out to position)
+            main_position = positions[0]  # Use the first/main position
+            position_entry_tx = Transaction(
+                id=uuid4(),
+                user_id=user_id,
+                tx_type='POSITION_CREATED',  # Debits user's balance, creates position
+                status='CONFIRMED',
+                event_data={'amount_usdc': float(main_position.entry_amount_usdc)},
+                tx_metadata={
+                    'action': 'retroactive_position_entry',
+                    'nft_token_id': main_position.nft_token_id,
+                    'pool_address': main_position.pool_address,
+                    'reason': 'Position synced from blockchain without corresponding entry record'
+                },
+                created_at=datetime.now(timezone.utc),
+                processed_at=datetime.now(timezone.utc),
+                position_id=main_position.nft_token_id
+            )
+            db.add(position_entry_tx)
+            transactions_created.append(f"POSITION_ENTRY: {main_position.entry_amount_usdc} USDC for position {main_position.nft_token_id}")
+            logger.info(f"Created POSITION_ENTRY transaction for position {main_position.nft_token_id}")
+            
+        if transactions_created:
             
             # Commit changes
             await db.commit()
@@ -87,18 +122,20 @@ async def fix_user_balance(
             
             return {
                 "success": True,
-                "message": "Balance fixed successfully",
+                "message": "Balance and transactions fixed successfully",
                 "old_balance": str(current_balance),
                 "new_balance": str(new_balance),
-                "position_entry_amount": str(POSITION_AMOUNT)
+                "transactions_created": transactions_created,
+                "total_position_amount": str(POSITION_AMOUNT)
             }
         else:
-            amount = existing_tx.event_data.get('amount_usdc', 0) if existing_tx.event_data else 0
-            logger.info(f"Transaction already exists: {amount} USDC")
+            logger.info("All required transactions already exist")
             return {
                 "success": False,
-                "message": "Transaction already exists",
-                "existing_amount": str(amount)
+                "message": "All required transactions already exist",
+                "current_balance": str(current_balance),
+                "deposit_exists": existing_deposit is not None,
+                "position_tx_exists": existing_position_tx is not None
             }
         
     except HTTPException:
