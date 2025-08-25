@@ -282,27 +282,26 @@ class UserService:
             metadata={"type": "deposit"}
         )
         
-        # If tx_hash provided, mark as confirmed (on-chain deposit)
-        if tx_hash:
-            transaction = await self.update_transaction_status(
-                transaction_id=transaction.id,
-                status=TransactionStatus.CONFIRMED,
-                tx_hash=tx_hash
-            )
+        # Auto-confirm the deposit (whether it has tx_hash or not)
+        # This allows both on-chain and simulated deposits to work
+        transaction = await self.update_transaction_status(
+            transaction_id=transaction.id,
+            status=TransactionStatus.CONFIRMED,
+            tx_hash=tx_hash
+        )
         
         # Recalculate user PnL after deposit
-        if tx_hash:  # Only recalculate for confirmed deposits
-            await self.recalculate_user_pnl(user_id)
-            
-            # Publish balance change event for confirmed deposits
-            new_balance = await self.get_user_balance(user_id)
-            agent_service = get_agent_service()
-            await agent_service.publish_balance_event(
-                user_id=user_id,
-                balance=float(new_balance),
-                event_type='deposit'
-            )
-            logger.info(f"Published balance event after deposit for {user_id}: {new_balance} USDC")
+        await self.recalculate_user_pnl(user_id)
+        
+        # Publish balance change event for confirmed deposits
+        new_balance = await self.get_user_balance(user_id)
+        agent_service = get_agent_service()
+        await agent_service.publish_balance_event(
+            user_id=user_id,
+            balance=float(new_balance),
+            event_type='deposit'
+        )
+        logger.info(f"Published balance event after deposit for {user_id}: {new_balance} USDC")
         
         logger.info(f"Processed deposit of {amount} USDC for user {user_id}")
         return transaction
