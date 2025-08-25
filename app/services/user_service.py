@@ -285,7 +285,7 @@ class UserService:
         # If tx_hash provided, mark as confirmed (on-chain deposit)
         if tx_hash:
             transaction = await self.update_transaction_status(
-                transaction_id=transaction.transaction_id,
+                transaction_id=transaction.id,
                 status=TransactionStatus.CONFIRMED,
                 tx_hash=tx_hash
             )
@@ -453,7 +453,7 @@ class UserService:
         # Mark as confirmed since we have tx_hash
         if tx_hash:
             transaction = await self.update_transaction_status(
-                transaction_id=transaction.transaction_id,
+                transaction_id=transaction.id,
                 status=TransactionStatus.CONFIRMED,
                 tx_hash=tx_hash
             )
@@ -836,7 +836,7 @@ class UserService:
                     
                     # Mark as confirmed
                     await self.update_transaction_status(
-                        transaction_id=adjustment.transaction_id,
+                        transaction_id=adjustment.id,
                         status=TransactionStatus.CONFIRMED,
                         tx_hash=adjustment.tx_hash
                     )
