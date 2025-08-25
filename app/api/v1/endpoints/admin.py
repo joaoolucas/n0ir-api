@@ -64,7 +64,7 @@ async def fix_user_balance(
         if not existing_tx:
             # Create missing POSITION_ENTRY transaction to correct the balance
             position_tx = Transaction(
-                id=uuid4(),
+                transaction_id=uuid4(),
                 user_id=user_id,
                 tx_type='DEPOSIT',  # Use DEPOSIT so it credits the user's balance
                 status='CONFIRMED',

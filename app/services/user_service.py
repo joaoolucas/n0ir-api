@@ -179,7 +179,7 @@ class UserService:
         gas_price: Optional[Decimal] = None
     ) -> Optional[Transaction]:
         """Update transaction status and blockchain information."""
-        stmt = select(Transaction).where(Transaction.id == transaction_id)
+        stmt = select(Transaction).where(Transaction.transaction_id == transaction_id)
         result = await self.db.execute(stmt)
         transaction = result.scalar_one_or_none()
         
@@ -285,7 +285,7 @@ class UserService:
         # If tx_hash provided, mark as confirmed (on-chain deposit)
         if tx_hash:
             transaction = await self.update_transaction_status(
-                transaction_id=transaction.id,
+                transaction_id=transaction.transaction_id,
                 status=TransactionStatus.CONFIRMED,
                 tx_hash=tx_hash
             )
@@ -453,7 +453,7 @@ class UserService:
         # Mark as confirmed since we have tx_hash
         if tx_hash:
             transaction = await self.update_transaction_status(
-                transaction_id=transaction.id,
+                transaction_id=transaction.transaction_id,
                 status=TransactionStatus.CONFIRMED,
                 tx_hash=tx_hash
             )
@@ -836,7 +836,7 @@ class UserService:
                     
                     # Mark as confirmed
                     await self.update_transaction_status(
-                        transaction_id=adjustment.id,
+                        transaction_id=adjustment.transaction_id,
                         status=TransactionStatus.CONFIRMED,
                         tx_hash=adjustment.tx_hash
                     )
