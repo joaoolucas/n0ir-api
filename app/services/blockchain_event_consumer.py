@@ -44,6 +44,18 @@ class BlockchainEventConsumer:
             )
             await self.redis_client.ping()
             
+            # Create stream if it doesn't exist by adding a dummy entry
+            try:
+                # First ensure the stream exists
+                await self.redis_client.xadd(
+                    self.stream_key,
+                    {"init": "true"},
+                    maxlen=1
+                )
+                logger.info(f"Initialized stream {self.stream_key}")
+            except Exception:
+                pass  # Stream might already exist
+            
             # Create consumer group (ignore if exists)
             try:
                 await self.redis_client.xgroup_create(
@@ -89,6 +101,7 @@ class BlockchainEventConsumer:
     
     async def _consume_events(self):
         """Main consumer loop."""
+        consecutive_errors = 0
         while self.running:
             try:
                 # Read pending messages
@@ -99,6 +112,8 @@ class BlockchainEventConsumer:
                     count=10,
                     block=5000  # Block for 5 seconds
                 )
+                
+                consecutive_errors = 0  # Reset on success
                 
                 if messages:
                     for stream_name, stream_messages in messages:
@@ -119,7 +134,14 @@ class BlockchainEventConsumer:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Error in consumer loop: {e}")
+                consecutive_errors += 1
+                if consecutive_errors <= 3:
+                    logger.debug(f"Waiting for blockchain events stream... ({str(e)[:50]})")
+                elif consecutive_errors == 4:
+                    logger.warning("No blockchain events yet - watcher may not be running")
+                # Only log as error after many failures
+                if consecutive_errors > 10:
+                    logger.error(f"Persistent error in consumer loop: {e}")
                 await asyncio.sleep(5)
     
     async def _process_event(self, message_id: bytes, data: Dict[bytes, bytes]):
