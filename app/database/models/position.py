@@ -1,8 +1,9 @@
 """Unified Position model matching 3-table architecture."""
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Optional, TYPE_CHECKING, List
-from sqlalchemy import Column, String, DateTime, ForeignKey, Index, Numeric, Integer
+from sqlalchemy import Column, String, DateTime, ForeignKey, Index, Numeric, Integer, Boolean
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship, Mapped
 from app.database.base import Base
@@ -24,9 +25,39 @@ class Position(Base):
     
     # Pool information
     pool_address = Column(String(42), nullable=False, index=True)
+    pool_name = Column(String(100), nullable=True)
+    
+    # Token addresses
+    token0_address = Column(String(42), nullable=True)
+    token1_address = Column(String(42), nullable=True)
+    
+    # Tick and liquidity information
+    tick_lower = Column(Integer, nullable=True)
+    tick_upper = Column(Integer, nullable=True)
+    tick_spacing = Column(Integer, nullable=True)
+    liquidity = Column(String(80), nullable=True)  # Stored as string due to uint256 size
+    
+    # USD amounts
+    entry_amount_usdc = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
+    current_value_usdc = Column(Numeric(precision=20, scale=6), nullable=True)
+    fees_earned_usdc = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
+    rewards_earned_usdc = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
+    
+    # Staking information
+    staked = Column(Boolean, default=False, nullable=False)
+    gauge_address = Column(String(42), nullable=True)
+    
+    # Transaction hashes
+    entry_tx_hash = Column(String(66), nullable=True)
+    exit_tx_hash = Column(String(66), nullable=True)
+    
+    # Protocol fee fields (already exist)
+    protocol_fee_amount = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
+    protocol_fee_collected = Column(Boolean, default=False, nullable=False)
+    protocol_fee_tx_hash = Column(String(66), nullable=True)
     
     # Position status
-    status = Column(String(20), nullable=False, default="ACTIVE", index=True)  # ACTIVE, CLOSED, LIQUIDATED
+    status = Column(String(20), nullable=False, default="active", index=True)  # active, closed, liquidated
     
     # PnL tracking fields
     unrealized_pnl_usd = Column(Numeric(precision=20, scale=2), default=0, nullable=False)
@@ -66,6 +97,9 @@ class Position(Base):
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     closed_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    entry_date = Column(DateTime(timezone=True), nullable=True)  # Alias for created_at
+    exit_date = Column(DateTime(timezone=True), nullable=True)   # Alias for closed_at
+    last_updated = Column(DateTime(timezone=True), nullable=True)  # Alias for updated_at
     
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="positions")
@@ -80,9 +114,9 @@ class Position(Base):
     __table_args__ = (
         Index("idx_positions_user", "user_id", "status"),
         Index("idx_positions_pool", "pool_address"),
-        Index("idx_positions_status", "status", postgresql_where="status = 'ACTIVE'"),
+        Index("idx_positions_status", "status", postgresql_where="status = 'active'"),
         Index("idx_positions_pnl", "user_id", "unrealized_pnl_usd", 
-              postgresql_where="status = 'ACTIVE'"),
+              postgresql_where="status = 'active'"),
     )
     
     # Computed properties for backward compatibility
@@ -92,77 +126,21 @@ class Position(Base):
         return self.token_id
     
     @property
-    def pool_name(self) -> Optional[str]:
-        """Get pool name from position_data."""
-        return self.position_data.get('pool_name') if self.position_data else None
+    def unrealized_pnl_usdc(self) -> Decimal:
+        """Return unrealized PnL as Decimal."""
+        return self.unrealized_pnl_usd or Decimal(0)
     
     @property
-    def entry_amount_usdc(self) -> float:
-        """Get initial investment from position_data."""
-        return float(self.position_data.get('initial_investment_usd', 0)) if self.position_data else 0
-    
-    @property
-    def current_value_usdc(self) -> float:
-        """Get current value from position_data."""
-        return float(self.position_data.get('current_value_usd', 0)) if self.position_data else 0
-    
-    @property
-    def fees_earned_usdc(self) -> float:
-        """Get total fees earned from position_data."""
-        if self.position_data and 'fees_earned' in self.position_data:
-            return float(self.position_data['fees_earned'].get('total_fees_usd', 0))
-        return 0
-    
-    @property
-    def rewards_earned_usdc(self) -> float:
-        """Get rewards earned from position_data."""
-        return float(self.position_data.get('rewards_earned_usd', 0)) if self.position_data else 0
-    
-    @property
-    def staked(self) -> bool:
-        """Check if position is staked."""
-        if self.position_data and 'gauge_info' in self.position_data:
-            return self.position_data['gauge_info'].get('staked', False)
-        return False
-    
-    @property
-    def gauge_address(self) -> Optional[str]:
-        """Get gauge address if staked."""
-        if self.position_data and 'gauge_info' in self.position_data:
-            return self.position_data['gauge_info'].get('gauge_address')
-        return None
-    
-    @property
-    def entry_tx_hash(self) -> Optional[str]:
-        """Get entry transaction hash."""
-        return self.position_data.get('entry_tx_hash') if self.position_data else None
-    
-    @property
-    def exit_tx_hash(self) -> Optional[str]:
-        """Get exit transaction hash."""
-        return self.position_data.get('exit_tx_hash') if self.position_data else None
-    
-    @property
-    def entry_date(self) -> datetime:
-        """Alias for created_at for backward compatibility."""
-        return self.created_at
-    
-    @property
-    def exit_date(self) -> Optional[datetime]:
-        """Alias for closed_at for backward compatibility."""
-        return self.closed_at
-    
-    @property
-    def last_updated(self) -> datetime:
-        """Alias for updated_at for backward compatibility."""
-        return self.updated_at
+    def realized_pnl_usdc(self) -> Decimal:
+        """Return realized PnL as Decimal."""
+        return self.realized_pnl_usd or Decimal(0)
     
     @property
     def total_pnl_usdc(self) -> float:
         """Calculate total PnL including fees and rewards."""
         unrealized = float(self.unrealized_pnl_usd or 0)
         realized = float(self.realized_pnl_usd or 0)
-        return unrealized + realized if self.status == 'ACTIVE' else realized
+        return unrealized + realized if self.status == 'active' else realized
     
     def __repr__(self):
         return f"<Position(token_id={self.token_id}, pool={self.pool_address[:10]}..., status={self.status}, pnl={self.total_pnl_usdc:.2f})>"
