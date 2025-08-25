@@ -568,73 +568,26 @@ async def get_positions(
     status: Optional[DBPositionStatus] = None,
     db: AsyncSession = Depends(get_db)
 ):
-    """Get user positions from blockchain schema.
+    """Get user positions.
     
-    Positions are now read from the blockchain schema which is maintained
-    by the watcher service as the single source of truth.
+    During transition: Uses existing positions from public schema.
+    Eventually: Will read from blockchain schema once watcher populates it.
     """
-    from sqlalchemy import text
-    from decimal import Decimal
+    service = UserService(db)
     
-    # Query positions from blockchain schema
-    query = """
-        SELECT 
-            p.nft_token_id,
-            p.user_id as owner_address,
-            p.pool_address,
-            p.tick_lower,
-            p.tick_upper,
-            p.liquidity,
-            p.token0_address,
-            p.token1_address,
-            p.created_at as creation_block,
-            p.updated_at as last_updated_block,
-            p.is_active,
-            p.user_id
-        FROM blockchain.positions p
-        WHERE p.user_id = :user_id
-    """
+    # For now, use the existing service method which reads from public.positions
+    # Once the watcher has backfilled blockchain.positions, we can switch
+    positions = await service.get_user_positions(user_id, status)
     
-    if status == DBPositionStatus.ACTIVE:
-        query += " AND p.is_active = true"
-    elif status == DBPositionStatus.CLOSED:
-        query += " AND p.is_active = false"
-    
-    result = await db.execute(text(query), {"user_id": user_id})
-    blockchain_positions = result.fetchall()
-    
-    # Convert to PositionResponse format
+    # Enrich positions with pool data
     enriched_positions = []
-    for pos in blockchain_positions:
-        # Create a position-like object for enrichment
-        position_dict = {
-            "nft_token_id": pos.nft_token_id,
-            "user_id": pos.user_id,
-            "pool_address": pos.pool_address,
-            "tick_lower": pos.tick_lower,
-            "tick_upper": pos.tick_upper,
-            "liquidity": str(pos.liquidity),
-            "status": DBPositionStatus.ACTIVE if pos.is_active else DBPositionStatus.CLOSED,
-            "entry_amount_usdc": Decimal("100"),  # TODO: Get from intent stream or transaction history
-            "current_value_usdc": Decimal("100"),  # Will be enriched
-            "fees_earned_usdc": Decimal("0"),
-            "rewards_earned_usdc": Decimal("0"),
-            "tick_spacing": 100,  # TODO: Get from pool data
-            "staked": False,
-            "gauge_address": None
-        }
-        
-        # Convert to object for enrichment
-        from types import SimpleNamespace
-        position_obj = SimpleNamespace(**position_dict)
-        
-        # Enrich with real-time pool data
-        enriched_position = await enrich_position_with_pool_data(position_obj)
+    for position in positions:
+        enriched_position = await enrich_position_with_pool_data(position)
         enriched_positions.append(PositionResponse.model_validate(enriched_position))
     
     return PositionListResponse(
         positions=enriched_positions,
-        total=len(enriched_positions)
+        total=len(positions)
     )
 
 
