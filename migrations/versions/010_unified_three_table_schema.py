@@ -68,23 +68,42 @@ def upgrade() -> None:
     """)
     
     # Migrate existing cdp_wallet data if it exists in different columns
+    # First check if wallet_address column exists
     op.execute("""
-        UPDATE users 
-        SET cdp_wallet_address = COALESCE(cdp_wallet_address, wallet_address)
-        WHERE cdp_wallet_address IS NULL AND wallet_address IS NOT NULL;
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'users' AND column_name = 'wallet_address'
+            ) THEN
+                UPDATE users 
+                SET cdp_wallet_address = COALESCE(cdp_wallet_address, wallet_address)
+                WHERE cdp_wallet_address IS NULL AND wallet_address IS NOT NULL;
+            END IF;
+        END $$;
     """)
     
     # Migrate agent status to metadata
     op.execute("""
-        UPDATE users 
-        SET user_metadata = COALESCE(user_metadata, '{}'::jsonb) || 
-                       jsonb_build_object(
-                           'agent_status', COALESCE(agent_status::text, 'not_started'),
-                           'agent_started_at', agent_started_at,
-                           'agent_stopped_at', agent_stopped_at,
-                           'last_balance_check', last_balance_check
-                       )
-        WHERE agent_status IS NOT NULL OR agent_started_at IS NOT NULL;
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'users' AND column_name = 'agent_status'
+            ) THEN
+                UPDATE users 
+                SET user_metadata = COALESCE(user_metadata, '{}'::jsonb) || 
+                               jsonb_build_object(
+                                   'agent_status', COALESCE(agent_status::text, 'not_started'),
+                                   'agent_started_at', agent_started_at,
+                                   'agent_stopped_at', agent_stopped_at,
+                                   'last_balance_check', last_balance_check
+                               )
+                WHERE agent_status IS NOT NULL OR agent_started_at IS NOT NULL;
+            END IF;
+        END $$;
     """)
     
     # Migrate PnL data from existing columns
