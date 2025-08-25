@@ -135,16 +135,27 @@ class UserService:
         cost_basis_withdrawn: Optional[Decimal] = None
     ) -> Transaction:
         """Create a new transaction record."""
+        # Map old transaction_type enum to new tx_type string
+        tx_type_mapping = {
+            TransactionType.DEPOSIT: 'DEPOSIT',
+            TransactionType.WITHDRAW: 'WITHDRAWAL',
+            TransactionType.POSITION_ENTRY: 'POSITION_CREATED',
+            TransactionType.POSITION_EXIT: 'POSITION_CLOSED',
+            TransactionType.FEE_COLLECTION: 'FEES_COLLECTED'
+        }
+        
+        tx_type_value = tx_type_mapping.get(transaction_type, str(transaction_type).upper())
+        
         transaction = Transaction(
             user_id=user_id,
-            transaction_type=transaction_type,
-            amount_usdc=amount_usdc,
+            tx_type=tx_type_value,
             tx_hash=tx_hash,
             status=TransactionStatus.PENDING,
             tx_metadata=json.dumps(metadata) if metadata else None,
             realized_pnl_usdc=realized_pnl_usdc,
             portfolio_value_at_time=portfolio_value_at_time,
-            cost_basis_withdrawn=cost_basis_withdrawn
+            cost_basis_withdrawn=cost_basis_withdrawn,
+            event_data={'amount_usdc': float(amount_usdc)} if amount_usdc else {}
         )
         
         self.db.add(transaction)
