@@ -9,7 +9,7 @@ from sqlalchemy import select, update, and_, or_, func, case
 from sqlalchemy.orm import selectinload
 
 from app.database.models import User, Transaction, Position
-from app.schemas.users import UserStatus, TransactionType, TransactionStatus, PositionStatus
+from app.schemas.users import TransactionType, TransactionStatus, PositionStatus
 from app.core.logger import logger
 from app.core.positions_service import positions_service
 from app.services.agent_management_service import get_agent_service
@@ -46,9 +46,10 @@ class UserService:
             user = User(
                 user_id=user_id,
                 cdp_wallet_address=cdp_wallet_address,
-                cdp_wallet_name=cdp_wallet_name,
-                status=UserStatus.ACTIVE
+                cdp_wallet_name=cdp_wallet_name
             )
+            # Set agent status through the property (stored in user_metadata)
+            user.agent_status = 'not_started'
             
             self.db.add(user)
             await self.db.commit()
@@ -86,16 +87,16 @@ class UserService:
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
     
-    async def update_user_status(self, user_id: str, status: UserStatus) -> Optional[User]:
-        """Update user status in metadata."""
+    async def update_user_status(self, user_id: str, status: str) -> Optional[User]:
+        """Update user agent status in metadata."""
         user = await self.get_user(user_id)
         if not user:
             return None
         
-        # Status is stored in user_metadata
+        # Agent status is stored in user_metadata
         if user.user_metadata is None:
             user.user_metadata = {}
-        user.user_metadata['status'] = status.value
+        user.user_metadata['agent_status'] = status
         user.updated_at = datetime.utcnow()
         await self.db.commit()
         await self.db.refresh(user)
