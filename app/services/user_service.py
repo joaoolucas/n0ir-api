@@ -881,18 +881,38 @@ class UserService:
         final_value_usdc: Optional[Decimal] = None
     ) -> Optional[Position]:
         """Close a position and return funds to user balance."""
+        # Allow closing already closed positions for idempotency
         stmt = select(Position).where(
             and_(
                 Position.nft_token_id == nft_token_id,
                 Position.user_id == user_id,
-                Position.status == 'active'
+                Position.status.in_(['active', 'closed'])
             )
         )
         result = await self.db.execute(stmt)
         position = result.scalar_one_or_none()
         
         if not position:
+            logger.error(f"Position {nft_token_id} not found for user {user_id} with status='active'")
+            # Try to find it without status filter to debug
+            debug_stmt = select(Position).where(
+                and_(
+                    Position.nft_token_id == nft_token_id,
+                    Position.user_id == user_id
+                )
+            )
+            debug_result = await self.db.execute(debug_stmt)
+            debug_position = debug_result.scalar_one_or_none()
+            if debug_position:
+                logger.error(f"Found position but with status='{debug_position.status}' instead of 'active'")
+            else:
+                logger.error(f"Position {nft_token_id} not found at all for user {user_id}")
             return None
+        
+        # If position is already closed, just return it without creating duplicate transaction
+        if position.status == 'closed':
+            logger.info(f"Position {nft_token_id} is already closed, skipping duplicate closure")
+            return position
         
         # Calculate final value if not provided
         if final_value_usdc is None:
