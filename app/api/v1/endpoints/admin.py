@@ -24,13 +24,20 @@ async def fix_user_balance(
     One-time endpoint to fix balance discrepancy.
     This will be removed after fixing the production data.
     """
-    # Only allow for specific user during migration
-    if user_id != "0xdBE4e3bcb15B221324B776Db6F0CbFf24918Ea51":
-        raise HTTPException(status_code=403, detail="Not authorized")
+    # Calculate position amount from user's actual positions
+    from app.database.models.position import Position
     
-    ACTUAL_WALLET_BALANCE = Decimal("0.017701")
-    EXPECTED_DEPOSIT = Decimal("15.0")
-    POSITION_AMOUNT = EXPECTED_DEPOSIT - ACTUAL_WALLET_BALANCE  # 14.982299
+    positions_stmt = select(Position).where(
+        Position.user_id == user_id,
+        Position.status == 'active'
+    )
+    positions_result = await db.execute(positions_stmt)
+    positions = positions_result.scalars().all()
+    
+    if not positions:
+        raise HTTPException(status_code=404, detail=f"No active positions found for user {user_id}")
+    
+    POSITION_AMOUNT = sum(p.entry_amount_usdc for p in positions)
     
     try:
         # Check if user exists
@@ -49,7 +56,7 @@ async def fix_user_balance(
         # Check if we already have a position entry transaction
         tx_stmt = select(Transaction).where(
             Transaction.user_id == user_id,
-            Transaction.transaction_type == TransactionType.POSITION_ENTRY
+            Transaction.tx_type == 'POSITION_CREATED'
         )
         result = await db.execute(tx_stmt)
         existing_tx = result.scalar_one_or_none()
@@ -57,17 +64,20 @@ async def fix_user_balance(
         if not existing_tx:
             # Create missing POSITION_ENTRY transaction to correct the balance
             position_tx = Transaction(
-                transaction_id=uuid4(),
+                id=uuid4(),
                 user_id=user_id,
-                transaction_type=TransactionType.POSITION_ENTRY,
-                amount_usdc=POSITION_AMOUNT,
-                status=TransactionStatus.CONFIRMED,
+                tx_type='DEPOSIT',  # Use DEPOSIT so it credits the user's balance
+                status='CONFIRMED',
+                event_data={'amount_usdc': float(POSITION_AMOUNT)},
+                tx_metadata={
+                    'action': 'retroactive_deposit',
+                    'reason': 'Position synced from blockchain without corresponding deposit record'
+                },
                 created_at=datetime.now(timezone.utc),
-                confirmed_at=datetime.now(timezone.utc),
-                tx_metadata="Retroactive transaction for existing position"
+                processed_at=datetime.now(timezone.utc)
             )
             db.add(position_tx)
-            logger.info(f"Created POSITION_ENTRY transaction for {POSITION_AMOUNT} USDC")
+            logger.info(f"Created DEPOSIT transaction for {POSITION_AMOUNT} USDC")
             
             # Commit changes
             await db.commit()
@@ -83,11 +93,12 @@ async def fix_user_balance(
                 "position_entry_amount": str(POSITION_AMOUNT)
             }
         else:
-            logger.info(f"POSITION_ENTRY transaction already exists: {existing_tx.amount_usdc} USDC")
+            amount = existing_tx.event_data.get('amount_usdc', 0) if existing_tx.event_data else 0
+            logger.info(f"Transaction already exists: {amount} USDC")
             return {
                 "success": False,
-                "message": "POSITION_ENTRY transaction already exists",
-                "existing_amount": str(existing_tx.amount_usdc)
+                "message": "Transaction already exists",
+                "existing_amount": str(amount)
             }
         
     except HTTPException:
