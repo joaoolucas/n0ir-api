@@ -245,7 +245,7 @@ async def fix_position_status(
                     position.status = 'active'
                     position.exit_date = None
                     position.exit_tx_hash = None
-                    position.realized_pnl_usdc = Decimal(0)
+                    position.realized_pnl_usd = Decimal(0)
                     position.current_value_usdc = Decimal(str(position_info.current_value_usd or 0))
                     
                     # Also remove the POSITION_EXIT transaction if it exists
@@ -359,7 +359,7 @@ async def sync_user_positions(
                         position.status = 'active'
                         position.exit_date = None
                         position.exit_tx_hash = None
-                        position.realized_pnl_usdc = Decimal(0)
+                        position.realized_pnl_usd = Decimal(0)
                         position.current_value_usdc = Decimal(str(position_info.current_value_usd or 0))
                         
                         fixed_positions.append({

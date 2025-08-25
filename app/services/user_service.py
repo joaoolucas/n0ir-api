@@ -701,7 +701,7 @@ class UserService:
         
         position.current_value_usdc = current_value_usdc
         if unrealized_pnl_usdc is not None:
-            position.unrealized_pnl_usdc = unrealized_pnl_usdc
+            position.unrealized_pnl_usd = unrealized_pnl_usdc
         if fees_earned_usdc is not None:
             position.fees_earned_usdc = fees_earned_usdc
         if rewards_earned_usdc is not None:
@@ -929,9 +929,9 @@ class UserService:
         position.status = 'closed'
         position.exit_tx_hash = exit_tx_hash
         position.exit_date = datetime.now(timezone.utc)
-        position.realized_pnl_usdc = realized_pnl_usdc
+        position.realized_pnl_usd = realized_pnl_usdc
         position.current_value_usdc = final_value_usdc
-        position.unrealized_pnl_usdc = Decimal(0)
+        position.unrealized_pnl_usd = Decimal(0)
         
         # No protocol fee - return full value to user
         position.protocol_fee_amount = Decimal('0')
@@ -1006,10 +1006,10 @@ class UserService:
         user = result.scalar_one_or_none()
         
         if user:
-            user.unrealized_pnl_usdc = unrealized_pnl
-            user.realized_pnl_usdc = realized_pnl
-            user.unrealized_pnl_percentage = unrealized_pnl_percentage
-            user.realized_pnl_percentage = realized_pnl_percentage
+            user.unrealized_pnl_usd = unrealized_pnl
+            user.realized_pnl_usd = realized_pnl
+            user.unrealized_pnl_pct = unrealized_pnl_percentage
+            user.realized_pnl_pct = realized_pnl_percentage
             user.updated_at = datetime.now(timezone.utc)
             
             await self.db.commit()
@@ -1029,7 +1029,7 @@ class UserService:
                 position.status = 'active'
                 position.exit_date = None
                 position.exit_tx_hash = None
-                position.realized_pnl_usdc = Decimal(0)
+                position.realized_pnl_usd = Decimal(0)
                 
                 # Find and remove the POSITION_EXIT transaction
                 exit_tx = await self.db.execute(
@@ -1111,7 +1111,7 @@ class UserService:
                     logger.warning(f"Position {position.nft_token_id} not found on-chain, may be closed externally")
                     # Mark position as closed if it doesn't exist on-chain
                     position.status = 'closed'
-                    position.realized_pnl_usdc = position.current_value_usdc - position.entry_amount_usdc
+                    position.realized_pnl_usd = position.current_value_usdc - position.entry_amount_usdc
                     # Move its PNL to realized
                     realized_pnl += position.realized_pnl_usdc or Decimal(0)
                 else:

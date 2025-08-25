@@ -97,5 +97,25 @@ class User(Base):
         """Calculate total PnL (unrealized + realized)."""
         return float((self.unrealized_pnl_usd or 0) + (self.realized_pnl_usd or 0))
     
+    @property
+    def unrealized_pnl_usdc(self):
+        """Alias for unrealized_pnl_usd for backward compatibility."""
+        return self.unrealized_pnl_usd
+    
+    @property
+    def realized_pnl_usdc(self):
+        """Alias for realized_pnl_usd for backward compatibility."""
+        return self.realized_pnl_usd
+    
+    @property 
+    def unrealized_pnl_percentage(self):
+        """Alias for unrealized_pnl_pct for backward compatibility."""
+        return self.unrealized_pnl_pct
+    
+    @property
+    def realized_pnl_percentage(self):
+        """Alias for realized_pnl_pct for backward compatibility."""
+        return self.realized_pnl_pct
+    
     def __repr__(self):
         return f"<User(user_id={self.user_id}, cdp_wallet={self.cdp_wallet_address}, pnl={self.total_pnl_usd:.2f})>"
