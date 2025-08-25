@@ -146,15 +146,21 @@ class UserService:
         
         tx_type_value = tx_type_mapping.get(transaction_type, str(transaction_type).upper())
         
+        # Prepare metadata with PnL values
+        tx_metadata = metadata or {}
+        if realized_pnl_usdc is not None:
+            tx_metadata['realized_pnl_usdc'] = float(realized_pnl_usdc)
+        if portfolio_value_at_time is not None:
+            tx_metadata['portfolio_value_at_time'] = float(portfolio_value_at_time)
+        if cost_basis_withdrawn is not None:
+            tx_metadata['cost_basis_withdrawn'] = float(cost_basis_withdrawn)
+        
         transaction = Transaction(
             user_id=user_id,
             tx_type=tx_type_value,
             tx_hash=tx_hash,
             status=TransactionStatus.PENDING,
-            tx_metadata=json.dumps(metadata) if metadata else None,
-            realized_pnl_usdc=realized_pnl_usdc,
-            portfolio_value_at_time=portfolio_value_at_time,
-            cost_basis_withdrawn=cost_basis_withdrawn,
+            tx_metadata=tx_metadata,
             event_data={'amount_usdc': float(amount_usdc)} if amount_usdc else {}
         )
         
@@ -924,26 +930,25 @@ class UserService:
         amount_returned = final_value_usdc
         
         # Create transaction record for position exit (credit) with realized PnL
-        transaction = Transaction(
+        transaction = await self.create_transaction(
             user_id=user_id,
             transaction_type=TransactionType.POSITION_EXIT,
             amount_usdc=amount_returned,  # Amount returned to user
-            pool_name=position.pool_name,  # Add pool name from position
-            realized_pnl_usdc=realized_pnl_usdc,  # Track realized PnL from this position
             tx_hash=exit_tx_hash,
-            status=TransactionStatus.CONFIRMED,
-            tx_metadata=json.dumps({
+            realized_pnl_usdc=realized_pnl_usdc,  # Track realized PnL from this position
+            metadata={
                 "nft_token_id": nft_token_id,
                 "pool_address": position.pool_address,
                 "pool_name": position.pool_name,
                 "action": "position_closed",
                 "realized_pnl": str(realized_pnl_usdc),
                 "protocol_fee": "0"
-            }),
-            confirmed_at=datetime.now(timezone.utc)
+            }
         )
         
-        self.db.add(transaction)
+        # Update transaction status to confirmed
+        await self.update_transaction_status(transaction.id, TransactionStatus.CONFIRMED)
+        
         await self.db.commit()
         await self.db.refresh(position)
         
