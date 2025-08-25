@@ -22,7 +22,10 @@ class BlockchainEventConsumer:
         self.redis_client: Optional[aioredis.Redis] = None
         self.stream_key = "blockchain:events"
         self.consumer_group = "n0ir-api"
-        self.consumer_name = f"api-{settings.environment}"
+        # Use Railway environment variable or default
+        import os
+        env = os.getenv("RAILWAY_ENVIRONMENT", "development")
+        self.consumer_name = f"api-{env}"
         self.running = False
         self._consumer_task = None
         
