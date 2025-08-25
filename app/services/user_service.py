@@ -70,23 +70,32 @@ class UserService:
     
     async def list_all_users(self) -> List[User]:
         """List all users."""
-        stmt = select(User).where(User.status == UserStatus.ACTIVE)
+        # All users are considered active - no status field in new schema
+        stmt = select(User)
         result = await self.db.execute(stmt)
         return result.scalars().all()
     
     async def get_user_by_wallet(self, wallet_address: str) -> Optional[User]:
-        """Get user by wallet address."""
-        stmt = select(User).where(User.wallet_address == wallet_address)
+        """Get user by wallet address (EOA or CDP wallet)."""
+        stmt = select(User).where(
+            or_(
+                User.user_id == wallet_address,
+                User.cdp_wallet_address == wallet_address
+            )
+        )
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
     
     async def update_user_status(self, user_id: str, status: UserStatus) -> Optional[User]:
-        """Update user status."""
+        """Update user status in metadata."""
         user = await self.get_user(user_id)
         if not user:
             return None
         
-        user.status = status
+        # Status is stored in user_metadata
+        if user.user_metadata is None:
+            user.user_metadata = {}
+        user.user_metadata['status'] = status.value
         user.updated_at = datetime.utcnow()
         await self.db.commit()
         await self.db.refresh(user)
