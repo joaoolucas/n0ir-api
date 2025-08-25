@@ -491,7 +491,7 @@ class AgentManagementService:
         
         # Create withdrawal command
         command = {
-            'action': 'withdraw',
+            'type': 'withdraw',  # Changed from 'action' to match executor expectation
             'user_id': user_id,
             'amount_usdc': amount,
             'to_address': to_address,
