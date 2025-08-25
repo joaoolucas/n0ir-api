@@ -136,7 +136,7 @@ class TransactionResponse(BaseModel):
     gas_used: Optional[int]
     gas_price: Optional[Decimal]
     status: TransactionStatus
-    tx_metadata: Optional[str]
+    tx_metadata: Optional[Dict[str, Any]] = Field(None, description="Additional transaction metadata as JSON")
     created_at: datetime
     confirmed_at: Optional[datetime]
 
