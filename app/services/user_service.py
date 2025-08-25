@@ -896,28 +896,10 @@ class UserService:
         
         # Calculate final value if not provided
         if final_value_usdc is None:
-            # Try to fetch actual value from blockchain
-            try:
-                logger.info(f"Fetching actual value from blockchain for position {nft_token_id}")
-                position_info = await positions_service.get_position_by_id(nft_token_id)
-                
-                if position_info and position_info.current_value_usd:
-                    # Use the actual value from blockchain
-                    final_value_usdc = Decimal(str(position_info.current_value_usd))
-                    
-                    # Add any unclaimed fees to the final value
-                    if position_info.unclaimed_fees_usd:
-                        final_value_usdc += Decimal(str(position_info.unclaimed_fees_usd))
-                    
-                    logger.info(f"Using blockchain value for position {nft_token_id}: {final_value_usdc} USDC")
-                else:
-                    # Fallback to database value if blockchain fetch fails
-                    logger.warning(f"Could not fetch blockchain value for position {nft_token_id}, using database value")
-                    final_value_usdc = position.current_value_usdc or position.entry_amount_usdc
-            except Exception as e:
-                # If blockchain fetch fails, use database value as fallback
-                logger.error(f"Error fetching position {nft_token_id} from blockchain: {e}")
-                final_value_usdc = position.current_value_usdc or position.entry_amount_usdc
+            # For now, skip blockchain fetch and use database values
+            # The blockchain fetch might be failing or returning None
+            final_value_usdc = position.current_value_usdc or position.entry_amount_usdc
+            logger.info(f"Using database value for position {nft_token_id}: current={position.current_value_usdc}, entry={position.entry_amount_usdc}, using={final_value_usdc}")
         
         # Calculate realized P&L if not provided
         if realized_pnl_usdc is None:
@@ -935,6 +917,8 @@ class UserService:
         position.protocol_fee_amount = Decimal('0')
         position.protocol_fee_collected = False
         amount_returned = final_value_usdc
+        
+        logger.info(f"Position {nft_token_id} closure details: final_value={final_value_usdc}, amount_returned={amount_returned}")
         
         # Create transaction record for position exit (credit) with realized PnL - directly as CONFIRMED
         tx_metadata = {
