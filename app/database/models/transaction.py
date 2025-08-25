@@ -17,8 +17,8 @@ class Transaction(Base):
     """Universal event and transaction log."""
     __tablename__ = "transactions"
     
-    # Primary key - matches existing database column name
-    transaction_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Primary key
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     
     # Blockchain transaction hash (unique when present)
     tx_hash = Column(String(66), unique=True, nullable=True, index=True)
@@ -89,9 +89,9 @@ class Transaction(Base):
     
     # Computed properties for backward compatibility
     @property
-    def id(self) -> uuid.UUID:
-        """Alias for transaction_id for backward compatibility."""
-        return self.transaction_id
+    def transaction_id(self) -> uuid.UUID:
+        """Alias for id for backward compatibility."""
+        return self.id
     
     @property
     def transaction_type(self) -> str:
