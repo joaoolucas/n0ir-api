@@ -5,7 +5,7 @@ import uuid
 import json
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, and_, or_, func, case
+from sqlalchemy import select, update, and_, or_, func, case, Numeric
 from sqlalchemy.orm import selectinload
 
 from app.database.models import User, Transaction, Position
@@ -191,17 +191,17 @@ class UserService:
         stmt = select(
             func.sum(
                 case(
-                    (Transaction.transaction_type.in_([
-                        TransactionType.DEPOSIT,
-                        TransactionType.POSITION_EXIT
-                    ]), Transaction.amount_usdc),
-                    else_=-Transaction.amount_usdc
+                    (Transaction.tx_type.in_([
+                        'DEPOSIT',
+                        'POSITION_CLOSED'
+                    ]), func.coalesce(Transaction.event_data['amount_usdc'].astext.cast(Numeric), 0)),
+                    else_=-func.coalesce(Transaction.event_data['amount_usdc'].astext.cast(Numeric), 0)
                 )
             )
         ).where(
             and_(
                 Transaction.user_id == user_id,
-                Transaction.status == TransactionStatus.CONFIRMED
+                Transaction.status == 'CONFIRMED'
             )
         )
         
@@ -221,7 +221,17 @@ class UserService:
         stmt = select(Transaction).where(Transaction.user_id == user_id)
         
         if transaction_type:
-            stmt = stmt.where(Transaction.transaction_type == transaction_type)
+            # Map old enum value to new tx_type string
+            tx_type_map = {
+                'deposit': 'DEPOSIT',
+                'withdraw': 'WITHDRAWAL', 
+                'position_entry': 'POSITION_CREATED',
+                'position_exit': 'POSITION_CLOSED',
+                'fee_collection': 'FEES_COLLECTED',
+                'protocol_fee': 'PROTOCOL_FEE'
+            }
+            tx_type_value = tx_type_map.get(transaction_type.value if hasattr(transaction_type, 'value') else transaction_type, transaction_type)
+            stmt = stmt.where(Transaction.tx_type == tx_type_value)
         if status:
             stmt = stmt.where(Transaction.status == status)
         
@@ -975,7 +985,7 @@ class UserService:
                 exit_tx = await self.db.execute(
                     select(Transaction).where(
                         and_(
-                            Transaction.transaction_type == TransactionType.POSITION_EXIT,
+                            Transaction.tx_type == 'POSITION_CLOSED',
                             Transaction.tx_metadata.like(f'%"nft_token_id": {position.nft_token_id}%')
                         )
                     ).order_by(Transaction.created_at.desc()).limit(1)
