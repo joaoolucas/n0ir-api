@@ -179,7 +179,7 @@ class UserService:
         gas_price: Optional[Decimal] = None
     ) -> Optional[Transaction]:
         """Update transaction status and blockchain information."""
-        stmt = select(Transaction).where(Transaction.transaction_id == transaction_id)
+        stmt = select(Transaction).where(Transaction.id == transaction_id)
         result = await self.db.execute(stmt)
         transaction = result.scalar_one_or_none()
         
@@ -194,10 +194,13 @@ class UserService:
         if gas_used:
             transaction.gas_used = gas_used
         if gas_price:
-            transaction.gas_price = gas_price
+            # Store gas_price in tx_metadata since it's a property that reads from there
+            metadata = transaction.tx_metadata or {}
+            metadata['gas_price'] = float(gas_price)
+            transaction.tx_metadata = metadata
         
         if status == TransactionStatus.CONFIRMED:
-            transaction.confirmed_at = datetime.utcnow()
+            transaction.processed_at = datetime.utcnow()
         
         await self.db.commit()
         await self.db.refresh(transaction)
@@ -929,26 +932,29 @@ class UserService:
         position.protocol_fee_collected = False
         amount_returned = final_value_usdc
         
-        # Create transaction record for position exit (credit) with realized PnL
-        transaction = await self.create_transaction(
+        # Create transaction record for position exit (credit) with realized PnL - directly as CONFIRMED
+        tx_metadata = {
+            "nft_token_id": nft_token_id,
+            "pool_address": position.pool_address,
+            "pool_name": position.pool_name,
+            "action": "position_closed",
+            "realized_pnl": str(realized_pnl_usdc),
+            "protocol_fee": "0",
+            "realized_pnl_usdc": float(realized_pnl_usdc)
+        }
+        
+        transaction = Transaction(
             user_id=user_id,
-            transaction_type=TransactionType.POSITION_EXIT,
-            amount_usdc=amount_returned,  # Amount returned to user
+            tx_type='POSITION_CLOSED',  # Maps to TransactionType.POSITION_EXIT
             tx_hash=exit_tx_hash,
-            realized_pnl_usdc=realized_pnl_usdc,  # Track realized PnL from this position
-            metadata={
-                "nft_token_id": nft_token_id,
-                "pool_address": position.pool_address,
-                "pool_name": position.pool_name,
-                "action": "position_closed",
-                "realized_pnl": str(realized_pnl_usdc),
-                "protocol_fee": "0"
-            }
+            status='CONFIRMED',
+            tx_metadata=tx_metadata,
+            event_data={'amount_usdc': float(amount_returned)},
+            processed_at=datetime.now(timezone.utc),
+            created_at=datetime.now(timezone.utc)
         )
         
-        # Update transaction status to confirmed
-        await self.update_transaction_status(transaction.id, TransactionStatus.CONFIRMED)
-        
+        self.db.add(transaction)
         await self.db.commit()
         await self.db.refresh(position)
         
