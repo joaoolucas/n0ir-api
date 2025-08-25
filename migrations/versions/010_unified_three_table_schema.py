@@ -256,29 +256,66 @@ def upgrade() -> None:
     
     # Map old transaction_type to new tx_type
     op.execute("""
-        UPDATE transactions 
-        SET tx_type = CASE 
-            WHEN transaction_type = 'deposit' THEN 'DEPOSIT'
-            WHEN transaction_type = 'withdraw' THEN 'WITHDRAWAL'
-            WHEN transaction_type = 'position_entry' THEN 'POSITION_CREATED'
-            WHEN transaction_type = 'position_exit' THEN 'POSITION_CLOSED'
-            WHEN transaction_type = 'protocol_fee' THEN 'PROTOCOL_FEE'
-            ELSE UPPER(transaction_type)
-        END,
-        position_id = related_position_id,
-        event_data = jsonb_build_object(
-            'amount_usdc', amount_usdc,
-            'pool_name', pool_name
-        ),
-        tx_metadata = jsonb_build_object(
-            'realized_pnl_usdc', realized_pnl_usdc,
-            'portfolio_value_at_time', portfolio_value_at_time,
-            'cost_basis_withdrawn', cost_basis_withdrawn,
-            'gas_price', gas_price
-        ),
-        block_timestamp = confirmed_at,
-        processed_at = confirmed_at
-        WHERE tx_type IS NULL;
+        DO $$
+        BEGIN
+            -- Only run this migration if the old columns exist
+            IF EXISTS (SELECT 1 FROM information_schema.columns 
+                      WHERE table_name = 'transactions' AND column_name = 'transaction_type') THEN
+                UPDATE transactions 
+                SET tx_type = CASE 
+                    WHEN transaction_type::text = 'deposit' THEN 'DEPOSIT'
+                    WHEN transaction_type::text = 'withdraw' THEN 'WITHDRAWAL'
+                    WHEN transaction_type::text = 'position_entry' THEN 'POSITION_CREATED'
+                    WHEN transaction_type::text = 'position_exit' THEN 'POSITION_CLOSED'
+                    WHEN transaction_type::text = 'protocol_fee' THEN 'PROTOCOL_FEE'
+                    ELSE UPPER(transaction_type::text)
+                END
+                WHERE tx_type IS NULL AND transaction_type IS NOT NULL;
+            END IF;
+            
+            -- Migrate related_position_id if it exists
+            IF EXISTS (SELECT 1 FROM information_schema.columns 
+                      WHERE table_name = 'transactions' AND column_name = 'related_position_id') THEN
+                UPDATE transactions 
+                SET position_id = related_position_id
+                WHERE position_id IS NULL AND related_position_id IS NOT NULL;
+            END IF;
+            
+            -- Migrate amount and pool data if columns exist
+            IF EXISTS (SELECT 1 FROM information_schema.columns 
+                      WHERE table_name = 'transactions' AND column_name = 'amount_usdc') THEN
+                UPDATE transactions 
+                SET event_data = COALESCE(event_data, '{}'::jsonb) || 
+                    jsonb_build_object(
+                        'amount_usdc', amount_usdc,
+                        'pool_name', pool_name
+                    )
+                WHERE event_data IS NULL OR event_data = '{}'::jsonb;
+            END IF;
+            
+            -- Migrate metadata if columns exist
+            IF EXISTS (SELECT 1 FROM information_schema.columns 
+                      WHERE table_name = 'transactions' AND column_name = 'realized_pnl_usdc') THEN
+                UPDATE transactions 
+                SET tx_metadata = COALESCE(tx_metadata, '{}'::jsonb) || 
+                    jsonb_build_object(
+                        'realized_pnl_usdc', realized_pnl_usdc,
+                        'portfolio_value_at_time', portfolio_value_at_time,
+                        'cost_basis_withdrawn', cost_basis_withdrawn,
+                        'gas_price', gas_price
+                    )
+                WHERE tx_metadata IS NULL OR tx_metadata = '{}'::jsonb;
+            END IF;
+            
+            -- Migrate timestamps if columns exist
+            IF EXISTS (SELECT 1 FROM information_schema.columns 
+                      WHERE table_name = 'transactions' AND column_name = 'confirmed_at') THEN
+                UPDATE transactions 
+                SET block_timestamp = COALESCE(block_timestamp, confirmed_at),
+                    processed_at = COALESCE(processed_at, confirmed_at)
+                WHERE (block_timestamp IS NULL OR processed_at IS NULL) AND confirmed_at IS NOT NULL;
+            END IF;
+        END $$;
     """)
     
     # 4. Create new indexes
