@@ -955,7 +955,7 @@ class UserService:
             user_id=user_id,
             tx_type='POSITION_CLOSED',  # Maps to TransactionType.POSITION_EXIT
             tx_hash=exit_tx_hash,
-            status='CONFIRMED',
+            status='confirmed',  # Use lowercase to match balance calculation
             tx_metadata=tx_metadata,
             event_data={'amount_usdc': float(amount_returned)},
             processed_at=datetime.now(timezone.utc),
