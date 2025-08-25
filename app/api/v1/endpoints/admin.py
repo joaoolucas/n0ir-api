@@ -194,7 +194,7 @@ async def fix_position_status(
                 # Position exists on blockchain
                 if position.status == PositionStatus.CLOSED:
                     # Reopen the position in database
-                    position.status = PositionStatus.ACTIVE
+                    position.status = 'active'
                     position.exit_date = None
                     position.exit_tx_hash = None
                     position.realized_pnl_usdc = Decimal(0)
@@ -231,7 +231,7 @@ async def fix_position_status(
                     }
             else:
                 # Position doesn't exist on blockchain
-                if position.status == PositionStatus.ACTIVE:
+                if position.status == 'active':
                     # Mark as closed in database
                     position.status = PositionStatus.CLOSED
                     position.exit_date = position.exit_date or datetime.now(timezone.utc)
@@ -251,7 +251,7 @@ async def fix_position_status(
         except Exception as e:
             if "execution reverted: ID" in str(e) or "ContractLogicError" in str(e):
                 # Position doesn't exist on blockchain
-                if position.status == PositionStatus.ACTIVE:
+                if position.status == 'active':
                     position.status = PositionStatus.CLOSED
                     position.exit_date = position.exit_date or datetime.now(timezone.utc)
                     await db.commit()
@@ -308,7 +308,7 @@ async def sync_user_positions(
                     # Position exists on blockchain
                     if position.status == PositionStatus.CLOSED:
                         # Reopen incorrectly closed position
-                        position.status = PositionStatus.ACTIVE
+                        position.status = 'active'
                         position.exit_date = None
                         position.exit_tx_hash = None
                         position.realized_pnl_usdc = Decimal(0)
@@ -325,7 +325,7 @@ async def sync_user_positions(
                         
                 else:
                     # Position doesn't exist on blockchain
-                    if position.status == PositionStatus.ACTIVE:
+                    if position.status == 'active':
                         # Close incorrectly active position
                         position.status = PositionStatus.CLOSED
                         position.exit_date = position.exit_date or datetime.now(timezone.utc)
@@ -339,7 +339,7 @@ async def sync_user_positions(
             except Exception as e:
                 if "execution reverted: ID" in str(e) or "ContractLogicError" in str(e):
                     # Position doesn't exist on blockchain
-                    if position.status == PositionStatus.ACTIVE:
+                    if position.status == 'active':
                         position.status = PositionStatus.CLOSED
                         position.exit_date = position.exit_date or datetime.now(timezone.utc)
                         

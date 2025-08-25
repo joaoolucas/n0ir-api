@@ -335,7 +335,7 @@ class UserService:
                 raise ValueError(f"Insufficient wallet balance. Available: {wallet_balance}, Requested: {amount}")
             
             # Get active positions
-            active_positions = await self.get_user_positions(user_id, status=PositionStatus.ACTIVE)
+            active_positions = await self.get_user_positions(user_id, status='active')
             
             if not active_positions:
                 raise ValueError(f"Insufficient funds. Wallet: {wallet_balance}, No active positions to close")
@@ -417,7 +417,7 @@ class UserService:
         
         # Get current portfolio value before withdrawal
         wallet_balance_before = await self.get_user_balance(user_id)
-        active_positions = await self.get_user_positions(user_id, status=PositionStatus.ACTIVE)
+        active_positions = await self.get_user_positions(user_id, status='active')
         positions_value = sum(p.current_value_usdc or p.entry_amount_usdc for p in active_positions)
         portfolio_value_before = wallet_balance_before + positions_value
         
@@ -480,7 +480,7 @@ class UserService:
         wallet_balance = await self.get_user_balance(user_id)
         
         # Get active positions
-        active_positions = await self.get_user_positions(user_id, status=PositionStatus.ACTIVE)
+        active_positions = await self.get_user_positions(user_id, status='active')
         
         # Calculate total positions value
         positions_value = Decimal(0)
@@ -547,7 +547,7 @@ class UserService:
         
         # Calculate totals
         total_realized = sum(p.realized_pnl_usdc for p in positions)
-        total_unrealized = sum(p.unrealized_pnl_usdc for p in positions if p.status == PositionStatus.ACTIVE)
+        total_unrealized = sum(p.unrealized_pnl_usdc for p in positions if p.status == 'active')
         total_fees = sum(p.fees_earned_usdc for p in positions)
         total_rewards = sum(p.rewards_earned_usdc for p in positions)
         
@@ -591,7 +591,7 @@ class UserService:
         # Create position with initial value set to entry amount
         position = Position(
             user_id=user_id,
-            nft_token_id=nft_token_id,
+            token_id=nft_token_id,  # Primary key is token_id, not nft_token_id
             pool_address=pool_address,
             pool_name=pool_name,
             token0_address=token0_address,
@@ -605,7 +605,9 @@ class UserService:
             entry_tx_hash=entry_tx_hash,
             staked=staked,
             gauge_address=gauge_address,
-            status=PositionStatus.ACTIVE
+            status='active',  # Use lowercase status
+            entry_date=datetime.utcnow(),
+            last_updated=datetime.utcnow()
         )
         
         # Create transaction record for position entry (debit)
@@ -702,7 +704,7 @@ class UserService:
         """Sync all position values with blockchain for a user."""
         from app.core.positions_service import positions_service
         
-        positions = await self.get_user_positions(user_id, status=PositionStatus.ACTIVE)
+        positions = await self.get_user_positions(user_id, status='active')
         
         for position in positions:
             try:
@@ -870,7 +872,7 @@ class UserService:
             and_(
                 Position.nft_token_id == nft_token_id,
                 Position.user_id == user_id,
-                Position.status == PositionStatus.ACTIVE
+                Position.status == 'active'
             )
         )
         result = await self.db.execute(stmt)
@@ -909,7 +911,7 @@ class UserService:
             realized_pnl_usdc = final_value_usdc - position.entry_amount_usdc
         
         # Update position status
-        position.status = PositionStatus.CLOSED
+        position.status = 'closed'
         position.exit_tx_hash = exit_tx_hash
         position.exit_date = datetime.now(timezone.utc)
         position.realized_pnl_usdc = realized_pnl_usdc
@@ -996,7 +998,7 @@ class UserService:
         for position in positions:
             try:
                 # Reopen the position
-                position.status = PositionStatus.ACTIVE
+                position.status = 'active'
                 position.exit_date = None
                 position.exit_tx_hash = None
                 position.realized_pnl_usdc = Decimal(0)
@@ -1041,8 +1043,8 @@ class UserService:
         all_positions = await self.get_user_positions(user_id)
         
         # Separate active and closed positions
-        active_positions = [p for p in all_positions if p.status == PositionStatus.ACTIVE]
-        closed_positions = [p for p in all_positions if p.status == PositionStatus.CLOSED]
+        active_positions = [p for p in all_positions if p.status == 'active']
+        closed_positions = [p for p in all_positions if p.status == 'closed']
         
         # Calculate realized PNL from closed positions only
         # This is the actual profit/loss that has been locked in
@@ -1080,7 +1082,7 @@ class UserService:
                 if "execution reverted: ID" in str(e) or "ContractLogicError" in str(e):
                     logger.warning(f"Position {position.nft_token_id} not found on-chain, may be closed externally")
                     # Mark position as closed if it doesn't exist on-chain
-                    position.status = PositionStatus.CLOSED
+                    position.status = 'closed'
                     position.realized_pnl_usdc = position.current_value_usdc - position.entry_amount_usdc
                     # Move its PNL to realized
                     realized_pnl += position.realized_pnl_usdc or Decimal(0)
@@ -1123,9 +1125,9 @@ class UserService:
         
         # Calculate totals
         total_invested = sum(p.entry_amount_usdc for p in positions)
-        total_current_value = sum(p.current_value_usdc or 0 for p in positions if p.status == PositionStatus.ACTIVE)
+        total_current_value = sum(p.current_value_usdc or 0 for p in positions if p.status == 'active')
         total_realized_pnl = sum(p.realized_pnl_usdc for p in positions)
-        total_unrealized_pnl = sum(p.unrealized_pnl_usdc for p in positions if p.status == PositionStatus.ACTIVE)
+        total_unrealized_pnl = sum(p.unrealized_pnl_usdc for p in positions if p.status == 'active')
         total_fees_earned = sum(p.fees_earned_usdc for p in positions)
         total_rewards_earned = sum(p.rewards_earned_usdc for p in positions)
         
@@ -1139,7 +1141,7 @@ class UserService:
         total_pnl = total_realized_pnl + total_unrealized_pnl + total_fees_earned + total_rewards_earned
         
         # Calculate APR if there are active positions
-        active_positions = [p for p in positions if p.status == PositionStatus.ACTIVE]
+        active_positions = [p for p in positions if p.status == 'active']
         apr = Decimal(0)
         if active_positions and total_invested > 0:
             # Simple APR calculation (can be enhanced)
