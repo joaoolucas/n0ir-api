@@ -182,34 +182,100 @@ class BlockchainEventConsumer:
         data: Dict[str, Any], 
         metadata: Dict[str, Any]
     ):
-        """Handle position-related events."""
+        """Handle position-related events from blockchain.
+        
+        This is where business logic is triggered based on confirmed blockchain state.
+        The watcher has already written to blockchain.positions table.
+        """
         user_id = metadata.get("user_id")
         if not user_id:
-            return
+            # Try to get user_id from owner address
+            owner_address = data.get("owner")
+            if owner_address:
+                async for db in get_db():
+                    from app.database.models.user import User
+                    from sqlalchemy import select
+                    result = await db.execute(
+                        select(User).where(User.cdp_wallet_address == owner_address)
+                    )
+                    user = result.scalar_one_or_none()
+                    if user:
+                        user_id = user.user_id
+                    break
+            
+            if not user_id:
+                logger.debug(f"No user found for position event: {event_type}")
+                return
         
         try:
             async for db in get_db():
+                from app.database.models.user import User
+                from app.services.user_service import UserService
+                from decimal import Decimal
+                
+                service = UserService(db)
+                
                 if event_type == "position.created":
-                    # Check if user exists and update position count
-                    from app.database.models.user import User
-                    user = await db.get(User, user_id)
+                    nft_token_id = data.get('nft_token_id')
+                    logger.info(f"Processing position.created event: user={user_id}, token_id={nft_token_id}")
+                    
+                    # Update user metrics
+                    user = await service.get_user(user_id)
                     if user:
-                        logger.info(f"Position created for user {user_id}: {data.get('nft_token_id')}")
-                        # Could update user stats or trigger other actions
+                        # Initialize PnL tracking for new position
+                        await service.recalculate_user_pnl(user_id)
+                        
+                        # Log position creation in business metrics
+                        logger.success(
+                            f"Position {nft_token_id} created for user {user_id} - confirmed on blockchain"
+                        )
                         
                 elif event_type == "position.updated":
-                    # Update position metrics if tracked
-                    logger.info(f"Position updated for user {user_id}: {data.get('nft_token_id')}")
+                    nft_token_id = data.get('nft_token_id')
+                    logger.info(f"Processing position.updated event: user={user_id}, token_id={nft_token_id}")
+                    
+                    # Recalculate user PnL with updated position values
+                    await service.recalculate_user_pnl(user_id)
                     
                 elif event_type == "position.closed":
-                    # Handle position closure
-                    logger.info(f"Position closed for user {user_id}: {data.get('nft_token_id')}")
+                    nft_token_id = data.get('nft_token_id')
+                    final_value = Decimal(str(data.get('final_value_usd', 0)))
+                    
+                    logger.info(
+                        f"Processing position.closed event: user={user_id}, token_id={nft_token_id}, final_value={final_value}"
+                    )
+                    
+                    # Update realized PnL
+                    user = await service.get_user(user_id)
+                    if user:
+                        # The position is already marked as closed in blockchain.positions
+                        # Update user's realized PnL
+                        await service.recalculate_user_pnl(user_id)
+                        
+                        # Return funds to user balance if needed
+                        if final_value > 0:
+                            # Credit user balance with the final value
+                            from app.database.models.transaction import Transaction, TransactionType, TransactionStatus
+                            
+                            tx = Transaction(
+                                user_id=user_id,
+                                transaction_type=TransactionType.POSITION_EXIT,
+                                amount_usdc=final_value,
+                                status=TransactionStatus.CONFIRMED,
+                                tx_hash=data.get('tx_hash', ''),
+                                description=f"Position {nft_token_id} closed"
+                            )
+                            db.add(tx)
+                            
+                        logger.success(
+                            f"Position {nft_token_id} closed for user {user_id} - final value: {final_value} USDC"
+                        )
                 
                 await db.commit()
                 break  # Exit async generator
                 
         except Exception as e:
-            logger.error(f"Error handling position event: {e}")
+            logger.error(f"Error handling position event {event_type}: {e}", exc_info=True)
     
     async def _handle_operation_event(
         self,

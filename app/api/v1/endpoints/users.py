@@ -496,39 +496,70 @@ async def get_transactions(
 
 
 # Position Management
-@router.post("/{user_id}/positions", response_model=PositionResponse, status_code=201)
-async def create_position(
+@router.post("/{user_id}/intents/position", status_code=201)
+async def log_position_intent(
     user_id: str,
     request: CreatePositionRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    """Create a new position."""
+    """Log intent to create position - actual creation happens via blockchain.
+    
+    This endpoint only logs the intent. The actual position will be created
+    when the blockchain transaction is confirmed and processed by the watcher.
+    """
     try:
-        service = UserService(db)
-        position = await service.create_position(
-            user_id=user_id,
-            nft_token_id=request.nft_token_id,
-            pool_address=request.pool_address,
-            pool_name=request.pool_name,
-            token0_address=request.token0_address,
-            token1_address=request.token1_address,
-            tick_lower=request.tick_lower,
-            tick_upper=request.tick_upper,
-            tick_spacing=request.tick_spacing,
-            liquidity=request.liquidity,
-            entry_amount_usdc=request.entry_amount_usdc,
-            entry_tx_hash=request.entry_tx_hash,
-            staked=request.staked,
-            gauge_address=request.gauge_address
+        # Import Redis client
+        import redis.asyncio as aioredis
+        from app.core.config import settings
+        import json
+        from datetime import datetime
+        
+        # Connect to Redis
+        redis_client = await aioredis.from_url(
+            settings.redis_url,
+            decode_responses=False
         )
-        # Enrich the newly created position with pool data
-        enriched_position = await enrich_position_with_pool_data(position)
-        return PositionResponse.model_validate(enriched_position)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        
+        # Prepare intent data
+        intent_data = {
+            "user_id": user_id,
+            "type": "position.create",
+            "nft_token_id": str(request.nft_token_id),
+            "pool_address": request.pool_address,
+            "pool_name": request.pool_name or "",
+            "token0_address": request.token0_address,
+            "token1_address": request.token1_address,
+            "tick_lower": str(request.tick_lower),
+            "tick_upper": str(request.tick_upper),
+            "tick_spacing": str(request.tick_spacing),
+            "liquidity": request.liquidity,
+            "entry_amount_usdc": str(request.entry_amount_usdc),
+            "entry_tx_hash": request.entry_tx_hash or "",
+            "staked": "true" if request.staked else "false",
+            "gauge_address": request.gauge_address or "",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+        # Log to execution:intents stream
+        await redis_client.xadd(
+            "execution:intents",
+            {k: v.encode() if isinstance(v, str) else str(v).encode() for k, v in intent_data.items()}
+        )
+        
+        await redis_client.close()
+        
+        logger.info(f"Position intent logged for user {user_id}, token_id {request.nft_token_id}")
+        
+        return {
+            "status": "intent_logged",
+            "message": "Position creation intent logged. Waiting for blockchain confirmation.",
+            "nft_token_id": request.nft_token_id,
+            "tx_hash": request.entry_tx_hash
+        }
+        
     except Exception as e:
-        logger.error(f"Error creating position: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create position")
+        logger.error(f"Error logging position intent: {e}")
+        raise HTTPException(status_code=500, detail="Failed to log position intent")
 
 
 @router.get("/{user_id}/positions", response_model=PositionListResponse)
@@ -537,19 +568,76 @@ async def get_positions(
     status: Optional[DBPositionStatus] = None,
     db: AsyncSession = Depends(get_db)
 ):
-    """Get user positions with enriched pool data."""
-    service = UserService(db)
-    positions = await service.get_user_positions(user_id, status)
+    """Get user positions from blockchain schema.
     
-    # Enrich positions with pool data
+    Positions are now read from the blockchain schema which is maintained
+    by the watcher service as the single source of truth.
+    """
+    from sqlalchemy import text
+    from decimal import Decimal
+    
+    # Query positions from blockchain schema
+    query = """
+        SELECT 
+            p.nft_token_id,
+            p.owner_address,
+            p.pool_address,
+            p.tick_lower,
+            p.tick_upper,
+            p.liquidity,
+            p.tokens_owed0,
+            p.tokens_owed1,
+            p.fee_growth_inside0,
+            p.fee_growth_inside1,
+            p.creation_block,
+            p.last_updated_block,
+            p.is_active,
+            u.user_id
+        FROM blockchain.positions p
+        JOIN public.users u ON u.cdp_wallet_address = p.owner_address
+        WHERE u.user_id = :user_id
+    """
+    
+    if status == DBPositionStatus.ACTIVE:
+        query += " AND p.is_active = true"
+    elif status == DBPositionStatus.CLOSED:
+        query += " AND p.is_active = false"
+    
+    result = await db.execute(text(query), {"user_id": user_id})
+    blockchain_positions = result.fetchall()
+    
+    # Convert to PositionResponse format
     enriched_positions = []
-    for position in positions:
-        enriched_position = await enrich_position_with_pool_data(position)
+    for pos in blockchain_positions:
+        # Create a position-like object for enrichment
+        position_dict = {
+            "nft_token_id": pos.nft_token_id,
+            "user_id": pos.user_id,
+            "pool_address": pos.pool_address,
+            "tick_lower": pos.tick_lower,
+            "tick_upper": pos.tick_upper,
+            "liquidity": str(pos.liquidity),
+            "status": DBPositionStatus.ACTIVE if pos.is_active else DBPositionStatus.CLOSED,
+            "entry_amount_usdc": Decimal("100"),  # TODO: Get from intent stream or transaction history
+            "current_value_usdc": Decimal("100"),  # Will be enriched
+            "fees_earned_usdc": Decimal("0"),
+            "rewards_earned_usdc": Decimal("0"),
+            "tick_spacing": 100,  # TODO: Get from pool data
+            "staked": False,
+            "gauge_address": None
+        }
+        
+        # Convert to object for enrichment
+        from types import SimpleNamespace
+        position_obj = SimpleNamespace(**position_dict)
+        
+        # Enrich with real-time pool data
+        enriched_position = await enrich_position_with_pool_data(position_obj)
         enriched_positions.append(PositionResponse.model_validate(enriched_position))
     
     return PositionListResponse(
         positions=enriched_positions,
-        total=len(positions)
+        total=len(enriched_positions)
     )
 
 
@@ -580,44 +668,8 @@ async def close_position(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.post("/{user_id}/positions/sync", status_code=200)
-async def sync_positions(
-    user_id: str,
-    db: AsyncSession = Depends(get_db)
-):
-    """Sync positions with blockchain state and update values.
-    
-    Checks all active positions and marks any that don't exist on-chain as closed.
-    This helps recover from situations where positions were closed externally.
-    """
-    service = UserService(db)
-    positions = await service.get_user_positions(user_id, status=DBPositionStatus.ACTIVE)
-    
-    # Sync position values with blockchain
-    await service.sync_position_values(user_id)
-    
-    # Also check for positions closed externally
-    closed_positions = []
-    for position in positions:
-        try:
-            # Try to fetch position from blockchain
-            await positions_service.get_position_by_id(position.nft_token_id)
-            # Position exists, values already synced above
-        except Exception as e:
-            if "execution reverted: ID" in str(e) or "ContractLogicError" in str(e):
-                # Position doesn't exist on-chain, mark as closed
-                logger.warning(f"Syncing position {position.nft_token_id} - marking as closed")
-                await service.update_position_status(position.nft_token_id, DBPositionStatus.CLOSED)
-                closed_positions.append(position.nft_token_id)
-    
-    # Recalculate user PnL after syncing
-    await service.recalculate_user_pnl(user_id)
-    
-    return {
-        "positions_updated": len(positions) - len(closed_positions),
-        "positions_closed": closed_positions,
-        "message": f"Synced {len(positions)} positions, {len(closed_positions)} were closed externally"
-    }
+# Position sync endpoint removed - positions are now synced automatically via blockchain events
+# The watcher continuously monitors the blockchain and updates position state
 
 
 # Analytics
