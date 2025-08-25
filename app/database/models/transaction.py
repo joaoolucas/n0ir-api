@@ -145,8 +145,8 @@ class Transaction(Base):
         return self.processed_at
     
     @property
-    def metadata(self) -> dict:
-        """Alias for tx_metadata for backward compatibility."""
+    def get_metadata(self) -> dict:
+        """Get tx_metadata for backward compatibility."""
         return self.tx_metadata or {}
     
     def __repr__(self):
