@@ -641,9 +641,18 @@ class UserService:
         if pool_address:
             stmt = stmt.where(Position.pool_address == pool_address)
         if staked is not None:
-            stmt = stmt.where(Position.staked == staked)
+            # staked is stored in position_data JSONB field
+            if staked:
+                stmt = stmt.where(Position.position_data['gauge_info']['staked'].astext == 'true')
+            else:
+                stmt = stmt.where(
+                    or_(
+                        Position.position_data['gauge_info']['staked'].astext == 'false',
+                        Position.position_data['gauge_info']['staked'].is_(None)
+                    )
+                )
         
-        stmt = stmt.order_by(Position.entry_date.desc())
+        stmt = stmt.order_by(Position.created_at.desc())
         
         result = await self.db.execute(stmt)
         return result.scalars().all()
