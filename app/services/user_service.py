@@ -9,7 +9,7 @@ from sqlalchemy import select, update, and_, or_, func, case
 from sqlalchemy.orm import selectinload
 
 from app.database.models import User, Transaction, Position
-from app.database.models.user import UserStatus
+from app.schemas.users import UserStatus
 from app.database.models.transaction import TransactionType, TransactionStatus
 from app.database.models.position import PositionStatus
 from app.core.logger import logger
