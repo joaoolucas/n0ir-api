@@ -221,7 +221,7 @@ class UserService:
         ).where(
             and_(
                 Transaction.user_id == user_id,
-                Transaction.status == 'CONFIRMED'
+                Transaction.status == 'confirmed'  # Status values are lowercase in the database
             )
         )
         
