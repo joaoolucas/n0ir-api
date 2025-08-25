@@ -80,6 +80,19 @@ class User(Base):
         self.user_metadata['agent_status'] = value
     
     @property
+    def status(self) -> str:
+        """Get user status - for compatibility with UserResponse schema."""
+        # Users are always active unless specified otherwise in metadata
+        return self.user_metadata.get('status', 'active') if self.user_metadata else 'active'
+    
+    @status.setter
+    def status(self, value: str):
+        """Set user status in user_metadata."""
+        if not self.user_metadata:
+            self.user_metadata = {}
+        self.user_metadata['status'] = value
+    
+    @property
     def total_pnl_usd(self) -> float:
         """Calculate total PnL (unrealized + realized)."""
         return float((self.unrealized_pnl_usd or 0) + (self.realized_pnl_usd or 0))
