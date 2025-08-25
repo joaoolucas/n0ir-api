@@ -15,8 +15,7 @@ Base = declarative_base(metadata=metadata)
 
 # Import all models here to ensure they're registered with SQLAlchemy
 def import_all_models():
-    """Import all models to register them with SQLAlchemy."""
+    """Import all models to register them with SQLAlchemy - Unified 3-table schema."""
     from app.database.models import (
-        user, transaction, position,
-        pool_metrics, executor_stats, strategy_decision, daily_metrics
+        User, Position, Transaction
     )

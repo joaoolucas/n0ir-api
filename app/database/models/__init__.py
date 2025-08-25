@@ -1,21 +1,19 @@
-from app.database.models.user import User, UserStatus, AgentStatus
-from app.database.models.transaction import Transaction
+"""Unified 3-table database models."""
+
+from app.database.models.user import User
 from app.database.models.position import Position
-from app.database.models.pool_metrics import PoolMetrics
-from app.database.models.executor_stats import ExecutorStats
-from app.database.models.strategy_decision import StrategyDecision
-from app.database.models.daily_metrics import DailyMetrics
-from app.database.models.agent_event import AgentEvent
+from app.database.models.transaction import Transaction
 
 __all__ = [
-    "User", 
-    "UserStatus",
-    "AgentStatus",
-    "Transaction", 
-    "Position", 
-    "PoolMetrics",
-    "ExecutorStats",
-    "StrategyDecision",
-    "DailyMetrics",
-    "AgentEvent"
+    "User",
+    "Position",
+    "Transaction"
 ]
+
+# Note: The following models are deprecated and replaced by the unified schema:
+# - AgentEvent: Events are now tracked in transactions table with appropriate tx_type
+# - DailyMetrics: Metrics can be aggregated from transactions and positions
+# - ExecutorStats: Stats are stored in user.metadata and position.metadata
+# - PoolMetrics: Pool data is stored in position.position_data
+# - StrategyDecision: Strategy data is stored in transaction.metadata
+# - UserStatus/AgentStatus: Status is stored in user.metadata['agent_status']
