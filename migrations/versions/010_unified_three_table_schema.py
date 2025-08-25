@@ -106,14 +106,52 @@ def upgrade() -> None:
         END $$;
     """)
     
-    # Migrate PnL data from existing columns
+    # Migrate PnL data from existing columns (if they exist)
     op.execute("""
-        UPDATE users 
-        SET unrealized_pnl_usd = COALESCE(unrealized_pnl_usdc, unrealized_pnl_usd, 0),
-            realized_pnl_usd = COALESCE(realized_pnl_usdc, realized_pnl_usd, 0),
-            unrealized_pnl_pct = COALESCE(unrealized_pnl_percentage, unrealized_pnl_pct, 0),
-            realized_pnl_pct = COALESCE(realized_pnl_percentage, realized_pnl_pct, 0)
-        WHERE unrealized_pnl_usdc IS NOT NULL OR realized_pnl_usdc IS NOT NULL;
+        DO $$
+        BEGIN
+            -- Check if old USDC columns exist and migrate them
+            IF EXISTS (
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'users' AND column_name = 'unrealized_pnl_usdc'
+            ) THEN
+                UPDATE users 
+                SET unrealized_pnl_usd = COALESCE(unrealized_pnl_usdc, unrealized_pnl_usd, 0)
+                WHERE unrealized_pnl_usdc IS NOT NULL;
+            END IF;
+            
+            IF EXISTS (
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'users' AND column_name = 'realized_pnl_usdc'
+            ) THEN
+                UPDATE users 
+                SET realized_pnl_usd = COALESCE(realized_pnl_usdc, realized_pnl_usd, 0)
+                WHERE realized_pnl_usdc IS NOT NULL;
+            END IF;
+            
+            -- Check if percentage columns exist and migrate them
+            IF EXISTS (
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'users' AND column_name = 'unrealized_pnl_percentage'
+            ) THEN
+                UPDATE users 
+                SET unrealized_pnl_pct = COALESCE(unrealized_pnl_percentage, unrealized_pnl_pct, 0)
+                WHERE unrealized_pnl_percentage IS NOT NULL;
+            END IF;
+            
+            IF EXISTS (
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'users' AND column_name = 'realized_pnl_percentage'
+            ) THEN
+                UPDATE users 
+                SET realized_pnl_pct = COALESCE(realized_pnl_percentage, realized_pnl_pct, 0)
+                WHERE realized_pnl_percentage IS NOT NULL;
+            END IF;
+        END $$;
     """)
     
     # 2. Update positions table structure
@@ -169,39 +207,68 @@ def upgrade() -> None:
         END $$;
     """)
     
-    # Migrate existing position data to JSONB
+    # Migrate existing position data to JSONB (handle columns that may not exist)
     op.execute("""
-        UPDATE positions 
-        SET position_data = COALESCE(position_data, '{}'::jsonb) || 
-                           jsonb_build_object(
-                               'token0_address', token0_address,
-                               'token1_address', token1_address,
-                               'pool_name', pool_name,
-                               'pool_fee_tier', 3000,
-                               'tick_lower', tick_lower,
-                               'tick_upper', tick_upper,
-                               'tick_spacing', tick_spacing,
-                               'liquidity', liquidity,
-                               'initial_investment_usd', entry_amount_usdc,
-                               'current_value_usd', current_value_usdc,
-                               'total_fees_usd', fees_earned_usdc,
-                               'rewards_earned_usd', rewards_earned_usdc,
-                               'entry_tx_hash', entry_tx_hash,
-                               'exit_tx_hash', exit_tx_hash,
-                               'gauge_info', CASE 
-                                   WHEN staked = true THEN 
-                                       jsonb_build_object('staked', true, 'gauge_address', gauge_address)
-                                   ELSE NULL 
-                               END
-                           ),
-            blockchain_data = jsonb_build_object(
-                               'creation_tx_hash', entry_tx_hash,
-                               'close_tx_hash', exit_tx_hash
-                           ),
-            unrealized_pnl_usd = COALESCE(unrealized_pnl_usdc, 0),
-            realized_pnl_usd = COALESCE(realized_pnl_usdc, 0),
-            closed_at = exit_date
-        WHERE position_data IS NULL OR position_data = '{}'::jsonb;
+        DO $$
+        DECLARE
+            has_unrealized_pnl_usdc BOOLEAN;
+            has_realized_pnl_usdc BOOLEAN;
+        BEGIN
+            -- Check if USDC columns exist
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'positions' AND column_name = 'unrealized_pnl_usdc'
+            ) INTO has_unrealized_pnl_usdc;
+            
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'positions' AND column_name = 'realized_pnl_usdc'
+            ) INTO has_realized_pnl_usdc;
+            
+            -- Update positions with dynamic column handling
+            UPDATE positions 
+            SET position_data = COALESCE(position_data, '{}'::jsonb) || 
+                               jsonb_build_object(
+                                   'token0_address', token0_address,
+                                   'token1_address', token1_address,
+                                   'pool_name', pool_name,
+                                   'pool_fee_tier', 3000,
+                                   'tick_lower', tick_lower,
+                                   'tick_upper', tick_upper,
+                                   'tick_spacing', tick_spacing,
+                                   'liquidity', liquidity,
+                                   'initial_investment_usd', entry_amount_usdc,
+                                   'current_value_usd', current_value_usdc,
+                                   'total_fees_usd', fees_earned_usdc,
+                                   'rewards_earned_usd', rewards_earned_usdc,
+                                   'entry_tx_hash', entry_tx_hash,
+                                   'exit_tx_hash', exit_tx_hash,
+                                   'gauge_info', CASE 
+                                       WHEN staked = true THEN 
+                                           jsonb_build_object('staked', true, 'gauge_address', gauge_address)
+                                       ELSE NULL 
+                                   END
+                               ),
+                blockchain_data = jsonb_build_object(
+                                   'creation_tx_hash', entry_tx_hash,
+                                   'close_tx_hash', exit_tx_hash
+                               ),
+                closed_at = exit_date
+            WHERE position_data IS NULL OR position_data = '{}'::jsonb;
+            
+            -- Update PnL columns separately if they exist
+            IF has_unrealized_pnl_usdc THEN
+                UPDATE positions 
+                SET unrealized_pnl_usd = COALESCE(unrealized_pnl_usdc, 0)
+                WHERE unrealized_pnl_usdc IS NOT NULL;
+            END IF;
+            
+            IF has_realized_pnl_usdc THEN
+                UPDATE positions 
+                SET realized_pnl_usd = COALESCE(realized_pnl_usdc, 0)
+                WHERE realized_pnl_usdc IS NOT NULL;
+            END IF;
+        END $$;
     """)
     
     # 3. Update transactions table structure
