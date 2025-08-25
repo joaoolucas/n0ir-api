@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from uuid import uuid4
 from app.database.session import get_db
 from app.database.models.user import User
-from app.database.models.transaction import Transaction, TransactionType, TransactionStatus
+from app.database.models.transaction import Transaction
+from app.schemas.users import TransactionType, TransactionStatus
 from app.services.user_service import UserService
 from app.core.logger import logger
 
@@ -171,7 +172,8 @@ async def fix_position_status(
     Fix position status mismatch between database and blockchain.
     Reopens a position that was marked closed in DB but is still open on-chain.
     """
-    from app.database.models.position import Position, PositionStatus
+    from app.database.models.position import Position
+    from app.schemas.users import PositionStatus
     from app.core.positions_service import positions_service
     
     try:
@@ -283,7 +285,8 @@ async def sync_user_positions(
     Sync all positions for a user with blockchain state.
     Fixes any mismatches between database and blockchain.
     """
-    from app.database.models.position import Position, PositionStatus
+    from app.database.models.position import Position
+    from app.schemas.users import PositionStatus
     from app.core.positions_service import positions_service
     
     try:

@@ -16,8 +16,10 @@ from app.schemas.users import (
     ProtocolFeeListResponse, ProtocolFeeResponse,
     UserStatus, TransactionType, TransactionStatus, PositionStatus
 )
-from app.database.models.transaction import TransactionType as DBTransactionType, TransactionStatus as DBTransactionStatus
-from app.database.models.position import PositionStatus as DBPositionStatus
+# Enums are already imported from schemas above
+DBTransactionType = TransactionType
+DBTransactionStatus = TransactionStatus
+DBPositionStatus = PositionStatus
 from app.core.logger import logger
 
 router = APIRouter(prefix="/users")

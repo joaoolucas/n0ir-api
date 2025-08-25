@@ -255,7 +255,8 @@ class BlockchainEventConsumer:
                         # Return funds to user balance if needed
                         if final_value > 0:
                             # Credit user balance with the final value
-                            from app.database.models.transaction import Transaction, TransactionType, TransactionStatus
+                            from app.database.models.transaction import Transaction
+                            from app.schemas.users import TransactionType, TransactionStatus
                             
                             tx = Transaction(
                                 user_id=user_id,
