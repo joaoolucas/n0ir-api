@@ -61,8 +61,8 @@ def upgrade() -> None:
             
             -- Add metadata column if missing
             IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
-                          WHERE table_name = 'users' AND column_name = 'metadata') THEN
-                ALTER TABLE users ADD COLUMN metadata JSONB DEFAULT '{}';
+                          WHERE table_name = 'users' AND column_name = 'user_metadata') THEN
+                ALTER TABLE users ADD COLUMN user_metadata JSONB DEFAULT '{}';
             END IF;
         END $$;
     """)
@@ -77,7 +77,7 @@ def upgrade() -> None:
     # Migrate agent status to metadata
     op.execute("""
         UPDATE users 
-        SET metadata = COALESCE(metadata, '{}'::jsonb) || 
+        SET user_metadata = COALESCE(user_metadata, '{}'::jsonb) || 
                        jsonb_build_object(
                            'agent_status', COALESCE(agent_status::text, 'not_started'),
                            'agent_started_at', agent_started_at,
@@ -217,8 +217,8 @@ def upgrade() -> None:
             END IF;
             
             IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
-                          WHERE table_name = 'transactions' AND column_name = 'metadata') THEN
-                ALTER TABLE transactions ADD COLUMN metadata JSONB DEFAULT '{}';
+                          WHERE table_name = 'transactions' AND column_name = 'tx_metadata') THEN
+                ALTER TABLE transactions ADD COLUMN tx_metadata JSONB DEFAULT '{}';
             END IF;
             
             -- Add block_timestamp if missing
@@ -251,7 +251,7 @@ def upgrade() -> None:
             'amount_usdc', amount_usdc,
             'pool_name', pool_name
         ),
-        metadata = jsonb_build_object(
+        tx_metadata = jsonb_build_object(
             'realized_pnl_usdc', realized_pnl_usdc,
             'portfolio_value_at_time', portfolio_value_at_time,
             'cost_basis_withdrawn', cost_basis_withdrawn,
@@ -289,7 +289,7 @@ def upgrade() -> None:
                    postgresql_using='gin', if_not_exists=True)
     op.create_index('idx_transactions_event_gin', 'transactions', ['event_data'], 
                    postgresql_using='gin', if_not_exists=True)
-    op.create_index('idx_users_metadata_gin', 'users', ['metadata'], 
+    op.create_index('idx_users_metadata_gin', 'users', ['user_metadata'], 
                    postgresql_using='gin', if_not_exists=True)
     
     # 5. Drop deprecated columns (careful - only after confirming data migration)
@@ -300,7 +300,7 @@ def upgrade() -> None:
         'unrealized_pnl_usdc', 'realized_pnl_usdc',
         'unrealized_pnl_percentage', 'realized_pnl_percentage',
         'agent_status', 'agent_started_at', 'agent_stopped_at',
-        'last_balance_check', 'agent_metadata', 'status', 'wallet_address'
+        'last_balance_check', 'agent_metadata', 'status', 'wallet_address', 'metadata'
     ]
     
     for col in columns_to_drop:
@@ -341,7 +341,7 @@ def upgrade() -> None:
         'transaction_type', 'amount_usdc', 'pool_name',
         'realized_pnl_usdc', 'portfolio_value_at_time',
         'cost_basis_withdrawn', 'related_position_id',
-        'gas_price', 'tx_metadata', 'confirmed_at'
+        'gas_price', 'tx_metadata', 'confirmed_at', 'metadata'
     ]
     
     for col in columns_to_drop:

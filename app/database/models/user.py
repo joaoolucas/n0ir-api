@@ -30,8 +30,8 @@ class User(Base):
     realized_pnl_pct = Column(Numeric(precision=10, scale=4), default=0, nullable=False)
     
     # Flexible metadata storage
-    metadata = Column(JSONB, default={}, nullable=False)
-    # Expected metadata fields:
+    user_metadata = Column(JSONB, default={}, nullable=False)
+    # Expected user_metadata fields:
     # - agent_status: not_started, starting, running, stopping, stopped, failed
     # - agent_started_at: timestamp
     # - agent_stopped_at: timestamp
@@ -69,15 +69,15 @@ class User(Base):
     
     @property
     def agent_status(self) -> str:
-        """Get agent status from metadata."""
-        return self.metadata.get('agent_status', 'not_started') if self.metadata else 'not_started'
+        """Get agent status from user_metadata."""
+        return self.user_metadata.get('agent_status', 'not_started') if self.user_metadata else 'not_started'
     
     @agent_status.setter
     def agent_status(self, value: str):
-        """Set agent status in metadata."""
-        if not self.metadata:
-            self.metadata = {}
-        self.metadata['agent_status'] = value
+        """Set agent status in user_metadata."""
+        if not self.user_metadata:
+            self.user_metadata = {}
+        self.user_metadata['agent_status'] = value
     
     @property
     def total_pnl_usd(self) -> float:

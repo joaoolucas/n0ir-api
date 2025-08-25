@@ -60,7 +60,7 @@ class Transaction(Base):
     # WITHDRAWAL: {amount_usdc, to_address}
     
     # Additional metadata
-    metadata = Column(JSONB, default={}, nullable=False)
+    tx_metadata = Column(JSONB, default={}, nullable=False)
     # Examples:
     # - usd_values: amounts in USD at transaction time
     # - price_impacts: for swaps
@@ -122,16 +122,16 @@ class Transaction(Base):
     
     @property
     def realized_pnl_usdc(self) -> Optional[float]:
-        """Get realized PnL from metadata."""
-        if self.metadata and 'realized_pnl_usdc' in self.metadata:
-            return float(self.metadata['realized_pnl_usdc'])
+        """Get realized PnL from tx_metadata."""
+        if self.tx_metadata and 'realized_pnl_usdc' in self.tx_metadata:
+            return float(self.tx_metadata['realized_pnl_usdc'])
         return None
     
     @property
     def gas_price(self) -> Optional[float]:
-        """Get gas price from metadata."""
-        if self.metadata and 'gas_price' in self.metadata:
-            return float(self.metadata['gas_price'])
+        """Get gas price from tx_metadata."""
+        if self.tx_metadata and 'gas_price' in self.tx_metadata:
+            return float(self.tx_metadata['gas_price'])
         return None
     
     @property
@@ -145,10 +145,9 @@ class Transaction(Base):
         return self.processed_at
     
     @property
-    def tx_metadata(self) -> Optional[str]:
-        """Get metadata as JSON string for backward compatibility."""
-        import json
-        return json.dumps(self.metadata) if self.metadata else None
+    def metadata(self) -> dict:
+        """Alias for tx_metadata for backward compatibility."""
+        return self.tx_metadata or {}
     
     def __repr__(self):
         return f"<Transaction(id={str(self.id)[:8]}..., type={self.tx_type}, status={self.status})>"
