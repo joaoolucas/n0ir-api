@@ -165,8 +165,18 @@ def upgrade() -> None:
     op.execute("CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status) WHERE status = 'ACTIVE'")
     op.execute("CREATE INDEX IF NOT EXISTS idx_positions_pnl ON positions(user_id, unrealized_pnl_usd) WHERE status = 'ACTIVE'")
     
-    # Transactions indexes - execute each separately
-    op.execute("CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id, block_timestamp)")
+    # Transactions indexes - execute each separately (check column existence first)
+    op.execute("""
+        DO $$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM information_schema.columns 
+                      WHERE table_name = 'transactions' AND column_name = 'block_timestamp') THEN
+                CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id, block_timestamp);
+            ELSE
+                CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id, created_at);
+            END IF;
+        END $$;
+    """)
     op.execute("CREATE INDEX IF NOT EXISTS idx_transactions_position ON transactions(position_id, tx_type)")
     op.execute("CREATE INDEX IF NOT EXISTS idx_transactions_block ON transactions(block_number)")
     op.execute("CREATE INDEX IF NOT EXISTS idx_transactions_type ON transactions(tx_type, status)")
