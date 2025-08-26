@@ -788,6 +788,48 @@ class UserService:
             if not user:
                 raise ValueError(f"User {user_id} not found")
             
+            # Check for recent withdrawal transactions (within last 5 minutes)
+            # This prevents BALANCE_SYNC during active withdrawals
+            from datetime import timedelta
+            recent_window = datetime.now(timezone.utc) - timedelta(minutes=5)
+            
+            recent_withdrawals_stmt = select(Transaction).where(
+                and_(
+                    Transaction.user_id == user_id,
+                    Transaction.tx_type == 'WITHDRAWAL',
+                    Transaction.created_at >= recent_window
+                )
+            )
+            recent_withdrawals = await self.db.execute(recent_withdrawals_stmt)
+            
+            if recent_withdrawals.scalar_one_or_none():
+                logger.info(f"Skipping balance sync for {user_id} - recent withdrawal detected")
+                return {
+                    "user_id": user_id,
+                    "skipped": True,
+                    "reason": "Recent withdrawal activity detected",
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }
+            
+            # Check for pending transactions
+            pending_txs_stmt = select(Transaction).where(
+                and_(
+                    Transaction.user_id == user_id,
+                    Transaction.status == 'pending',
+                    Transaction.tx_type.in_(['WITHDRAWAL', 'POSITION_CLOSED'])
+                )
+            )
+            pending_txs = await self.db.execute(pending_txs_stmt)
+            
+            if pending_txs.scalar_one_or_none():
+                logger.info(f"Skipping balance sync for {user_id} - pending withdrawal/position close")
+                return {
+                    "user_id": user_id,
+                    "skipped": True,
+                    "reason": "Pending withdrawal or position closure",
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }
+            
             # Fetch blockchain balance from CDP wallet (where the USDC actually is)
             # Use cdp_wallet_address if it exists and is not a placeholder
             wallet_to_check = user.cdp_wallet_address
