@@ -313,7 +313,8 @@ class UserService:
         tx_hash: Optional[str] = None,
         to_address: Optional[str] = None,
         force_close_positions: bool = True,
-        max_slippage_percent: Decimal = Decimal("0.5")
+        max_slippage_percent: Decimal = Decimal("0.5"),
+        withdraw_all: bool = False
     ) -> Transaction:
         """Process USDC withdrawal for user.
         
@@ -324,6 +325,7 @@ class UserService:
             to_address: Optional destination address (defaults to user_id)
             force_close_positions: Whether to close positions if needed
             max_slippage_percent: Maximum acceptable slippage when closing positions
+            withdraw_all: Whether to withdraw entire available balance
         """
         # Verify user exists
         user = await self.get_user(user_id)
@@ -336,6 +338,11 @@ class UserService:
         # Track positions that need to be closed
         positions_to_close = []
         positions_closed = []
+        
+        # If withdraw_all is true and wallet has sufficient balance, use actual balance
+        if withdraw_all and wallet_balance >= amount:
+            logger.info(f"Withdraw all: using actual wallet balance {wallet_balance} instead of requested {amount}")
+            amount = wallet_balance
         
         # If wallet balance is insufficient, check if we should close positions
         if wallet_balance < amount:
@@ -385,7 +392,12 @@ class UserService:
                     # Re-check balance after marking positions closed
                     wallet_balance = await self.get_user_balance(user_id)
                     logger.info(f"Balance after closing {len(positions_closed)} positions: {wallet_balance} USDC")
-                    if wallet_balance < amount:
+                    
+                    # If withdraw_all flag is set, use the actual balance
+                    if withdraw_all:
+                        logger.info(f"Withdraw all: using actual balance {wallet_balance} instead of requested {amount}")
+                        amount = wallet_balance
+                    elif wallet_balance < amount:
                         # Rollback position closures
                         await self._rollback_position_closures(positions_closed)
                         raise ValueError(f"Still insufficient after closing positions. Available: {wallet_balance}, Requested: {amount}")
@@ -395,7 +407,8 @@ class UserService:
                     user_id=user_id,
                     amount=float(amount),
                     to_address=to_address,
-                    positions_to_close=[p.nft_token_id for p in positions_to_close]  # Tell agent which positions to close
+                    positions_to_close=[p.nft_token_id for p in positions_to_close],  # Tell agent which positions to close
+                    withdraw_all=withdraw_all
                 )
                 
                 if not result.get('success'):

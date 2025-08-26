@@ -334,7 +334,8 @@ async def withdraw(
             tx_hash=request.tx_hash,
             to_address=request.destination_address,
             force_close_positions=request.force_close_positions,
-            max_slippage_percent=request.max_slippage_percent
+            max_slippage_percent=request.max_slippage_percent,
+            withdraw_all=request.withdraw_all
         )
         return TransactionResponse.model_validate(transaction)
     except ValueError as e:
