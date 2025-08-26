@@ -496,7 +496,7 @@ class AgentManagementService:
             'amount_usdc': amount,
             'to_address': to_address,
             'positions_to_close': json.dumps(positions_to_close or []),  # Serialize list to JSON string
-            'withdraw_all': withdraw_all,
+            'withdraw_all': str(withdraw_all),  # Convert bool to string for Redis
             'timestamp': datetime.utcnow().isoformat()
         }
         

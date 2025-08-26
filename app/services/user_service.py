@@ -1085,12 +1085,15 @@ class UserService:
                 position.exit_tx_hash = None
                 position.realized_pnl_usd = Decimal(0)
                 
-                # Find and remove the POSITION_EXIT transaction
+                # Find and remove the POSITION_EXIT transaction using JSONB containment
+                from sqlalchemy import cast, Text
+                from sqlalchemy.dialects.postgresql import JSONB
+                
                 exit_tx = await self.db.execute(
                     select(Transaction).where(
                         and_(
                             Transaction.tx_type == 'POSITION_CLOSED',
-                            Transaction.tx_metadata.like(f'%"nft_token_id": {position.nft_token_id}%')
+                            Transaction.tx_metadata.op('@>')(cast({'nft_token_id': position.nft_token_id}, JSONB))
                         )
                     ).order_by(Transaction.created_at.desc()).limit(1)
                 )
