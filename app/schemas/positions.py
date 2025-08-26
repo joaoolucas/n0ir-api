@@ -26,6 +26,9 @@ class PositionInfo(BaseModel):
     token1: Optional[str] = Field(None, description="Token1 address")
     tick_spacing: Optional[int] = Field(None, description="Pool tick spacing")
     
+    # Pool information
+    pool_name: Optional[str] = Field(None, description="Pool name/symbol (e.g., WETH/USDC-0.3%)")
+    
     # User tracking field (from database)
     user_id: Optional[str] = Field(None, description="User ID if position is tracked in database")
 
