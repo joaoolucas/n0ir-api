@@ -1227,17 +1227,56 @@ class UserService:
         # Calculate overall PnL
         total_pnl = total_realized_pnl + total_unrealized_pnl + total_fees_earned + total_rewards_earned
         
-        # Calculate APR if there are active positions
+        # Calculate APR - fetch from strategy monitor endpoint for accurate weighted average
         active_positions = [p for p in positions if p.status == 'active']
         apr = Decimal(0)
-        if active_positions and total_invested > 0:
-            # Simple APR calculation (can be enhanced)
-            avg_position_age_days = sum(
-                (datetime.now(timezone.utc) - p.entry_date).days 
-                for p in active_positions
-            ) / len(active_positions)
-            if avg_position_age_days > 0:
-                apr = (total_pnl / total_invested) * (365 / avg_position_age_days) * 100
+        
+        # Get user to find CDP wallet address for strategy monitor
+        user = await self.get_user(user_id)
+        if user and user.cdp_wallet_address and active_positions:
+            try:
+                # Call strategy monitor endpoint internally
+                from app.schemas.strategy_v2 import MonitorRequest
+                from app.core.strategy_service import strategy_service
+                from app.schemas.strategy import MonitorPositionsRequest
+                
+                # Use the CDP wallet address for the strategy monitor
+                monitor_request = MonitorPositionsRequest(
+                    user_address=user.cdp_wallet_address
+                )
+                monitor_response = await strategy_service.monitor_positions(monitor_request)
+                
+                # Calculate weighted average APR based on position values
+                if monitor_response and monitor_response.positions:
+                    from app.core.positions_service import positions_service
+                    
+                    # Fetch actual position data for values
+                    positions_data = await positions_service.get_positions_by_owner(user.cdp_wallet_address)
+                    
+                    # Calculate weighted average APR
+                    total_value = 0
+                    weighted_apr_sum = 0
+                    
+                    for pos_data in positions_data:
+                        # Find corresponding position status with effective APR
+                        pos_status = next((p for p in monitor_response.positions if p.token_id == pos_data.id), None)
+                        if pos_status and pos_data.current_value_usd:
+                            position_value = pos_data.current_value_usd
+                            total_value += position_value
+                            weighted_apr_sum += position_value * pos_status.current_apr
+                    
+                    apr = Decimal(weighted_apr_sum / total_value) if total_value > 0 else Decimal(0)
+                
+            except Exception as e:
+                logger.warning(f"Could not fetch APR from strategy monitor for user {user_id}: {e}")
+                # Fallback to simple APR calculation
+                if active_positions and total_invested > 0:
+                    avg_position_age_days = sum(
+                        (datetime.now(timezone.utc) - p.entry_date).days 
+                        for p in active_positions
+                    ) / len(active_positions)
+                    if avg_position_age_days > 0:
+                        apr = (total_pnl / total_invested) * (365 / avg_position_age_days) * 100
         
         return {
             "total_invested": float(total_invested),
