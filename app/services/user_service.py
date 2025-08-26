@@ -1038,7 +1038,7 @@ class UserService:
         Args:
             user_id: User's wallet address
             unrealized_pnl: Unrealized P&L from active positions
-            realized_pnl: Realized P&L from closed positions and withdrawals
+            realized_pnl: Realized P&L calculated as (withdrawals - deposits) + closed positions PnL
             unrealized_pnl_percentage: Unrealized PnL as percentage
             realized_pnl_percentage: Realized PnL as percentage
         """
@@ -1095,16 +1095,17 @@ class UserService:
         await self.db.commit()
     
     async def recalculate_user_pnl(self, user_id: str) -> None:
-        """Recalculate and update user's PnL values based on positions only.
+        """Recalculate and update user's PnL values.
         
-        PNL is calculated purely from positions:
-        - Realized PNL: Sum of PNL from closed positions
+        PNL is calculated as:
+        - Realized PNL: (total_withdrawals - total_deposits) + sum(closed_positions_pnl)
         - Unrealized PNL: Sum of (current_value - entry_amount) from active positions
         
         This should be called after:
         - Position is closed
         - Position is opened
         - Position value is updated
+        - Deposits/Withdrawals
         """
         from app.core.positions_service import positions_service
         
@@ -1115,9 +1116,26 @@ class UserService:
         active_positions = [p for p in all_positions if p.status == 'active']
         closed_positions = [p for p in all_positions if p.status == 'closed']
         
-        # Calculate realized PNL from closed positions only
-        # This is the actual profit/loss that has been locked in
-        realized_pnl = sum(p.realized_pnl_usdc or Decimal(0) for p in closed_positions)
+        # Get all confirmed deposits and withdrawals
+        all_deposits = await self.get_user_transactions(
+            user_id=user_id,
+            transaction_type=TransactionType.DEPOSIT,
+            status=TransactionStatus.CONFIRMED
+        )
+        total_deposits = sum(t.amount_usdc for t in all_deposits)
+        
+        all_withdrawals = await self.get_user_transactions(
+            user_id=user_id,
+            transaction_type=TransactionType.WITHDRAW,
+            status=TransactionStatus.CONFIRMED
+        )
+        total_withdrawals = sum(t.amount_usdc for t in all_withdrawals)
+        
+        # Calculate realized PNL as: (withdrawals - deposits) + closed positions PNL
+        # This represents actual cash profit/loss realized by the user
+        closed_positions_pnl = sum(p.realized_pnl_usdc or Decimal(0) for p in closed_positions)
+        net_cash_flow = total_withdrawals - total_deposits
+        realized_pnl = net_cash_flow + closed_positions_pnl
         
         # Calculate unrealized PNL from active positions
         unrealized_pnl = Decimal(0)
