@@ -33,6 +33,12 @@ async def periodic_balance_sync():
                         # Skip users with pending wallets
                         if user.cdp_wallet_address and not user.cdp_wallet_address.startswith("pending_"):
                             sync_result = await user_service.sync_blockchain_balance(user.user_id)
+                            
+                            # Check if sync was skipped due to withdrawal activity
+                            if sync_result.get("skipped"):
+                                logger.debug(f"Skipped sync for {user.user_id}: {sync_result.get('reason')}")
+                                continue
+                            
                             synced_count += 1
                             
                             if sync_result.get("reconciled"):

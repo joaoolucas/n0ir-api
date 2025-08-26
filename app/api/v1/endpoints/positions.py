@@ -11,6 +11,7 @@ from app.schemas.positions import (
 )
 from app.schemas.common import ErrorResponse
 from app.core.positions_service import positions_service
+from app.core.pools_service import pools_service
 from app.core.logger import logger
 from app.database.session import get_db
 from app.database.models.position import Position
@@ -63,6 +64,23 @@ async def get_position(
         # Add user_id to position data if found
         position_dict = position.dict()
         position_dict['user_id'] = user_id
+        
+        # Fetch pool information to get pool_name
+        pool_name = None
+        try:
+            pool_data = await pools_service.get_pool(position.pool_address, include_effective_apr=False)
+            symbol = pool_data.get('symbol', '')
+            # Extract just the token pair (remove fee percentage)
+            if symbol and '-' in symbol:
+                pool_name = symbol.split('-')[0]  # Get everything before the dash
+            else:
+                pool_name = symbol
+            logger.info(f"Found pool name {pool_name} for pool {position.pool_address}")
+        except Exception as e:
+            logger.warning(f"Could not fetch pool info for {position.pool_address}: {e}")
+        
+        # Add pool_name to position data
+        position_dict['pool_name'] = pool_name
         
         logger.info(f"Successfully fetched position {position_id}")
         return PositionDetailResponse(position=PositionInfo(**position_dict))
