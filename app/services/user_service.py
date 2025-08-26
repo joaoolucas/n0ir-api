@@ -815,7 +815,7 @@ class UserService:
             )
             recent_withdrawals = await self.db.execute(recent_withdrawals_stmt)
             
-            if recent_withdrawals.scalar_one_or_none():
+            if recent_withdrawals.first():
                 logger.info(f"Skipping balance sync for {user_id} - recent withdrawal detected")
                 return {
                     "user_id": user_id,
@@ -834,7 +834,7 @@ class UserService:
             )
             pending_txs = await self.db.execute(pending_txs_stmt)
             
-            if pending_txs.scalar_one_or_none():
+            if pending_txs.first():
                 logger.info(f"Skipping balance sync for {user_id} - pending withdrawal/position close")
                 return {
                     "user_id": user_id,
