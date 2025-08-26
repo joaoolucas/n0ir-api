@@ -69,7 +69,12 @@ async def get_position(
         pool_name = None
         try:
             pool_data = await pools_service.get_pool(position.pool_address, include_effective_apr=False)
-            pool_name = pool_data.get('symbol')
+            symbol = pool_data.get('symbol', '')
+            # Extract just the token pair (remove fee percentage)
+            if symbol and '-' in symbol:
+                pool_name = symbol.split('-')[0]  # Get everything before the dash
+            else:
+                pool_name = symbol
             logger.info(f"Found pool name {pool_name} for pool {position.pool_address}")
         except Exception as e:
             logger.warning(f"Could not fetch pool info for {position.pool_address}: {e}")
