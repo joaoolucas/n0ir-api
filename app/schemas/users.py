@@ -105,9 +105,9 @@ class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     
     user_id: str  # The user's EOA wallet address
-    cdp_wallet_address: str = Field(..., description="CDP smart wallet managed by agent")
-    cdp_wallet_name: str = Field(..., description="CDP wallet name")
-    status: UserStatus
+    cdp_wallet_address: Optional[str] = Field(None, description="CDP smart wallet managed by agent")
+    cdp_wallet_name: Optional[str] = Field(None, description="CDP wallet name")
+    status: Optional[UserStatus] = Field(UserStatus.ACTIVE, description="User status (default: active)")
     created_at: datetime
     updated_at: datetime
 
@@ -136,7 +136,7 @@ class TransactionResponse(BaseModel):
     gas_used: Optional[int]
     gas_price: Optional[Decimal]
     status: TransactionStatus
-    tx_metadata: Optional[str]
+    tx_metadata: Optional[Dict[str, Any]] = Field(None, description="Additional transaction metadata as JSON")
     created_at: datetime
     confirmed_at: Optional[datetime]
 

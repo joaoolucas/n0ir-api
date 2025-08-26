@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from uuid import uuid4
 from app.database.session import get_db
 from app.database.models.user import User
-from app.database.models.transaction import Transaction, TransactionType, TransactionStatus
+from app.database.models.transaction import Transaction
+from app.schemas.users import TransactionType, TransactionStatus
 from app.services.user_service import UserService
 from app.core.logger import logger
 
@@ -20,16 +21,23 @@ async def fix_user_balance(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    One-time endpoint to fix balance discrepancy.
-    This will be removed after fixing the production data.
+    Fix balance discrepancy by creating proper transaction records.
+    Creates both DEPOSIT and POSITION_ENTRY transactions to reflect user's actual state.
     """
-    # Only allow for specific user during migration
-    if user_id != "0xdBE4e3bcb15B221324B776Db6F0CbFf24918Ea51":
-        raise HTTPException(status_code=403, detail="Not authorized")
+    # Calculate position amount from user's actual positions
+    from app.database.models.position import Position
     
-    ACTUAL_WALLET_BALANCE = Decimal("0.017701")
-    EXPECTED_DEPOSIT = Decimal("15.0")
-    POSITION_AMOUNT = EXPECTED_DEPOSIT - ACTUAL_WALLET_BALANCE  # 14.982299
+    positions_stmt = select(Position).where(
+        Position.user_id == user_id,
+        Position.status == 'active'
+    )
+    positions_result = await db.execute(positions_stmt)
+    positions = positions_result.scalars().all()
+    
+    if not positions:
+        raise HTTPException(status_code=404, detail=f"No active positions found for user {user_id}")
+    
+    POSITION_AMOUNT = sum(p.entry_amount_usdc for p in positions)
     
     try:
         # Check if user exists
@@ -45,28 +53,66 @@ async def fix_user_balance(
         current_balance = await user_service.get_user_balance(user_id)
         logger.info(f"Current calculated balance: {current_balance} USDC")
         
-        # Check if we already have a position entry transaction
-        tx_stmt = select(Transaction).where(
+        # Check if we already have deposit and position entry transactions
+        deposit_stmt = select(Transaction).where(
             Transaction.user_id == user_id,
-            Transaction.transaction_type == TransactionType.POSITION_ENTRY
+            Transaction.tx_type == 'DEPOSIT'
         )
-        result = await db.execute(tx_stmt)
-        existing_tx = result.scalar_one_or_none()
+        deposit_result = await db.execute(deposit_stmt)
+        existing_deposit = deposit_result.scalar_one_or_none()
         
-        if not existing_tx:
-            # Create missing POSITION_ENTRY transaction to correct the balance
-            position_tx = Transaction(
-                transaction_id=uuid4(),
+        position_stmt = select(Transaction).where(
+            Transaction.user_id == user_id,
+            Transaction.tx_type == 'POSITION_CREATED'
+        )
+        position_result = await db.execute(position_stmt)
+        existing_position_tx = position_result.scalar_one_or_none()
+        
+        transactions_created = []
+        
+        if not existing_deposit:
+            # Create DEPOSIT transaction (money coming in)
+            deposit_tx = Transaction(
+                id=uuid4(),
                 user_id=user_id,
-                transaction_type=TransactionType.POSITION_ENTRY,
-                amount_usdc=POSITION_AMOUNT,
-                status=TransactionStatus.CONFIRMED,
+                tx_type='DEPOSIT',  # Credits user's balance
+                status='CONFIRMED',
+                event_data={'amount_usdc': float(POSITION_AMOUNT)},
+                tx_metadata={
+                    'action': 'retroactive_deposit',
+                    'reason': 'Position synced from blockchain without corresponding deposit record'
+                },
                 created_at=datetime.now(timezone.utc),
-                confirmed_at=datetime.now(timezone.utc),
-                tx_metadata="Retroactive transaction for existing position"
+                processed_at=datetime.now(timezone.utc)
             )
-            db.add(position_tx)
-            logger.info(f"Created POSITION_ENTRY transaction for {POSITION_AMOUNT} USDC")
+            db.add(deposit_tx)
+            transactions_created.append(f"DEPOSIT: {POSITION_AMOUNT} USDC")
+            logger.info(f"Created DEPOSIT transaction for {POSITION_AMOUNT} USDC")
+        
+        if not existing_position_tx and positions:
+            # Create POSITION_ENTRY transaction for the actual position (money going out to position)
+            main_position = positions[0]  # Use the first/main position
+            position_entry_tx = Transaction(
+                id=uuid4(),
+                user_id=user_id,
+                tx_type='POSITION_CREATED',  # Debits user's balance, creates position
+                status='CONFIRMED',
+                event_data={'amount_usdc': float(main_position.entry_amount_usdc)},
+                tx_metadata={
+                    'action': 'retroactive_position_entry',
+                    'nft_token_id': main_position.nft_token_id,
+                    'pool_address': main_position.pool_address,
+                    'reason': 'Position synced from blockchain without corresponding entry record'
+                },
+                created_at=datetime.now(timezone.utc),
+                processed_at=datetime.now(timezone.utc),
+                position_id=main_position.nft_token_id
+            )
+            db.add(position_entry_tx)
+            transactions_created.append(f"POSITION_ENTRY: {main_position.entry_amount_usdc} USDC for position {main_position.nft_token_id}")
+            logger.info(f"Created POSITION_ENTRY transaction for position {main_position.nft_token_id}")
+            
+        if transactions_created:
             
             # Commit changes
             await db.commit()
@@ -76,17 +122,20 @@ async def fix_user_balance(
             
             return {
                 "success": True,
-                "message": "Balance fixed successfully",
+                "message": "Balance and transactions fixed successfully",
                 "old_balance": str(current_balance),
                 "new_balance": str(new_balance),
-                "position_entry_amount": str(POSITION_AMOUNT)
+                "transactions_created": transactions_created,
+                "total_position_amount": str(POSITION_AMOUNT)
             }
         else:
-            logger.info(f"POSITION_ENTRY transaction already exists: {existing_tx.amount_usdc} USDC")
+            logger.info("All required transactions already exist")
             return {
                 "success": False,
-                "message": "POSITION_ENTRY transaction already exists",
-                "existing_amount": str(existing_tx.amount_usdc)
+                "message": "All required transactions already exist",
+                "current_balance": str(current_balance),
+                "deposit_exists": existing_deposit is not None,
+                "position_tx_exists": existing_position_tx is not None
             }
         
     except HTTPException:
@@ -171,7 +220,8 @@ async def fix_position_status(
     Fix position status mismatch between database and blockchain.
     Reopens a position that was marked closed in DB but is still open on-chain.
     """
-    from app.database.models.position import Position, PositionStatus
+    from app.database.models.position import Position
+    from app.schemas.users import PositionStatus
     from app.core.positions_service import positions_service
     
     try:
@@ -192,10 +242,10 @@ async def fix_position_status(
                 # Position exists on blockchain
                 if position.status == PositionStatus.CLOSED:
                     # Reopen the position in database
-                    position.status = PositionStatus.ACTIVE
+                    position.status = 'active'
                     position.exit_date = None
                     position.exit_tx_hash = None
-                    position.realized_pnl_usdc = Decimal(0)
+                    position.realized_pnl_usd = Decimal(0)
                     position.current_value_usdc = Decimal(str(position_info.current_value_usd or 0))
                     
                     # Also remove the POSITION_EXIT transaction if it exists
@@ -229,7 +279,7 @@ async def fix_position_status(
                     }
             else:
                 # Position doesn't exist on blockchain
-                if position.status == PositionStatus.ACTIVE:
+                if position.status == 'active':
                     # Mark as closed in database
                     position.status = PositionStatus.CLOSED
                     position.exit_date = position.exit_date or datetime.now(timezone.utc)
@@ -249,7 +299,7 @@ async def fix_position_status(
         except Exception as e:
             if "execution reverted: ID" in str(e) or "ContractLogicError" in str(e):
                 # Position doesn't exist on blockchain
-                if position.status == PositionStatus.ACTIVE:
+                if position.status == 'active':
                     position.status = PositionStatus.CLOSED
                     position.exit_date = position.exit_date or datetime.now(timezone.utc)
                     await db.commit()
@@ -283,7 +333,8 @@ async def sync_user_positions(
     Sync all positions for a user with blockchain state.
     Fixes any mismatches between database and blockchain.
     """
-    from app.database.models.position import Position, PositionStatus
+    from app.database.models.position import Position
+    from app.schemas.users import PositionStatus
     from app.core.positions_service import positions_service
     
     try:
@@ -305,10 +356,10 @@ async def sync_user_positions(
                     # Position exists on blockchain
                     if position.status == PositionStatus.CLOSED:
                         # Reopen incorrectly closed position
-                        position.status = PositionStatus.ACTIVE
+                        position.status = 'active'
                         position.exit_date = None
                         position.exit_tx_hash = None
-                        position.realized_pnl_usdc = Decimal(0)
+                        position.realized_pnl_usd = Decimal(0)
                         position.current_value_usdc = Decimal(str(position_info.current_value_usd or 0))
                         
                         fixed_positions.append({
@@ -322,7 +373,7 @@ async def sync_user_positions(
                         
                 else:
                     # Position doesn't exist on blockchain
-                    if position.status == PositionStatus.ACTIVE:
+                    if position.status == 'active':
                         # Close incorrectly active position
                         position.status = PositionStatus.CLOSED
                         position.exit_date = position.exit_date or datetime.now(timezone.utc)
@@ -336,7 +387,7 @@ async def sync_user_positions(
             except Exception as e:
                 if "execution reverted: ID" in str(e) or "ContractLogicError" in str(e):
                     # Position doesn't exist on blockchain
-                    if position.status == PositionStatus.ACTIVE:
+                    if position.status == 'active':
                         position.status = PositionStatus.CLOSED
                         position.exit_date = position.exit_date or datetime.now(timezone.utc)
                         

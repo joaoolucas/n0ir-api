@@ -9,73 +9,25 @@ async def ensure_schema_compatibility(session: AsyncSession):
     """Ensure all required schema elements exist in the database."""
     
     try:
-        # 1. Check for existing agent status enum types
+        # 1. Clean up old enum types (no longer needed with JSONB)
         result = await session.execute(text("""
             SELECT typname FROM pg_type 
             WHERE typname IN ('agentstatus', 'agent_status_enum')
         """))
         existing_enums = [row[0] for row in result.fetchall()]
         
-        # Determine which enum to use and clean up duplicates
-        if 'agent_status_enum' in existing_enums:
-            enum_name = 'agent_status_enum'
-            logger.info("Using existing agent_status_enum type")
-            
-            # Drop the duplicate agentstatus type if it exists
-            if 'agentstatus' in existing_enums:
-                try:
-                    await session.execute(text("DROP TYPE IF EXISTS agentstatus CASCADE"))
-                    await session.commit()
-                    logger.info("Dropped duplicate agentstatus type")
-                except:
-                    pass  # Ignore if we can't drop it
-        elif 'agentstatus' in existing_enums:
-            # Rename agentstatus to agent_status_enum for consistency
+        # Drop old enum types as we're using JSONB now
+        for enum_type in existing_enums:
             try:
-                await session.execute(text("ALTER TYPE agentstatus RENAME TO agent_status_enum"))
+                await session.execute(text(f"DROP TYPE IF EXISTS {enum_type} CASCADE"))
                 await session.commit()
-                enum_name = 'agent_status_enum'
-                logger.info("Renamed agentstatus to agent_status_enum")
-            except:
-                enum_name = 'agentstatus'
-                logger.info("Using existing agentstatus type")
-        else:
-            # Create the enum if neither exists
-            enum_name = 'agent_status_enum'
-            logger.info(f"Creating {enum_name} enum...")
-            await session.execute(text(f"""
-                CREATE TYPE {enum_name} AS ENUM (
-                    'not_started',
-                    'starting',
-                    'running',
-                    'stopping',
-                    'stopped',
-                    'error'
-                )
-            """))
-            await session.commit()
-            logger.info(f"Created {enum_name} enum")
+                logger.info(f"Dropped old enum type: {enum_type}")
+            except Exception as e:
+                logger.warning(f"Could not drop enum {enum_type}: {e}")
         
-        # 2. Check and add agent_status columns to users table if they don't exist
-        result = await session.execute(text("""
-            SELECT column_name 
-            FROM information_schema.columns 
-            WHERE table_name = 'users' 
-            AND column_name = 'agent_status'
-        """))
-        has_agent_status_col = result.fetchone() is not None
-        
-        if not has_agent_status_col:
-            logger.info(f"Adding agent_status columns to users table using {enum_name}...")
-            await session.execute(text(f"""
-                ALTER TABLE users
-                ADD COLUMN IF NOT EXISTS agent_status {enum_name} DEFAULT 'not_started',
-                ADD COLUMN IF NOT EXISTS agent_started_at TIMESTAMP WITH TIME ZONE,
-                ADD COLUMN IF NOT EXISTS agent_stopped_at TIMESTAMP WITH TIME ZONE,
-                ADD COLUMN IF NOT EXISTS last_balance_check TIMESTAMP WITH TIME ZONE
-            """))
-            await session.commit()
-            logger.info("Added agent_status columns to users table")
+        # 2. Agent status is now stored in user_metadata JSONB field
+        # No need to add separate columns - using 3-table architecture
+        logger.info("Agent status is stored in user_metadata JSONB field (3-table architecture)")
         
         # 3. Check and add related_position_id to transactions table if it doesn't exist
         result = await session.execute(text("""
@@ -115,43 +67,42 @@ async def ensure_schema_compatibility(session: AsyncSession):
                     logger.warning(f"Could not drop column {column}: {e}")
                     # Don't fail, just continue
         
-        # 5. Check and create agent_events table if it doesn't exist
+        # 5. Migrate agent_status to user_metadata if using old columns
+        # Check if using old agent_status column
         result = await session.execute(text("""
-            SELECT table_name 
-            FROM information_schema.tables 
-            WHERE table_name = 'agent_events'
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name = 'users' 
+            AND column_name = 'agent_status'
         """))
-        has_agent_events = result.fetchone() is not None
+        has_old_agent_status = result.fetchone() is not None
         
-        if not has_agent_events:
-            logger.info("Creating agent_events table...")
+        if has_old_agent_status:
+            logger.info("Migrating agent_status to user_metadata JSONB field...")
+            # Migrate data to user_metadata
             await session.execute(text("""
-                CREATE TABLE IF NOT EXISTS agent_events (
-                    event_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                    user_id VARCHAR NOT NULL,
-                    event_type VARCHAR NOT NULL,
-                    event_metadata JSONB,
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                )
+                UPDATE users 
+                SET user_metadata = 
+                    COALESCE(user_metadata, '{}'::jsonb) || 
+                    jsonb_build_object(
+                        'agent_status', agent_status::text,
+                        'agent_started_at', agent_started_at,
+                        'agent_stopped_at', agent_stopped_at,
+                        'last_balance_check', last_balance_check
+                    )
+                WHERE agent_status IS NOT NULL
             """))
             
-            # Try to add foreign key, but don't fail if it exists
-            try:
-                await session.execute(text("""
-                    ALTER TABLE agent_events
-                    ADD CONSTRAINT fk_agent_events_user
-                    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
-                """))
-            except:
-                pass
-            
-            # Create index
+            # Drop old columns
             await session.execute(text("""
-                CREATE INDEX IF NOT EXISTS idx_agent_events_user_created 
-                ON agent_events(user_id, created_at DESC)
+                ALTER TABLE users 
+                DROP COLUMN IF EXISTS agent_status,
+                DROP COLUMN IF EXISTS agent_started_at,
+                DROP COLUMN IF EXISTS agent_stopped_at,
+                DROP COLUMN IF EXISTS last_balance_check
             """))
             await session.commit()
-            logger.info("Created agent_events table")
+            logger.info("Migrated agent_status to user_metadata")
         
         # 6. Add protocol fee columns to positions table if missing
         logger.info("Checking for protocol fee columns in positions table...")

@@ -1,56 +1,45 @@
+"""Unified User model matching 3-table architecture."""
+
 from datetime import datetime
-from typing import List, TYPE_CHECKING, Optional
-from sqlalchemy import Column, String, DateTime, Enum as SQLEnum, Index, Numeric, JSON
+from typing import List, TYPE_CHECKING
+from sqlalchemy import Column, String, DateTime, Numeric, Index
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship, Mapped
-import enum
 from app.database.base import Base
 
 if TYPE_CHECKING:
     from app.database.models.transaction import Transaction
     from app.database.models.position import Position
-    from app.database.models.agent_event import AgentEvent
-
-
-class UserStatus(enum.Enum):
-    ACTIVE = "active"
-    SUSPENDED = "suspended"
-    CLOSED = "closed"
-
-
-class AgentStatus(enum.Enum):
-    not_started = "not_started"
-    starting = "starting"
-    running = "running"
-    stopping = "stopping"
-    stopped = "stopped"
-    failed = "failed"
 
 
 class User(Base):
+    """User table with PnL tracking and CDP wallet information."""
     __tablename__ = "users"
     
-    # Primary key
-    user_id = Column(String, primary_key=True, index=True)
+    # Primary key - User's EOA wallet address
+    user_id = Column(String(42), primary_key=True, index=True)
     
     # CDP Wallet information
-    cdp_wallet_address = Column(String, unique=True, nullable=False, index=True)
-    cdp_wallet_name = Column(String, nullable=False)
-    
-    # User status
-    status = Column(SQLEnum(UserStatus), default=UserStatus.ACTIVE, nullable=False)
+    cdp_wallet_address = Column(String(42), unique=True, nullable=True, index=True)
+    cdp_wallet_name = Column(String(100), nullable=True)
     
     # PnL tracking fields
-    unrealized_pnl_usdc = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
-    realized_pnl_usdc = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
-    unrealized_pnl_percentage = Column(Numeric(precision=10, scale=2), default=0, nullable=False)
-    realized_pnl_percentage = Column(Numeric(precision=10, scale=2), default=0, nullable=False)
+    unrealized_pnl_usd = Column(Numeric(precision=20, scale=2), default=0, nullable=False)
+    unrealized_pnl_pct = Column(Numeric(precision=10, scale=4), default=0, nullable=False)
+    realized_pnl_usd = Column(Numeric(precision=20, scale=2), default=0, nullable=False)
+    realized_pnl_pct = Column(Numeric(precision=10, scale=4), default=0, nullable=False)
     
-    # Agent state tracking
-    agent_status = Column(SQLEnum(AgentStatus, name='agent_status_enum'), default=AgentStatus.not_started, nullable=False)
-    agent_started_at = Column(DateTime(timezone=True), nullable=True)
-    agent_stopped_at = Column(DateTime(timezone=True), nullable=True)
-    last_balance_check = Column(DateTime(timezone=True), nullable=True)
-    agent_metadata = Column(JSON, nullable=True)
+    # Flexible metadata storage
+    user_metadata = Column(JSONB, default={}, nullable=False)
+    # Expected user_metadata fields:
+    # - agent_status: not_started, starting, running, stopping, stopped, failed
+    # - agent_started_at: timestamp
+    # - agent_stopped_at: timestamp
+    # - last_balance_check: timestamp
+    # - total_positions: count
+    # - total_volume: USD volume
+    # - tags: array of labels
+    # - preferences: user settings
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
@@ -71,18 +60,62 @@ class User(Base):
         lazy="select"
     )
     
-    agent_events: Mapped[List["AgentEvent"]] = relationship(
-        "AgentEvent",
-        back_populates="user",
-        cascade="all, delete-orphan",
-        lazy="select"
-    )
-    
     # Indexes
     __table_args__ = (
-        Index("idx_user_status", "status"),
-        Index("idx_user_created_at", "created_at"),
+        Index("idx_users_updated", "updated_at"),
+        Index("idx_users_cdp_wallet", "cdp_wallet_address"),
+        Index("idx_users_pnl", "unrealized_pnl_usd"),
     )
     
+    @property
+    def agent_status(self) -> str:
+        """Get agent status from user_metadata."""
+        return self.user_metadata.get('agent_status', 'not_started') if self.user_metadata else 'not_started'
+    
+    @agent_status.setter
+    def agent_status(self, value: str):
+        """Set agent status in user_metadata."""
+        if not self.user_metadata:
+            self.user_metadata = {}
+        self.user_metadata['agent_status'] = value
+    
+    @property
+    def status(self) -> str:
+        """Get user status - for compatibility with UserResponse schema."""
+        # Users are always active unless specified otherwise in metadata
+        return self.user_metadata.get('status', 'active') if self.user_metadata else 'active'
+    
+    @status.setter
+    def status(self, value: str):
+        """Set user status in user_metadata."""
+        if not self.user_metadata:
+            self.user_metadata = {}
+        self.user_metadata['status'] = value
+    
+    @property
+    def total_pnl_usd(self) -> float:
+        """Calculate total PnL (unrealized + realized)."""
+        return float((self.unrealized_pnl_usd or 0) + (self.realized_pnl_usd or 0))
+    
+    @property
+    def unrealized_pnl_usdc(self):
+        """Alias for unrealized_pnl_usd for backward compatibility."""
+        return self.unrealized_pnl_usd
+    
+    @property
+    def realized_pnl_usdc(self):
+        """Alias for realized_pnl_usd for backward compatibility."""
+        return self.realized_pnl_usd
+    
+    @property 
+    def unrealized_pnl_percentage(self):
+        """Alias for unrealized_pnl_pct for backward compatibility."""
+        return self.unrealized_pnl_pct
+    
+    @property
+    def realized_pnl_percentage(self):
+        """Alias for realized_pnl_pct for backward compatibility."""
+        return self.realized_pnl_pct
+    
     def __repr__(self):
-        return f"<User(user_id={self.user_id}, cdp_wallet_address={self.cdp_wallet_address}, status={self.status})>"
+        return f"<User(user_id={self.user_id}, cdp_wallet={self.cdp_wallet_address}, pnl={self.total_pnl_usd:.2f})>"

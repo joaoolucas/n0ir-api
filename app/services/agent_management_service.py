@@ -491,7 +491,7 @@ class AgentManagementService:
         
         # Create withdrawal command
         command = {
-            'action': 'withdraw',
+            'action': 'withdraw',  # Agent-manager expects 'action' not 'type'
             'user_id': user_id,
             'amount_usdc': amount,
             'to_address': to_address,
@@ -508,8 +508,8 @@ class AgentManagementService:
             stream_id = await self.async_redis_client.xadd('agent:commands:stream', command)
             logger.info(f"Added withdraw command for {user_id} ({amount} USDC) to stream: {stream_id}")
             
-            # Wait for transaction result (timeout after 30 seconds)
-            result = await asyncio.wait_for(withdrawal_future, timeout=30)
+            # Wait for transaction result (timeout after 3 minutes)
+            result = await asyncio.wait_for(withdrawal_future, timeout=180)
             
             return {
                 'success': result.get('success', False),
