@@ -1122,14 +1122,14 @@ class UserService:
             transaction_type=TransactionType.DEPOSIT,
             status=TransactionStatus.CONFIRMED
         )
-        total_deposits = sum(t.amount_usdc for t in all_deposits)
+        total_deposits = sum(Decimal(str(t.amount_usdc)) for t in all_deposits)
         
         all_withdrawals = await self.get_user_transactions(
             user_id=user_id,
             transaction_type=TransactionType.WITHDRAW,
             status=TransactionStatus.CONFIRMED
         )
-        total_withdrawals = sum(t.amount_usdc for t in all_withdrawals)
+        total_withdrawals = sum(Decimal(str(t.amount_usdc)) for t in all_withdrawals)
         
         # Calculate realized PNL as: (withdrawals - deposits) + closed positions PNL
         # This represents actual cash profit/loss realized by the user
