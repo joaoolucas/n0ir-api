@@ -1,6 +1,6 @@
 """Add wallet balance tracking fields to users table for API service.
 
-Revision ID: 014_add_wallet_balance_tracking
+Revision ID: 015_add_wallet_balance_tracking
 Revises: 013_fix_transaction_primary_key
 Create Date: 2025-08-27 12:00:00.000000
 
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers
-revision = '014_add_wallet_balance_tracking'
+revision = '015_add_wallet_balance_tracking'
 down_revision = '013_fix_transaction_primary_key'
 branch_labels = None
 depends_on = None
