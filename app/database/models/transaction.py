@@ -112,8 +112,16 @@ class Transaction(Base):
     
     @property
     def amount_usdc(self) -> float:
-        """Get USDC amount from event_data."""
+        """Get USDC amount from event_data.
+        
+        For POSITION_CLOSED transactions, returns total_return_usdc if available
+        (which includes AERO swap proceeds), otherwise falls back to amount_usdc.
+        """
         if self.event_data:
+            # For POSITION_CLOSED, prioritize total_return_usdc which includes AERO swaps
+            if self.tx_type == 'POSITION_CLOSED' and 'total_return_usdc' in self.event_data:
+                return float(self.event_data['total_return_usdc'])
+            
             # Try different field names
             for field in ['amount_usdc', 'usdc_in', 'usdc_out', 'amount_usd']:
                 if field in self.event_data:
@@ -124,6 +132,13 @@ class Transaction(Base):
     def pool_name(self) -> Optional[str]:
         """Get pool name from event_data."""
         return self.event_data.get('pool_name') if self.event_data else None
+    
+    @property
+    def aero_swap_usdc(self) -> Optional[float]:
+        """Get AERO swap amount for POSITION_CLOSED transactions."""
+        if self.tx_type == 'POSITION_CLOSED' and self.event_data and 'aero_swap_usdc' in self.event_data:
+            return float(self.event_data['aero_swap_usdc'])
+        return None
     
     @property
     def realized_pnl_usdc(self) -> Optional[float]:

@@ -143,6 +143,7 @@ class TransactionResponse(BaseModel):
     tx_metadata: Optional[Dict[str, Any]] = Field(None, description="Additional transaction metadata as JSON")
     created_at: datetime
     confirmed_at: Optional[datetime]
+    aero_swap_usdc: Optional[Decimal] = Field(None, description="AERO rewards swapped to USDC (for POSITION_CLOSED only)")
 
 
 class PositionResponse(BaseModel):
