@@ -1,7 +1,7 @@
 """Add realized PnL tracking fields to transactions
 
 Revision ID: 007
-Revises: 006
+Revises: 005
 Create Date: 2025-01-22
 
 """
