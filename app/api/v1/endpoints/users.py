@@ -657,37 +657,5 @@ async def get_performance(
         active_positions=len(positions)
     )
 
-
-# Protocol Fees
-@router.get("/{user_id}/fees", response_model=ProtocolFeeListResponse)
-async def get_protocol_fees(
-    user_id: str,
-    collected: Optional[bool] = None,
-    db: AsyncSession = Depends(get_db)
-):
-    """Get protocol fees for user."""
-    service = UserService(db)
-    
-    # Get fees from positions
-    positions = await service.get_user_positions(user_id)
-    
-    fees = []
-    for position in positions:
-        if position.protocol_fee_amount and position.protocol_fee_amount > 0:
-            if collected is None or position.protocol_fee_collected == collected:
-                fees.append(ProtocolFeeResponse(
-                    position_id=str(position.position_id or position.nft_token_id),
-                    fee_amount_usdc=position.protocol_fee_amount,
-                    collected=position.protocol_fee_collected,
-                    collection_tx_hash=position.protocol_fee_tx_hash
-                ))
-    
-    total_collected = sum(f.fee_amount_usdc for f in fees if f.collected)
-    total_pending = sum(f.fee_amount_usdc for f in fees if not f.collected)
-    
-    return ProtocolFeeListResponse(
-        fees=fees,
-        total_collected_usdc=total_collected,
-        total_pending_usdc=total_pending
-    )
+# NOTE: Protocol fees endpoint removed - fees are included in other endpoints like /pnl
 
