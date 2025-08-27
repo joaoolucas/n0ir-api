@@ -469,7 +469,7 @@ class AgentManagementService:
             logger.error(f"Error requesting agent restart: {e}")
             return {'success': False, 'error': str(e)}
     
-    async def withdraw_usdc(self, user_id: str, amount: float, to_address: str = None, positions_to_close: List[int] = None) -> Dict:
+    async def withdraw_usdc(self, user_id: str, amount: float, to_address: str = None, positions_to_close: List[int] = None, withdraw_all: bool = False) -> Dict:
         """Request USDC withdrawal through agent manager.
         
         Args:
@@ -496,6 +496,7 @@ class AgentManagementService:
             'amount_usdc': amount,
             'to_address': to_address,
             'positions_to_close': json.dumps(positions_to_close or []),  # Serialize list to JSON string
+            'withdraw_all': str(withdraw_all),  # Convert bool to string for Redis
             'timestamp': datetime.utcnow().isoformat()
         }
         

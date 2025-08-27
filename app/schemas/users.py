@@ -56,6 +56,7 @@ class WithdrawRequest(BaseModel):
     tx_hash: Optional[str] = Field(None, description="Transaction hash if already executed")
     force_close_positions: bool = Field(True, description="Automatically close positions if needed for withdrawal")
     max_slippage_percent: Decimal = Field(Decimal("0.5"), description="Maximum acceptable slippage when closing positions (%)")
+    withdraw_all: bool = Field(False, description="Withdraw entire available balance after closing positions")
 
 
 class WithdrawPreviewResponse(BaseModel):
