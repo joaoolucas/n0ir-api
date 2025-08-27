@@ -592,7 +592,18 @@ async def get_performance(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
+    # Recalculate PnL with real-time position values to ensure consistency
+    await service.recalculate_user_pnl(user_id)
+    
+    # Refresh user to get updated values
+    await db.refresh(user)
+    
+    # Get performance metrics
     metrics = await service.get_performance_metrics(user_id)
+    
+    # Override PnL values with the recalculated user values for consistency
+    metrics['total_unrealized_pnl'] = float(user.unrealized_pnl_usdc)
+    metrics['total_realized_pnl'] = float(user.realized_pnl_usdc)
     
     return PerformanceResponse.from_service_data(metrics)
 
