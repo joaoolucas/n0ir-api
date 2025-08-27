@@ -430,8 +430,7 @@ async def fix_status_capitalization(db: AsyncSession = Depends(get_db)):
     try:
         fixed_counts = {
             'transactions': {'confirmed': 0, 'pending': 0, 'failed': 0, 'cancelled': 0},
-            'positions': {'active': 0, 'closed': 0, 'liquidated': 0},
-            'users': {'active': 0, 'suspended': 0, 'closed': 0}
+            'positions': {'active': 0, 'closed': 0, 'liquidated': 0}
         }
         
         # Fix transactions table
@@ -471,21 +470,8 @@ async def fix_status_capitalization(db: AsyncSession = Depends(get_db)):
         )
         fixed_counts['positions']['liquidated'] = result.rowcount
         
-        # Fix users table
-        result = await db.execute(
-            text("""UPDATE users SET status = 'ACTIVE' WHERE LOWER(status) = 'active'""")
-        )
-        fixed_counts['users']['active'] = result.rowcount
-        
-        result = await db.execute(
-            text("""UPDATE users SET status = 'SUSPENDED' WHERE LOWER(status) = 'suspended'""")
-        )
-        fixed_counts['users']['suspended'] = result.rowcount
-        
-        result = await db.execute(
-            text("""UPDATE users SET status = 'CLOSED' WHERE LOWER(status) = 'closed'""")
-        )
-        fixed_counts['users']['closed'] = result.rowcount
+        # Skip users table - it doesn't have a status column
+        # Users are always active if they exist in the table
         
         # Commit changes
         await db.commit()
@@ -501,18 +487,15 @@ async def fix_status_capitalization(db: AsyncSession = Depends(get_db)):
         )
         pos_dist = {row.status: row.count for row in pos_statuses}
         
-        user_statuses = await db.execute(
-            text("""SELECT status, COUNT(*) as count FROM users GROUP BY status ORDER BY status""")
-        )
-        user_dist = {row.status: row.count for row in user_statuses}
+        # Users don't have status column - they're always active
+        user_dist = {"ACTIVE": "All users are active"}
         
         return {
             "message": "Status capitalization fixed successfully",
             "fixed_counts": fixed_counts,
             "current_distribution": {
                 "transactions": tx_dist,
-                "positions": pos_dist,
-                "users": user_dist
+                "positions": pos_dist
             },
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
