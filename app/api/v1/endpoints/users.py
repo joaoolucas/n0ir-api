@@ -584,7 +584,13 @@ async def get_performance(
     user_id: str,
     db: AsyncSession = Depends(get_db)
 ):
-    """Get user performance metrics."""
+    """Get simplified user performance metrics.
+    
+    Returns key metrics aggregated from other endpoints:
+    - balance from /balance endpoint (total_portfolio_value_usdc)
+    - pnl from /pnl endpoint (unrealized values)
+    - apr and active positions count
+    """
     service = UserService(db)
     
     # Verify user exists
@@ -592,20 +598,57 @@ async def get_performance(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    # Recalculate PnL with real-time position values to ensure consistency
-    await service.recalculate_user_pnl(user_id)
+    # Get balance info (same logic as /balance endpoint)
+    wallet_balance = await service.get_user_balance(user_id)
+    positions = await service.get_user_positions(user_id, status='ACTIVE')
     
-    # Refresh user to get updated values
+    # Calculate total portfolio value (same as balance endpoint)
+    current_positions_value = Decimal(0)
+    for position in positions:
+        try:
+            # Try to get real-time value from blockchain
+            position_info = await positions_service.get_position_by_id(position.nft_token_id)
+            current_value_usd = Decimal(str(position_info.current_value_usd or 0))
+            unclaimed_fees_usd = Decimal(str(position_info.unclaimed_fees_usd or 0))
+            position_total = current_value_usd + unclaimed_fees_usd
+            position_total += (position.rewards_earned_usdc or Decimal(0))
+            position_total += (position.fees_earned_usdc or Decimal(0))
+            current_positions_value += position_total
+        except Exception:
+            # Fall back to database value if blockchain fetch fails
+            current_positions_value += (position.current_value_usdc or Decimal(0))
+    
+    total_portfolio_value = wallet_balance + current_positions_value
+    
+    # Get PnL info (same logic as /pnl endpoint)
+    await service.recalculate_user_pnl(user_id)
     await db.refresh(user)
     
-    # Get performance metrics
-    metrics = await service.get_performance_metrics(user_id)
+    # Calculate APR - simple average of active positions
+    apr = 0.0
+    if positions:
+        try:
+            # Get APR from strategy monitor for accurate calculation
+            from app.schemas.strategy import MonitorPositionsRequest
+            from app.core.strategy_service import strategy_service
+            
+            if user.cdp_wallet_address:
+                monitor_request = MonitorPositionsRequest(user_address=user.cdp_wallet_address)
+                monitor_response = await strategy_service.monitor_positions(monitor_request)
+                
+                if monitor_response and monitor_response.portfolio_summary:
+                    apr = float(monitor_response.portfolio_summary.weighted_apr or 0)
+        except Exception:
+            # Fallback to 0 if strategy service fails
+            apr = 0.0
     
-    # Override PnL values with the recalculated user values for consistency
-    metrics['total_unrealized_pnl'] = float(user.unrealized_pnl_usdc)
-    metrics['total_realized_pnl'] = float(user.realized_pnl_usdc)
-    
-    return PerformanceResponse.from_service_data(metrics)
+    return PerformanceResponse(
+        apr=apr,
+        balance=total_portfolio_value,
+        pnl_usdc=user.unrealized_pnl_usdc,
+        pnl_pct=user.unrealized_pnl_percentage,
+        active_positions=len(positions)
+    )
 
 
 # Protocol Fees
