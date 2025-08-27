@@ -642,7 +642,7 @@ class UserService:
             entry_tx_hash=entry_tx_hash,
             staked=staked,
             gauge_address=gauge_address,
-            status='active',  # Use lowercase status
+            status='ACTIVE',  # Use uppercase status for consistency
             entry_date=datetime.utcnow(),
             last_updated=datetime.utcnow()
         )

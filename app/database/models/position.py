@@ -57,7 +57,7 @@ class Position(Base):
     protocol_fee_tx_hash = Column(String(66), nullable=True)
     
     # Position status
-    status = Column(String(20), nullable=False, default="active", index=True)  # active, closed, liquidated
+    status = Column(String(20), nullable=False, default="ACTIVE", index=True)  # ACTIVE, CLOSED, LIQUIDATED
     
     # PnL tracking fields
     unrealized_pnl_usd = Column(Numeric(precision=20, scale=2), default=0, nullable=False)
@@ -114,9 +114,9 @@ class Position(Base):
     __table_args__ = (
         Index("idx_positions_user", "user_id", "status"),
         Index("idx_positions_pool", "pool_address"),
-        Index("idx_positions_status", "status", postgresql_where="status = 'active'"),
+        Index("idx_positions_status", "status", postgresql_where="status = 'ACTIVE'"),
         Index("idx_positions_pnl", "user_id", "unrealized_pnl_usd", 
-              postgresql_where="status = 'active'"),
+              postgresql_where="status = 'ACTIVE'"),
     )
     
     # Computed properties for backward compatibility
