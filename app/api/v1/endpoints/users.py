@@ -479,6 +479,7 @@ async def get_transactions(
     limit: int = 100,
     offset: int = 0,
     transaction_type: Optional[DBTransactionType] = None,
+    sort_order: str = "desc",  # "asc" for oldest first, "desc" for newest first
     db: AsyncSession = Depends(get_db)
 ):
     """Get user transactions."""
@@ -487,7 +488,8 @@ async def get_transactions(
         user_id=user_id,
         limit=limit,
         offset=offset,
-        transaction_type=transaction_type
+        transaction_type=transaction_type,
+        sort_order=sort_order
     )
     
     return TransactionListResponse(

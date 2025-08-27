@@ -222,7 +222,8 @@ class UserService:
         transaction_type: Optional[TransactionType] = None,
         status: Optional[TransactionStatus] = None,
         limit: int = 100,
-        offset: int = 0
+        offset: int = 0,
+        sort_order: str = "desc"
     ) -> List[Transaction]:
         """Get user transactions with optional filters."""
         stmt = select(Transaction).where(Transaction.user_id == user_id)
@@ -242,7 +243,20 @@ class UserService:
         if status:
             stmt = stmt.where(Transaction.status == status)
         
-        stmt = stmt.order_by(Transaction.created_at.desc())
+        # Order by block_number first (if available), then by created_at
+        # This ensures proper chronological order for blockchain transactions
+        if sort_order.lower() == "asc":
+            # Oldest first
+            stmt = stmt.order_by(
+                Transaction.block_number.asc().nullsfirst(),  # Blockchain order first
+                Transaction.created_at.asc()  # Then by creation time
+            )
+        else:
+            # Newest first (default)
+            stmt = stmt.order_by(
+                Transaction.block_number.desc().nullslast(),  # Blockchain order first
+                Transaction.created_at.desc()  # Then by creation time
+            )
         stmt = stmt.limit(limit).offset(offset)
         
         result = await self.db.execute(stmt)
