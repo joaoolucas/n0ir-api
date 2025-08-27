@@ -11,7 +11,7 @@ import sqlalchemy as sa
 
 # revision identifiers
 revision = '007_add_realized_pnl_tracking'
-down_revision = '006_add_pool_name_to_txns'
+down_revision = '005_add_pool_name_to_pos'
 branch_labels = None
 depends_on = None
 
