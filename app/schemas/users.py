@@ -8,9 +8,9 @@ import enum
 
 # Enums matching database models
 class UserStatus(str, enum.Enum):
-    ACTIVE = "active"
-    SUSPENDED = "suspended"
-    CLOSED = "closed"
+    ACTIVE = "ACTIVE"
+    SUSPENDED = "SUSPENDED"
+    CLOSED = "CLOSED"
 
 
 class TransactionType(str, enum.Enum):
@@ -22,16 +22,16 @@ class TransactionType(str, enum.Enum):
 
 
 class TransactionStatus(str, enum.Enum):
-    PENDING = "pending"
-    CONFIRMED = "confirmed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
+    PENDING = "PENDING"
+    CONFIRMED = "CONFIRMED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
 
 
 class PositionStatus(str, enum.Enum):
-    ACTIVE = "active"
-    CLOSED = "closed"
-    LIQUIDATED = "liquidated"
+    ACTIVE = "ACTIVE"
+    CLOSED = "CLOSED"
+    LIQUIDATED = "LIQUIDATED"
 
 
 # Request Models

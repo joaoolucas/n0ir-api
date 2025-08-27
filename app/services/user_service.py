@@ -559,7 +559,7 @@ class UserService:
         
         # Calculate totals
         total_realized = sum(p.realized_pnl_usdc for p in positions)
-        total_unrealized = sum(p.unrealized_pnl_usdc for p in positions if p.status == 'active')
+        total_unrealized = sum(p.unrealized_pnl_usdc for p in positions if p.status == 'ACTIVE')
         total_fees = sum(p.fees_earned_usdc for p in positions)
         total_rewards = sum(p.rewards_earned_usdc for p in positions)
         
@@ -807,7 +807,7 @@ class UserService:
             return None
         
         # If position is already closed, just return it without creating duplicate transaction
-        if position.status == 'closed':
+        if position.status == 'CLOSED':
             logger.info(f"Position {nft_token_id} is already closed, skipping duplicate closure")
             return position
         
@@ -823,7 +823,7 @@ class UserService:
             realized_pnl_usdc = final_value_usdc - position.entry_amount_usdc
         
         # Update position status
-        position.status = 'closed'
+        position.status = 'CLOSED'
         position.exit_tx_hash = exit_tx_hash
         position.exit_date = datetime.now(timezone.utc)
         position.realized_pnl_usd = realized_pnl_usdc
@@ -853,7 +853,7 @@ class UserService:
             user_id=user_id,
             tx_type='POSITION_CLOSED',  # Maps to TransactionType.POSITION_EXIT
             tx_hash=exit_tx_hash,
-            status='confirmed',  # Use lowercase to match balance calculation
+            status='CONFIRMED',  # Fixed to uppercase for consistency
             tx_metadata=tx_metadata,
             event_data={'amount_usdc': float(amount_returned)},
             processed_at=datetime.now(timezone.utc),
@@ -923,7 +923,7 @@ class UserService:
         for position in positions:
             try:
                 # Reopen the position
-                position.status = 'active'
+                position.status = 'ACTIVE'
                 position.exit_date = None
                 position.exit_tx_hash = None
                 position.realized_pnl_usd = Decimal(0)
@@ -973,8 +973,8 @@ class UserService:
         all_positions = await self.get_user_positions(user_id)
         
         # Separate active and closed positions
-        active_positions = [p for p in all_positions if p.status == 'active']
-        closed_positions = [p for p in all_positions if p.status == 'closed']
+        active_positions = [p for p in all_positions if p.status == 'ACTIVE']
+        closed_positions = [p for p in all_positions if p.status == 'CLOSED']
         
         # Get all confirmed deposits and withdrawals (excluding AERO swaps)
         all_deposits = await self.get_user_transactions(
@@ -999,7 +999,7 @@ class UserService:
             and_(
                 Transaction.user_id == user_id,
                 Transaction.tx_type == 'AERO_SWAP',
-                Transaction.status.in_(['CONFIRMED', 'confirmed'])
+                Transaction.status == 'CONFIRMED'
             )
         )
         result = await self.db.execute(stmt)
@@ -1051,7 +1051,7 @@ class UserService:
                 if "execution reverted: ID" in str(e) or "ContractLogicError" in str(e):
                     logger.warning(f"Position {position.nft_token_id} not found on-chain, may be closed externally")
                     # Mark position as closed if it doesn't exist on-chain
-                    position.status = 'closed'
+                    position.status = 'CLOSED'
                     position.realized_pnl_usd = position.current_value_usdc - position.entry_amount_usdc
                     # Move its PNL to realized
                     realized_pnl += position.realized_pnl_usdc or Decimal(0)
@@ -1094,9 +1094,9 @@ class UserService:
         
         # Calculate totals
         total_invested = sum(p.entry_amount_usdc for p in positions)
-        total_current_value = sum(p.current_value_usdc or 0 for p in positions if p.status == 'active')
+        total_current_value = sum(p.current_value_usdc or 0 for p in positions if p.status == 'ACTIVE')
         total_realized_pnl = sum(p.realized_pnl_usdc for p in positions)
-        total_unrealized_pnl = sum(p.unrealized_pnl_usdc for p in positions if p.status == 'active')
+        total_unrealized_pnl = sum(p.unrealized_pnl_usdc for p in positions if p.status == 'ACTIVE')
         total_fees_earned = sum(p.fees_earned_usdc for p in positions)
         total_rewards_earned = sum(p.rewards_earned_usdc for p in positions)
         
@@ -1110,7 +1110,7 @@ class UserService:
         total_pnl = total_realized_pnl + total_unrealized_pnl + total_fees_earned + total_rewards_earned
         
         # Calculate APR - fetch from strategy monitor endpoint for accurate weighted average
-        active_positions = [p for p in positions if p.status == 'active']
+        active_positions = [p for p in positions if p.status == 'ACTIVE']
         apr = Decimal(0)
         
         # Get user to find CDP wallet address for strategy monitor

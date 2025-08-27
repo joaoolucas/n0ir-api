@@ -140,7 +140,7 @@ class Position(Base):
         """Calculate total PnL including fees and rewards."""
         unrealized = float(self.unrealized_pnl_usd or 0)
         realized = float(self.realized_pnl_usd or 0)
-        return unrealized + realized if self.status == 'active' else realized
+        return unrealized + realized if self.status == 'ACTIVE' else realized
     
     def __repr__(self):
         return f"<Position(token_id={self.token_id}, pool={self.pool_address[:10]}..., status={self.status}, pnl={self.total_pnl_usdc:.2f})>"
