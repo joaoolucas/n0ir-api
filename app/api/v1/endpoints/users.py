@@ -288,27 +288,7 @@ async def get_user(
 
 
 # Financial Operations
-@router.post("/{user_id}/deposit", response_model=TransactionResponse, status_code=201)
-async def deposit(
-    user_id: str,
-    request: DepositRequest,
-    db: AsyncSession = Depends(get_db)
-):
-    """Deposit USDC to user account."""
-    try:
-        service = UserService(db)
-        transaction = await service.deposit_usdc(
-            user_id=user_id,
-            amount=request.amount_usdc,
-            tx_hash=request.tx_hash
-        )
-        return TransactionResponse.model_validate(transaction)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error processing deposit: {e}")
-        raise HTTPException(status_code=500, detail="Failed to process deposit")
-
+# NOTE: Deposit and withdrawal endpoints removed - these are now tracked automatically by the watcher from blockchain events
 
 @router.post("/{user_id}/withdraw", response_model=TransactionResponse, status_code=201)
 async def withdraw(
@@ -501,71 +481,7 @@ async def get_transactions(
 
 
 # Position Management
-@router.post("/{user_id}/intents/position", status_code=201)
-async def log_position_intent(
-    user_id: str,
-    request: CreatePositionRequest,
-    db: AsyncSession = Depends(get_db)
-):
-    """Log intent to create position - actual creation happens via blockchain.
-    
-    This endpoint only logs the intent. The actual position will be created
-    when the blockchain transaction is confirmed and processed by the watcher.
-    """
-    try:
-        # Import Redis client
-        import redis.asyncio as aioredis
-        from app.core.config import settings
-        import json
-        from datetime import datetime
-        
-        # Connect to Redis
-        redis_client = await aioredis.from_url(
-            settings.redis_url,
-            decode_responses=False
-        )
-        
-        # Prepare intent data
-        intent_data = {
-            "user_id": user_id,
-            "type": "position.create",
-            "nft_token_id": str(request.nft_token_id),
-            "pool_address": request.pool_address,
-            "pool_name": request.pool_name or "",
-            "token0_address": request.token0_address,
-            "token1_address": request.token1_address,
-            "tick_lower": str(request.tick_lower),
-            "tick_upper": str(request.tick_upper),
-            "tick_spacing": str(request.tick_spacing),
-            "liquidity": request.liquidity,
-            "entry_amount_usdc": str(request.entry_amount_usdc),
-            "entry_tx_hash": request.entry_tx_hash or "",
-            "staked": "true" if request.staked else "false",
-            "gauge_address": request.gauge_address or "",
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        
-        # Log to execution:intents stream
-        await redis_client.xadd(
-            "execution:intents",
-            {k: v.encode() if isinstance(v, str) else str(v).encode() for k, v in intent_data.items()}
-        )
-        
-        await redis_client.close()
-        
-        logger.info(f"Position intent logged for user {user_id}, token_id {request.nft_token_id}")
-        
-        return {
-            "status": "intent_logged",
-            "message": "Position creation intent logged. Waiting for blockchain confirmation.",
-            "nft_token_id": request.nft_token_id,
-            "tx_hash": request.entry_tx_hash
-        }
-        
-    except Exception as e:
-        logger.error(f"Error logging position intent: {e}")
-        raise HTTPException(status_code=500, detail="Failed to log position intent")
-
+# NOTE: Position intent endpoint removed - positions are now tracked automatically by the watcher from blockchain events
 
 @router.get("/{user_id}/positions", response_model=PositionListResponse)
 async def get_positions(
@@ -596,32 +512,7 @@ async def get_positions(
     )
 
 
-@router.delete("/{user_id}/positions/{nft_token_id}", response_model=PositionResponse)
-async def close_position(
-    user_id: str,
-    nft_token_id: int,
-    request: Optional[ClosePositionRequest] = None,
-    db: AsyncSession = Depends(get_db)
-):
-    """Close a position and return funds to user balance."""
-    try:
-        service = UserService(db)
-        position = await service.close_position(
-            user_id=user_id,
-            nft_token_id=nft_token_id,
-            exit_tx_hash=request.exit_tx_hash if request else None,
-            final_value_usdc=request.final_value_usdc if request else None,
-            realized_pnl_usdc=request.realized_pnl_usdc if request else None
-        )
-        if not position:
-            raise HTTPException(status_code=404, detail="Position not found or already closed")
-        
-        # Enrich the closed position with pool data
-        enriched_position = await enrich_position_with_pool_data(position)
-        return PositionResponse.model_validate(enriched_position)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
+# NOTE: Close position endpoint removed - position closes are detected automatically by the watcher from blockchain events
 
 # Position sync endpoint removed - positions are now synced automatically via blockchain events
 # The watcher continuously monitors the blockchain and updates position state
@@ -715,39 +606,7 @@ async def get_pnl_details(
     }
 
 
-@router.post("/{user_id}/sync-pnl", status_code=200)
-async def sync_user_pnl(
-    user_id: str,
-    db: AsyncSession = Depends(get_db)
-):
-    """Manually trigger PnL recalculation for a user.
-    
-    This will fetch current balances, positions, and transactions to recalculate
-    and update the stored PnL values. Normally this happens automatically on
-    deposits, withdrawals, and position changes.
-    """
-    service = UserService(db)
-    
-    # Verify user exists
-    user = await service.get_user(user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # Recalculate and update PnL
-    await service.recalculate_user_pnl(user_id)
-    
-    # Return updated values
-    await db.refresh(user)
-    
-    return {
-        "message": "PnL values synced successfully",
-        "unrealized_pnl_usdc": user.unrealized_pnl_usdc,
-        "realized_pnl_usdc": user.realized_pnl_usdc,
-        "unrealized_pnl_percentage": user.unrealized_pnl_percentage,
-        "realized_pnl_percentage": user.realized_pnl_percentage,
-        "last_updated": user.updated_at
-    }
-
+# NOTE: Sync PnL endpoint removed - PnL is calculated automatically by the watcher on every transaction
 
 @router.get("/{user_id}/performance", response_model=PerformanceResponse)
 async def get_performance(
