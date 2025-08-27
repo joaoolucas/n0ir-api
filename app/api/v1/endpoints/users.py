@@ -797,32 +797,3 @@ async def get_protocol_fees(
         total_pending_usdc=total_pending
     )
 
-
-@router.post("/{user_id}/sync-balance", response_model=Dict[str, Any])
-async def sync_blockchain_balance(
-    user_id: str,
-    db: AsyncSession = Depends(get_db)
-):
-    """Sync user's USDC balance from blockchain.
-    
-    This endpoint fetches the actual USDC balance from the blockchain
-    and reconciles it with the database. If there's a discrepancy,
-    it creates an adjustment transaction to correct it.
-    
-    Returns:
-        Sync results including blockchain balance, DB balance, and any adjustments made.
-    """
-    service = UserService(db)
-    
-    # Verify user exists
-    user = await service.get_user(user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # Perform balance sync
-    sync_result = await service.sync_blockchain_balance(user_id)
-    
-    if "error" in sync_result and "User" in sync_result["error"] and "not found" in sync_result["error"]:
-        raise HTTPException(status_code=404, detail=sync_result["error"])
-    
-    return sync_result

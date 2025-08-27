@@ -9,58 +9,6 @@ from app.core.logger import logger
 from app.services.agent_management_service import get_agent_service
 from app.services.blockchain_event_consumer import blockchain_consumer
 
-async def periodic_balance_sync():
-    """Background task to periodically sync blockchain balances."""
-    from app.database.session import get_db
-    from app.services.user_service import UserService
-    
-    while True:
-        try:
-            # Wait for 5 minutes between syncs
-            await asyncio.sleep(300)  # 5 minutes
-            
-            logger.info("Starting periodic blockchain balance sync...")
-            
-            async for db in get_db():
-                user_service = UserService(db)
-                users = await user_service.list_all_users()
-                
-                synced_count = 0
-                reconciled_count = 0
-                
-                for user in users:
-                    try:
-                        # Skip users with pending wallets
-                        if user.cdp_wallet_address and not user.cdp_wallet_address.startswith("pending_"):
-                            sync_result = await user_service.sync_blockchain_balance(user.user_id)
-                            
-                            # Check if sync was skipped due to withdrawal activity
-                            if sync_result.get("skipped"):
-                                logger.debug(f"Skipped sync for {user.user_id}: {sync_result.get('reason')}")
-                                continue
-                            
-                            synced_count += 1
-                            
-                            if sync_result.get("reconciled"):
-                                reconciled_count += 1
-                                logger.info(
-                                    f"Reconciled balance for {user.user_id} (wallet: {sync_result['wallet_checked']}): "
-                                    f"adjustment of {sync_result['adjustment_amount']} USDC"
-                                )
-                    except Exception as e:
-                        logger.error(f"Error syncing balance for {user.user_id}: {e}")
-                
-                logger.info(
-                    f"Periodic balance sync completed: "
-                    f"{synced_count} users synced, {reconciled_count} reconciliations made"
-                )
-                break  # Exit the async generator after first iteration
-                
-        except Exception as e:
-            logger.error(f"Error in periodic balance sync: {e}")
-            # Continue running even if there's an error
-            await asyncio.sleep(60)  # Wait a minute before retrying on error
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -77,10 +25,6 @@ async def lifespan(app: FastAPI):
     async for db in get_db():
         await ensure_schema_compatibility(db)
         break  # Exit after first iteration
-    
-    # Start background task for periodic balance sync
-    balance_sync_task = asyncio.create_task(periodic_balance_sync())
-    logger.info("Started periodic balance sync background task")
     
     # Initialize and start blockchain event consumer
     try:
@@ -142,13 +86,6 @@ async def lifespan(app: FastAPI):
     # Stop blockchain event consumer
     await blockchain_consumer.stop()
     logger.info("Blockchain event consumer stopped")
-    
-    # Cancel background task
-    balance_sync_task.cancel()
-    try:
-        await balance_sync_task
-    except asyncio.CancelledError:
-        logger.info("Balance sync background task cancelled")
     
     logger.info("Shutdown complete")
 
