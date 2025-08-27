@@ -19,6 +19,9 @@ class TransactionType(str, enum.Enum):
     POSITION_ENTRY = "position_entry"
     POSITION_EXIT = "position_exit"
     FEE_COLLECTION = "fee_collection"
+    AERO_SWAP = "aero_swap"
+    POSITION_CREATED = "position_created"
+    POSITION_CLOSED = "position_closed"
 
 
 class TransactionStatus(str, enum.Enum):

@@ -95,13 +95,18 @@ class Transaction(Base):
     
     @property
     def transaction_type(self) -> str:
-        """Map tx_type to old transaction_type enum values."""
+        """Map tx_type to transaction_type enum values."""
         mapping = {
             'DEPOSIT': 'deposit',
             'WITHDRAWAL': 'withdraw',
-            'POSITION_CREATED': 'position_entry',
-            'POSITION_CLOSED': 'position_exit',
-            'PROTOCOL_FEE': 'protocol_fee'
+            'WITHDRAW': 'withdraw',  # Handle both WITHDRAWAL and WITHDRAW
+            'POSITION_CREATED': 'position_created',
+            'POSITION_CLOSED': 'position_closed',
+            'POSITION_ENTRY': 'position_entry',  # Legacy support
+            'POSITION_EXIT': 'position_exit',    # Legacy support
+            'PROTOCOL_FEE': 'fee_collection',
+            'FEE_COLLECTION': 'fee_collection',
+            'AERO_SWAP': 'aero_swap'
         }
         return mapping.get(self.tx_type, self.tx_type.lower())
     
