@@ -10,7 +10,7 @@ import asyncpg
 
 async def fix_alembic_version():
     # Database connection parameters
-    DATABASE_URL = "postgresql://postgres:iGipbjkDUDKforbKRzRUjDnXSIaXviyi@shuttle.proxy.rlwy.net:37929/railway"
+    DATABASE_URL = "postgresql://postgres:pXmVJczPuWPIauAWXFUKwUdaYGTKqBdX@shuttle.proxy.rlwy.net:17669/railway"
     
     # Connect to the database
     conn = await asyncpg.connect(DATABASE_URL)
@@ -37,9 +37,9 @@ async def fix_alembic_version():
         # since we already have the latest schema from create_tables.py
         await conn.execute("""
             INSERT INTO alembic_version (version_num) 
-            VALUES ('008_add_agent_state_tracking')
+            VALUES ('015_add_wallet_balance_tracking')
         """)
-        print("✓ Set alembic version to 008_add_agent_state_tracking (latest migration)")
+        print("✓ Set alembic version to 015_add_wallet_balance_tracking (latest migration)")
         
         # Verify
         version = await conn.fetchval("SELECT version_num FROM alembic_version")
