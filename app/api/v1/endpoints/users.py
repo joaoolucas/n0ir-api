@@ -636,9 +636,16 @@ async def get_performance(
                 monitor_request = MonitorPositionsRequest(user_address=user.cdp_wallet_address)
                 monitor_response = await strategy_service.monitor_positions(monitor_request)
                 
-                if monitor_response and monitor_response.portfolio_summary:
-                    apr = float(monitor_response.portfolio_summary.weighted_apr or 0)
-        except Exception:
+                # Check different possible APR fields in the response
+                if monitor_response:
+                    if hasattr(monitor_response, 'average_apr') and monitor_response.average_apr:
+                        apr = float(monitor_response.average_apr)
+                    elif hasattr(monitor_response, 'portfolio_metrics') and monitor_response.portfolio_metrics:
+                        apr = float(monitor_response.portfolio_metrics.get('current_apr', 0))
+                    elif monitor_response.portfolio_summary:
+                        apr = float(monitor_response.portfolio_summary.weighted_apr or 0)
+        except Exception as e:
+            logger.warning(f"Failed to get APR from strategy service: {e}")
             # Fallback to 0 if strategy service fails
             apr = 0.0
     
