@@ -575,35 +575,7 @@ async def get_pnl(
     )
 
 
-@router.get("/{user_id}/pnl-details", response_model=Dict[str, Decimal])
-async def get_pnl_details(
-    user_id: str,
-    db: AsyncSession = Depends(get_db)
-):
-    """Get detailed PnL values with real-time position values.
-    
-    Returns all PnL metrics including percentages, recalculated with
-    current blockchain position values.
-    """
-    service = UserService(db)
-    user = await service.get_user(user_id)
-    
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # Recalculate PnL with real-time position values
-    await service.recalculate_user_pnl(user_id)
-    
-    # Refresh user to get updated values
-    await db.refresh(user)
-    
-    return {
-        "unrealized_pnl_usdc": user.unrealized_pnl_usdc,
-        "realized_pnl_usdc": user.realized_pnl_usdc,
-        "unrealized_pnl_percentage": user.unrealized_pnl_percentage,
-        "realized_pnl_percentage": user.realized_pnl_percentage
-    }
-
+# NOTE: pnl-details endpoint removed - use /pnl endpoint instead which provides all the same data plus more
 
 # NOTE: Sync PnL endpoint removed - PnL is calculated automatically by the watcher on every transaction
 
