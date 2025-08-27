@@ -402,7 +402,7 @@ async def get_balance(
     net_deposited = total_deposited - total_withdrawn
     
     # Get active positions to calculate current value and invested amount
-    positions = await service.get_user_positions(user_id, status='active')
+    positions = await service.get_user_positions(user_id, status='ACTIVE')
     
     # Calculate invested amount from ACTIVE positions only (entry amounts)
     invested_in_pools = sum(p.entry_amount_usdc or Decimal(0) for p in positions)

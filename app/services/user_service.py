@@ -351,7 +351,7 @@ class UserService:
                 raise ValueError(f"Insufficient wallet balance. Available: {wallet_balance}, Requested: {amount}")
             
             # Get active positions
-            active_positions = await self.get_user_positions(user_id, status='active')
+            active_positions = await self.get_user_positions(user_id, status='ACTIVE')
             
             if not active_positions:
                 raise ValueError(f"Insufficient funds. Wallet: {wallet_balance}, No active positions to close")
@@ -443,7 +443,7 @@ class UserService:
         
         # Get current portfolio value before withdrawal
         wallet_balance_before = await self.get_user_balance(user_id)
-        active_positions = await self.get_user_positions(user_id, status='active')
+        active_positions = await self.get_user_positions(user_id, status='ACTIVE')
         positions_value = sum(p.current_value_usdc or p.entry_amount_usdc for p in active_positions)
         portfolio_value_before = wallet_balance_before + positions_value
         
@@ -517,7 +517,7 @@ class UserService:
         wallet_balance = await self.get_user_balance(user_id)
         
         # Get active positions
-        active_positions = await self.get_user_positions(user_id, status='active')
+        active_positions = await self.get_user_positions(user_id, status='ACTIVE')
         
         # Calculate total positions value
         positions_value = Decimal(0)
@@ -741,7 +741,7 @@ class UserService:
         """Sync all position values with blockchain for a user."""
         from app.core.positions_service import positions_service
         
-        positions = await self.get_user_positions(user_id, status='active')
+        positions = await self.get_user_positions(user_id, status='ACTIVE')
         
         for position in positions:
             try:
