@@ -601,8 +601,7 @@ async def get_pnl_details(
         "unrealized_pnl_usdc": user.unrealized_pnl_usdc,
         "realized_pnl_usdc": user.realized_pnl_usdc,
         "unrealized_pnl_percentage": user.unrealized_pnl_percentage,
-        "realized_pnl_percentage": user.realized_pnl_percentage,
-        "last_updated": user.updated_at
+        "realized_pnl_percentage": user.realized_pnl_percentage
     }
 
 
