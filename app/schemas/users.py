@@ -210,9 +210,12 @@ class PerformanceResponse(BaseModel):
     total_current_value: float
     total_realized_pnl: float
     total_unrealized_pnl: float
+    total_realized_pnl_percentage: float
+    total_unrealized_pnl_percentage: float
     total_fees_earned: float
     total_rewards_earned: float
     total_pnl: float
+    total_pnl_percentage: float
     total_protocol_fees_pending: float
     apr: float
     active_positions: int
@@ -223,12 +226,22 @@ class PerformanceResponse(BaseModel):
     def from_service_data(cls, data: Dict[str, Any]) -> "PerformanceResponse":
         """Create response from service layer data."""
         roi = 0.0
+        realized_pnl_pct = 0.0
+        unrealized_pnl_pct = 0.0
+        total_pnl_pct = 0.0
+        
         if data["total_invested"] > 0:
             roi = (data["total_pnl"] / data["total_invested"]) * 100
+            realized_pnl_pct = (data["total_realized_pnl"] / data["total_invested"]) * 100
+            unrealized_pnl_pct = (data["total_unrealized_pnl"] / data["total_invested"]) * 100
+            total_pnl_pct = ((data["total_realized_pnl"] + data["total_unrealized_pnl"]) / data["total_invested"]) * 100
         
         return cls(
             **data,
-            roi_percentage=roi
+            roi_percentage=roi,
+            total_realized_pnl_percentage=realized_pnl_pct,
+            total_unrealized_pnl_percentage=unrealized_pnl_pct,
+            total_pnl_percentage=total_pnl_pct
         )
 
 
