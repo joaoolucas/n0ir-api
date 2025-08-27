@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import List, TYPE_CHECKING
-from sqlalchemy import Column, String, DateTime, Numeric, Index
+from sqlalchemy import Column, String, DateTime, Numeric, Index, Integer
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship, Mapped
 from app.database.base import Base
@@ -22,6 +22,14 @@ class User(Base):
     # CDP Wallet information
     cdp_wallet_address = Column(String(42), unique=True, nullable=True, index=True)
     cdp_wallet_name = Column(String(100), nullable=True)
+    
+    # Wallet balance tracking fields (watcher-owned)
+    usdc_balance = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
+    last_deposit_block = Column(Integer, nullable=True)
+    last_withdrawal_block = Column(Integer, nullable=True)
+    total_deposits_usdc = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
+    total_withdrawals_usdc = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
+    last_scanned_block = Column(Integer, nullable=True)
     
     # PnL tracking fields
     unrealized_pnl_usd = Column(Numeric(precision=20, scale=2), default=0, nullable=False)
@@ -65,6 +73,8 @@ class User(Base):
         Index("idx_users_updated", "updated_at"),
         Index("idx_users_cdp_wallet", "cdp_wallet_address"),
         Index("idx_users_pnl", "unrealized_pnl_usd"),
+        Index("idx_users_balance", "usdc_balance"),
+        Index("idx_users_last_scanned", "last_scanned_block"),
     )
     
     @property

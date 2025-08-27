@@ -207,27 +207,14 @@ class UserService:
         return transaction
     
     async def get_user_balance(self, user_id: str) -> Decimal:
-        """Calculate user's current USDC balance from transactions."""
-        stmt = select(
-            func.sum(
-                case(
-                    (Transaction.tx_type.in_([
-                        'DEPOSIT',
-                        'POSITION_CLOSED'
-                    ]), func.coalesce(Transaction.event_data['amount_usdc'].astext.cast(Numeric), 0)),
-                    else_=-func.coalesce(Transaction.event_data['amount_usdc'].astext.cast(Numeric), 0)
-                )
-            )
-        ).where(
-            and_(
-                Transaction.user_id == user_id,
-                Transaction.status == 'confirmed'  # Status values are lowercase in the database
-            )
-        )
+        """Get user's current USDC balance from watcher-maintained field."""
+        # Read directly from the users table - watcher owns this data
+        user = await self.get_user(user_id)
+        if not user:
+            return Decimal(0)
         
-        result = await self.db.execute(stmt)
-        balance = result.scalar_one()
-        return balance or Decimal(0)
+        # Return the watcher-maintained balance
+        return user.usdc_balance or Decimal(0)
     
     async def get_user_transactions(
         self,
@@ -783,10 +770,10 @@ class UserService:
         return position
     
     async def sync_blockchain_balance(self, user_id: str) -> Dict[str, Any]:
-        """Sync user's USDC balance from blockchain with database.
+        """Compare user's blockchain USDC balance with watcher-maintained balance.
         
-        This method fetches the actual USDC balance from the blockchain
-        and reconciles it with the transaction-based balance in the database.
+        Note: The watcher is the source of truth for balances. This method
+        only compares the blockchain balance with what the watcher has recorded.
         
         Returns:
             Dictionary with sync results including:
@@ -853,8 +840,8 @@ class UserService:
             blockchain_balance = await blockchain_service.get_usdc_balance(wallet_to_check, use_cache=False)
             blockchain_balance_decimal = Decimal(str(blockchain_balance))
             
-            # Get database balance (from transactions)
-            db_balance = await self.get_user_balance(user_id)
+            # Get watcher-maintained balance (source of truth)
+            db_balance = await self.get_user_balance(user_id)  # This now reads from user.usdc_balance
             
             # Calculate difference
             difference = blockchain_balance_decimal - db_balance
