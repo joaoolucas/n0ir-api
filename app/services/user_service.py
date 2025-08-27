@@ -971,7 +971,7 @@ class UserService:
         """Recalculate and update user's PnL values.
         
         PNL is calculated as:
-        - Realized PNL: (total_withdrawals - total_deposits) + sum(closed_positions_pnl) + AERO_swaps
+        - Realized PNL: total_withdrawals - total_deposits (simple cash-on-cash return)
         - Unrealized PNL: Sum of (current_value - entry_amount) from active positions
         
         This should be called after:
@@ -979,59 +979,29 @@ class UserService:
         - Position is opened
         - Position value is updated
         - Deposits/Withdrawals
-        - AERO swaps detected
         """
         from app.core.positions_service import positions_service
         
-        # Get all positions for the user
-        all_positions = await self.get_user_positions(user_id)
-        
-        # Separate active and closed positions
-        active_positions = [p for p in all_positions if p.status == 'ACTIVE']
-        closed_positions = [p for p in all_positions if p.status == 'CLOSED']
-        
-        # Get all confirmed deposits and withdrawals (excluding AERO swaps)
-        all_deposits = await self.get_user_transactions(
-            user_id=user_id,
-            transaction_type=TransactionType.DEPOSIT,
-            status=TransactionStatus.CONFIRMED
-        )
-        # Filter out AERO swaps which are tracked separately
-        real_deposits = [t for t in all_deposits if t.tx_type != 'AERO_SWAP']
-        total_deposits = sum(Decimal(str(t.amount_usdc)) for t in real_deposits)
-        
-        all_withdrawals = await self.get_user_transactions(
-            user_id=user_id,
-            transaction_type=TransactionType.WITHDRAW,
-            status=TransactionStatus.CONFIRMED
-        )
-        total_withdrawals = sum(Decimal(str(t.amount_usdc)) for t in all_withdrawals)
-        
-        # Get AERO swap transactions
-        from sqlalchemy import select
-        stmt = select(Transaction).where(
-            and_(
-                Transaction.user_id == user_id,
-                Transaction.tx_type == 'AERO_SWAP',
-                Transaction.status == 'CONFIRMED'
-            )
-        )
+        # Get user to fetch totals from the database
+        stmt = select(User).where(User.user_id == user_id)
         result = await self.db.execute(stmt)
-        aero_swaps = result.scalars().all()
+        user = result.scalar_one_or_none()
         
-        # Calculate total AERO swap proceeds
-        total_aero_swaps = Decimal(0)
-        for swap in aero_swaps:
-            if swap.event_data and 'amount_usdc' in swap.event_data:
-                total_aero_swaps += Decimal(str(swap.event_data['amount_usdc']))
+        if not user:
+            logger.error(f"User {user_id} not found for PnL calculation")
+            return
         
-        logger.info(f"User {user_id} AERO swaps total: {total_aero_swaps} USDC")
+        # Use the totals maintained by the watcher
+        total_deposits = Decimal(str(user.total_deposits_usdc or 0))
+        total_withdrawals = Decimal(str(user.total_withdrawals_usdc or 0))
         
-        # Calculate realized PNL as: (withdrawals - deposits) + closed positions PNL + AERO swaps
-        # This represents actual cash profit/loss realized by the user
-        closed_positions_pnl = sum(p.realized_pnl_usdc or Decimal(0) for p in closed_positions)
-        net_cash_flow = total_withdrawals - total_deposits
-        realized_pnl = net_cash_flow + closed_positions_pnl + total_aero_swaps
+        # Calculate realized PNL as simple cash-on-cash return
+        # This is what the user actually gained/lost in real money
+        realized_pnl = total_withdrawals - total_deposits
+        
+        # Get all active positions for unrealized PNL
+        all_positions = await self.get_user_positions(user_id)
+        active_positions = [p for p in all_positions if p.status == 'ACTIVE']
         
         # Calculate unrealized PNL from active positions
         unrealized_pnl = Decimal(0)
@@ -1079,16 +1049,14 @@ class UserService:
         # Commit any position value updates
         await self.db.commit()
         
-        # Calculate percentages based on total invested amount (not deposits)
-        # This gives a more accurate representation of trading performance
-        total_invested = sum(p.entry_amount_usdc for p in all_positions)
-        
-        if total_invested > 0:
-            unrealized_pnl_percentage = (unrealized_pnl / total_invested) * Decimal(100)
-            realized_pnl_percentage = (realized_pnl / total_invested) * Decimal(100)
+        # Calculate percentages based on total deposits
+        # This shows the return on actual money invested
+        if total_deposits > 0:
+            realized_pnl_percentage = (realized_pnl / total_deposits) * Decimal(100)
+            unrealized_pnl_percentage = (unrealized_pnl / total_deposits) * Decimal(100)
         else:
-            unrealized_pnl_percentage = Decimal(0)
             realized_pnl_percentage = Decimal(0)
+            unrealized_pnl_percentage = Decimal(0)
         
         # Update user PnL values
         await self.update_user_pnl(
@@ -1099,7 +1067,7 @@ class UserService:
             realized_pnl_percentage=realized_pnl_percentage
         )
         
-        logger.info(f"Updated PNL for user {user_id}: realized={realized_pnl}, unrealized={unrealized_pnl}")
+        logger.info(f"Updated PNL for user {user_id}: deposits={total_deposits}, withdrawals={total_withdrawals}, realized={realized_pnl} ({realized_pnl_percentage:.2f}%), unrealized={unrealized_pnl} ({unrealized_pnl_percentage:.2f}%)")
     
     async def calculate_user_performance(self, user_id: str) -> Dict[str, Any]:
         """Calculate comprehensive performance metrics for a user."""
