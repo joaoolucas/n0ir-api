@@ -674,6 +674,7 @@ async def get_pnl(
         realized_pnl_usdc=user.realized_pnl_usdc,
         unrealized_pnl_usdc=user.unrealized_pnl_usdc,
         unrealized_pnl_percentage=user.unrealized_pnl_percentage,
+        unrealized_pnl_pct=user.unrealized_pnl_percentage,  # Same value with different name
         realized_pnl_percentage=user.realized_pnl_percentage,
         fees_earned_usdc=total_fees_earned,
         rewards_earned_usdc=total_rewards_earned,

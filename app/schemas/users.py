@@ -196,6 +196,7 @@ class PnLResponse(BaseModel):
     realized_pnl_usdc: Decimal
     unrealized_pnl_usdc: Decimal
     unrealized_pnl_percentage: Decimal
+    unrealized_pnl_pct: Decimal  # Alias for unrealized_pnl_percentage
     realized_pnl_percentage: Decimal
     fees_earned_usdc: Decimal
     rewards_earned_usdc: Decimal
