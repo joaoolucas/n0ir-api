@@ -95,20 +95,33 @@ class Transaction(Base):
     
     @property
     def transaction_type(self) -> str:
-        """Map tx_type to old transaction_type enum values."""
+        """Map tx_type to transaction_type enum values."""
         mapping = {
             'DEPOSIT': 'deposit',
             'WITHDRAWAL': 'withdraw',
-            'POSITION_CREATED': 'position_entry',
-            'POSITION_CLOSED': 'position_exit',
-            'PROTOCOL_FEE': 'protocol_fee'
+            'WITHDRAW': 'withdraw',  # Handle both WITHDRAWAL and WITHDRAW
+            'POSITION_CREATED': 'position_created',
+            'POSITION_CLOSED': 'position_closed',
+            'POSITION_ENTRY': 'position_entry',  # Legacy support
+            'POSITION_EXIT': 'position_exit',    # Legacy support
+            'PROTOCOL_FEE': 'fee_collection',
+            'FEE_COLLECTION': 'fee_collection',
+            'AERO_SWAP': 'aero_swap'
         }
         return mapping.get(self.tx_type, self.tx_type.lower())
     
     @property
     def amount_usdc(self) -> float:
-        """Get USDC amount from event_data."""
+        """Get USDC amount from event_data.
+        
+        For POSITION_CLOSED transactions, returns total_return_usdc if available
+        (which includes AERO swap proceeds), otherwise falls back to amount_usdc.
+        """
         if self.event_data:
+            # For POSITION_CLOSED, prioritize total_return_usdc which includes AERO swaps
+            if self.tx_type == 'POSITION_CLOSED' and 'total_return_usdc' in self.event_data:
+                return float(self.event_data['total_return_usdc'])
+            
             # Try different field names
             for field in ['amount_usdc', 'usdc_in', 'usdc_out', 'amount_usd']:
                 if field in self.event_data:
@@ -119,6 +132,13 @@ class Transaction(Base):
     def pool_name(self) -> Optional[str]:
         """Get pool name from event_data."""
         return self.event_data.get('pool_name') if self.event_data else None
+    
+    @property
+    def aero_swap_usdc(self) -> Optional[float]:
+        """Get AERO swap amount for POSITION_CLOSED transactions."""
+        if self.tx_type == 'POSITION_CLOSED' and self.event_data and 'aero_swap_usdc' in self.event_data:
+            return float(self.event_data['aero_swap_usdc'])
+        return None
     
     @property
     def realized_pnl_usdc(self) -> Optional[float]:

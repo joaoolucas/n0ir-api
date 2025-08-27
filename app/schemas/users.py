@@ -8,9 +8,9 @@ import enum
 
 # Enums matching database models
 class UserStatus(str, enum.Enum):
-    ACTIVE = "active"
-    SUSPENDED = "suspended"
-    CLOSED = "closed"
+    ACTIVE = "ACTIVE"
+    SUSPENDED = "SUSPENDED"
+    CLOSED = "CLOSED"
 
 
 class TransactionType(str, enum.Enum):
@@ -19,19 +19,22 @@ class TransactionType(str, enum.Enum):
     POSITION_ENTRY = "position_entry"
     POSITION_EXIT = "position_exit"
     FEE_COLLECTION = "fee_collection"
+    AERO_SWAP = "aero_swap"
+    POSITION_CREATED = "position_created"
+    POSITION_CLOSED = "position_closed"
 
 
 class TransactionStatus(str, enum.Enum):
-    PENDING = "pending"
-    CONFIRMED = "confirmed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
+    PENDING = "PENDING"
+    CONFIRMED = "CONFIRMED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
 
 
 class PositionStatus(str, enum.Enum):
-    ACTIVE = "active"
-    CLOSED = "closed"
-    LIQUIDATED = "liquidated"
+    ACTIVE = "ACTIVE"
+    CLOSED = "CLOSED"
+    LIQUIDATED = "LIQUIDATED"
 
 
 # Request Models
@@ -140,6 +143,7 @@ class TransactionResponse(BaseModel):
     tx_metadata: Optional[Dict[str, Any]] = Field(None, description="Additional transaction metadata as JSON")
     created_at: datetime
     confirmed_at: Optional[datetime]
+    aero_swap_usdc: Optional[Decimal] = Field(None, description="AERO rewards swapped to USDC (for POSITION_CLOSED only)")
 
 
 class PositionResponse(BaseModel):

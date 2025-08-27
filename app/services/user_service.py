@@ -222,7 +222,8 @@ class UserService:
         transaction_type: Optional[TransactionType] = None,
         status: Optional[TransactionStatus] = None,
         limit: int = 100,
-        offset: int = 0
+        offset: int = 0,
+        sort_order: str = "desc"
     ) -> List[Transaction]:
         """Get user transactions with optional filters."""
         stmt = select(Transaction).where(Transaction.user_id == user_id)
@@ -242,7 +243,20 @@ class UserService:
         if status:
             stmt = stmt.where(Transaction.status == status)
         
-        stmt = stmt.order_by(Transaction.created_at.desc())
+        # Order by block_number first (if available), then by created_at
+        # This ensures proper chronological order for blockchain transactions
+        if sort_order.lower() == "asc":
+            # Oldest first
+            stmt = stmt.order_by(
+                Transaction.block_number.asc().nullsfirst(),  # Blockchain order first
+                Transaction.created_at.asc()  # Then by creation time
+            )
+        else:
+            # Newest first (default)
+            stmt = stmt.order_by(
+                Transaction.block_number.desc().nullslast(),  # Blockchain order first
+                Transaction.created_at.desc()  # Then by creation time
+            )
         stmt = stmt.limit(limit).offset(offset)
         
         result = await self.db.execute(stmt)
@@ -559,7 +573,7 @@ class UserService:
         
         # Calculate totals
         total_realized = sum(p.realized_pnl_usdc for p in positions)
-        total_unrealized = sum(p.unrealized_pnl_usdc for p in positions if p.status == 'active')
+        total_unrealized = sum(p.unrealized_pnl_usdc for p in positions if p.status == 'ACTIVE')
         total_fees = sum(p.fees_earned_usdc for p in positions)
         total_rewards = sum(p.rewards_earned_usdc for p in positions)
         
@@ -807,7 +821,7 @@ class UserService:
             return None
         
         # If position is already closed, just return it without creating duplicate transaction
-        if position.status == 'closed':
+        if position.status == 'CLOSED':
             logger.info(f"Position {nft_token_id} is already closed, skipping duplicate closure")
             return position
         
@@ -823,7 +837,7 @@ class UserService:
             realized_pnl_usdc = final_value_usdc - position.entry_amount_usdc
         
         # Update position status
-        position.status = 'closed'
+        position.status = 'CLOSED'
         position.exit_tx_hash = exit_tx_hash
         position.exit_date = datetime.now(timezone.utc)
         position.realized_pnl_usd = realized_pnl_usdc
@@ -853,7 +867,7 @@ class UserService:
             user_id=user_id,
             tx_type='POSITION_CLOSED',  # Maps to TransactionType.POSITION_EXIT
             tx_hash=exit_tx_hash,
-            status='confirmed',  # Use lowercase to match balance calculation
+            status='CONFIRMED',  # Fixed to uppercase for consistency
             tx_metadata=tx_metadata,
             event_data={'amount_usdc': float(amount_returned)},
             processed_at=datetime.now(timezone.utc),
@@ -923,7 +937,7 @@ class UserService:
         for position in positions:
             try:
                 # Reopen the position
-                position.status = 'active'
+                position.status = 'ACTIVE'
                 position.exit_date = None
                 position.exit_tx_hash = None
                 position.realized_pnl_usd = Decimal(0)
@@ -957,7 +971,7 @@ class UserService:
         """Recalculate and update user's PnL values.
         
         PNL is calculated as:
-        - Realized PNL: (total_withdrawals - total_deposits) + sum(closed_positions_pnl) + AERO_swaps
+        - Realized PNL: total_withdrawals - total_deposits (simple cash-on-cash return)
         - Unrealized PNL: Sum of (current_value - entry_amount) from active positions
         
         This should be called after:
@@ -965,59 +979,29 @@ class UserService:
         - Position is opened
         - Position value is updated
         - Deposits/Withdrawals
-        - AERO swaps detected
         """
         from app.core.positions_service import positions_service
         
-        # Get all positions for the user
-        all_positions = await self.get_user_positions(user_id)
-        
-        # Separate active and closed positions
-        active_positions = [p for p in all_positions if p.status == 'active']
-        closed_positions = [p for p in all_positions if p.status == 'closed']
-        
-        # Get all confirmed deposits and withdrawals (excluding AERO swaps)
-        all_deposits = await self.get_user_transactions(
-            user_id=user_id,
-            transaction_type=TransactionType.DEPOSIT,
-            status=TransactionStatus.CONFIRMED
-        )
-        # Filter out AERO swaps which are tracked separately
-        real_deposits = [t for t in all_deposits if t.tx_type != 'AERO_SWAP']
-        total_deposits = sum(Decimal(str(t.amount_usdc)) for t in real_deposits)
-        
-        all_withdrawals = await self.get_user_transactions(
-            user_id=user_id,
-            transaction_type=TransactionType.WITHDRAW,
-            status=TransactionStatus.CONFIRMED
-        )
-        total_withdrawals = sum(Decimal(str(t.amount_usdc)) for t in all_withdrawals)
-        
-        # Get AERO swap transactions
-        from sqlalchemy import select
-        stmt = select(Transaction).where(
-            and_(
-                Transaction.user_id == user_id,
-                Transaction.tx_type == 'AERO_SWAP',
-                Transaction.status.in_(['CONFIRMED', 'confirmed'])
-            )
-        )
+        # Get user to fetch totals from the database
+        stmt = select(User).where(User.user_id == user_id)
         result = await self.db.execute(stmt)
-        aero_swaps = result.scalars().all()
+        user = result.scalar_one_or_none()
         
-        # Calculate total AERO swap proceeds
-        total_aero_swaps = Decimal(0)
-        for swap in aero_swaps:
-            if swap.event_data and 'amount_usdc' in swap.event_data:
-                total_aero_swaps += Decimal(str(swap.event_data['amount_usdc']))
+        if not user:
+            logger.error(f"User {user_id} not found for PnL calculation")
+            return
         
-        logger.info(f"User {user_id} AERO swaps total: {total_aero_swaps} USDC")
+        # Use the totals maintained by the watcher
+        total_deposits = Decimal(str(user.total_deposits_usdc or 0))
+        total_withdrawals = Decimal(str(user.total_withdrawals_usdc or 0))
         
-        # Calculate realized PNL as: (withdrawals - deposits) + closed positions PNL + AERO swaps
-        # This represents actual cash profit/loss realized by the user
-        closed_positions_pnl = sum(p.realized_pnl_usdc or Decimal(0) for p in closed_positions)
-        net_cash_flow = total_withdrawals - total_deposits
-        realized_pnl = net_cash_flow + closed_positions_pnl + total_aero_swaps
+        # Calculate realized PNL as simple cash-on-cash return
+        # This is what the user actually gained/lost in real money
+        realized_pnl = total_withdrawals - total_deposits
+        
+        # Get all active positions for unrealized PNL
+        all_positions = await self.get_user_positions(user_id)
+        active_positions = [p for p in all_positions if p.status == 'ACTIVE']
         
         # Calculate unrealized PNL from active positions
         unrealized_pnl = Decimal(0)
@@ -1051,7 +1035,7 @@ class UserService:
                 if "execution reverted: ID" in str(e) or "ContractLogicError" in str(e):
                     logger.warning(f"Position {position.nft_token_id} not found on-chain, may be closed externally")
                     # Mark position as closed if it doesn't exist on-chain
-                    position.status = 'closed'
+                    position.status = 'CLOSED'
                     position.realized_pnl_usd = position.current_value_usdc - position.entry_amount_usdc
                     # Move its PNL to realized
                     realized_pnl += position.realized_pnl_usdc or Decimal(0)
@@ -1065,16 +1049,14 @@ class UserService:
         # Commit any position value updates
         await self.db.commit()
         
-        # Calculate percentages based on total invested amount (not deposits)
-        # This gives a more accurate representation of trading performance
-        total_invested = sum(p.entry_amount_usdc for p in all_positions)
-        
-        if total_invested > 0:
-            unrealized_pnl_percentage = (unrealized_pnl / total_invested) * Decimal(100)
-            realized_pnl_percentage = (realized_pnl / total_invested) * Decimal(100)
+        # Calculate percentages based on total deposits
+        # This shows the return on actual money invested
+        if total_deposits > 0:
+            realized_pnl_percentage = (realized_pnl / total_deposits) * Decimal(100)
+            unrealized_pnl_percentage = (unrealized_pnl / total_deposits) * Decimal(100)
         else:
-            unrealized_pnl_percentage = Decimal(0)
             realized_pnl_percentage = Decimal(0)
+            unrealized_pnl_percentage = Decimal(0)
         
         # Update user PnL values
         await self.update_user_pnl(
@@ -1085,7 +1067,7 @@ class UserService:
             realized_pnl_percentage=realized_pnl_percentage
         )
         
-        logger.info(f"Updated PNL for user {user_id}: realized={realized_pnl}, unrealized={unrealized_pnl}")
+        logger.info(f"Updated PNL for user {user_id}: deposits={total_deposits}, withdrawals={total_withdrawals}, realized={realized_pnl} ({realized_pnl_percentage:.2f}%), unrealized={unrealized_pnl} ({unrealized_pnl_percentage:.2f}%)")
     
     async def calculate_user_performance(self, user_id: str) -> Dict[str, Any]:
         """Calculate comprehensive performance metrics for a user."""
@@ -1094,9 +1076,9 @@ class UserService:
         
         # Calculate totals
         total_invested = sum(p.entry_amount_usdc for p in positions)
-        total_current_value = sum(p.current_value_usdc or 0 for p in positions if p.status == 'active')
+        total_current_value = sum(p.current_value_usdc or 0 for p in positions if p.status == 'ACTIVE')
         total_realized_pnl = sum(p.realized_pnl_usdc for p in positions)
-        total_unrealized_pnl = sum(p.unrealized_pnl_usdc for p in positions if p.status == 'active')
+        total_unrealized_pnl = sum(p.unrealized_pnl_usdc for p in positions if p.status == 'ACTIVE')
         total_fees_earned = sum(p.fees_earned_usdc for p in positions)
         total_rewards_earned = sum(p.rewards_earned_usdc for p in positions)
         
@@ -1110,7 +1092,7 @@ class UserService:
         total_pnl = total_realized_pnl + total_unrealized_pnl + total_fees_earned + total_rewards_earned
         
         # Calculate APR - fetch from strategy monitor endpoint for accurate weighted average
-        active_positions = [p for p in positions if p.status == 'active']
+        active_positions = [p for p in positions if p.status == 'ACTIVE']
         apr = Decimal(0)
         
         # Get user to find CDP wallet address for strategy monitor

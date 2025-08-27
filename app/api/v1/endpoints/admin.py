@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, text
 from decimal import Decimal
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -29,7 +29,7 @@ async def fix_user_balance(
     
     positions_stmt = select(Position).where(
         Position.user_id == user_id,
-        Position.status == 'active'
+        Position.status == 'ACTIVE'
     )
     positions_result = await db.execute(positions_stmt)
     positions = positions_result.scalars().all()
@@ -242,7 +242,7 @@ async def fix_position_status(
                 # Position exists on blockchain
                 if position.status == PositionStatus.CLOSED:
                     # Reopen the position in database
-                    position.status = 'active'
+                    position.status = 'ACTIVE'
                     position.exit_date = None
                     position.exit_tx_hash = None
                     position.realized_pnl_usd = Decimal(0)
@@ -279,7 +279,7 @@ async def fix_position_status(
                     }
             else:
                 # Position doesn't exist on blockchain
-                if position.status == 'active':
+                if position.status == 'ACTIVE':
                     # Mark as closed in database
                     position.status = PositionStatus.CLOSED
                     position.exit_date = position.exit_date or datetime.now(timezone.utc)
@@ -299,7 +299,7 @@ async def fix_position_status(
         except Exception as e:
             if "execution reverted: ID" in str(e) or "ContractLogicError" in str(e):
                 # Position doesn't exist on blockchain
-                if position.status == 'active':
+                if position.status == 'ACTIVE':
                     position.status = PositionStatus.CLOSED
                     position.exit_date = position.exit_date or datetime.now(timezone.utc)
                     await db.commit()
@@ -356,7 +356,7 @@ async def sync_user_positions(
                     # Position exists on blockchain
                     if position.status == PositionStatus.CLOSED:
                         # Reopen incorrectly closed position
-                        position.status = 'active'
+                        position.status = 'ACTIVE'
                         position.exit_date = None
                         position.exit_tx_hash = None
                         position.realized_pnl_usd = Decimal(0)
@@ -373,7 +373,7 @@ async def sync_user_positions(
                         
                 else:
                     # Position doesn't exist on blockchain
-                    if position.status == 'active':
+                    if position.status == 'ACTIVE':
                         # Close incorrectly active position
                         position.status = PositionStatus.CLOSED
                         position.exit_date = position.exit_date or datetime.now(timezone.utc)
@@ -387,7 +387,7 @@ async def sync_user_positions(
             except Exception as e:
                 if "execution reverted: ID" in str(e) or "ContractLogicError" in str(e):
                     # Position doesn't exist on blockchain
-                    if position.status == 'active':
+                    if position.status == 'ACTIVE':
                         position.status = PositionStatus.CLOSED
                         position.exit_date = position.exit_date or datetime.now(timezone.utc)
                         
@@ -420,5 +420,87 @@ async def sync_user_positions(
         
     except Exception as e:
         logger.error(f"Error syncing positions: {e}")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/fix-status-capitalization")
+async def fix_status_capitalization(db: AsyncSession = Depends(get_db)):
+    """Fix status capitalization inconsistency - convert all to uppercase."""
+    try:
+        fixed_counts = {
+            'transactions': {'confirmed': 0, 'pending': 0, 'failed': 0, 'cancelled': 0},
+            'positions': {'active': 0, 'closed': 0, 'liquidated': 0}
+        }
+        
+        # Fix transactions table
+        result = await db.execute(
+            text("""UPDATE transactions SET status = 'CONFIRMED' WHERE LOWER(status) = 'confirmed'""")
+        )
+        fixed_counts['transactions']['confirmed'] = result.rowcount
+        
+        result = await db.execute(
+            text("""UPDATE transactions SET status = 'PENDING' WHERE LOWER(status) = 'pending'""")
+        )
+        fixed_counts['transactions']['pending'] = result.rowcount
+        
+        result = await db.execute(
+            text("""UPDATE transactions SET status = 'FAILED' WHERE LOWER(status) = 'failed'""")
+        )
+        fixed_counts['transactions']['failed'] = result.rowcount
+        
+        result = await db.execute(
+            text("""UPDATE transactions SET status = 'CANCELLED' WHERE LOWER(status) = 'cancelled'""")
+        )
+        fixed_counts['transactions']['cancelled'] = result.rowcount
+        
+        # Fix positions table
+        result = await db.execute(
+            text("""UPDATE positions SET status = 'ACTIVE' WHERE LOWER(status) = 'active'""")
+        )
+        fixed_counts['positions']['active'] = result.rowcount
+        
+        result = await db.execute(
+            text("""UPDATE positions SET status = 'CLOSED' WHERE LOWER(status) = 'closed'""")
+        )
+        fixed_counts['positions']['closed'] = result.rowcount
+        
+        result = await db.execute(
+            text("""UPDATE positions SET status = 'LIQUIDATED' WHERE LOWER(status) = 'liquidated'""")
+        )
+        fixed_counts['positions']['liquidated'] = result.rowcount
+        
+        # Skip users table - it doesn't have a status column
+        # Users are always active if they exist in the table
+        
+        # Commit changes
+        await db.commit()
+        
+        # Get current status distribution
+        tx_statuses = await db.execute(
+            text("""SELECT status, COUNT(*) as count FROM transactions GROUP BY status ORDER BY status""")
+        )
+        tx_dist = {row.status: row.count for row in tx_statuses}
+        
+        pos_statuses = await db.execute(
+            text("""SELECT status, COUNT(*) as count FROM positions GROUP BY status ORDER BY status""")
+        )
+        pos_dist = {row.status: row.count for row in pos_statuses}
+        
+        # Users don't have status column - they're always active
+        user_dist = {"ACTIVE": "All users are active"}
+        
+        return {
+            "message": "Status capitalization fixed successfully",
+            "fixed_counts": fixed_counts,
+            "current_distribution": {
+                "transactions": tx_dist,
+                "positions": pos_dist
+            },
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error fixing status capitalization: {e}")
         await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
