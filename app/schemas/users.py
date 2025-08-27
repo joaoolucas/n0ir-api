@@ -155,9 +155,9 @@ class PositionResponse(BaseModel):
     pool_name: Optional[str] = Field(None, description="Pool name (e.g. ZORA/USDC)")
     token0_address: str
     token1_address: str
-    tick_lower: int
-    tick_upper: int
-    tick_spacing: int
+    tick_lower: Optional[int] = None
+    tick_upper: Optional[int] = None
+    tick_spacing: Optional[int] = None
     liquidity: str
     staked: bool
     gauge_address: Optional[str]
