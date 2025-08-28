@@ -25,9 +25,33 @@ from app.core.logger import logger
 router = APIRouter(prefix="/users")
 
 
-async def enrich_position_with_pool_data(position) -> dict:
+async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = None) -> dict:
     """Enrich position with pool information, PNL, APR, and calculated values from blockchain."""
     position_dict = PositionResponse.model_validate(position).model_dump()
+    
+    # Get the net entry amount from the POSITION_CREATED transaction if db is provided
+    net_entry_amount = position.entry_amount_usdc or Decimal(0)
+    if db:
+        from sqlalchemy import select, and_
+        from app.database.models import Transaction
+        
+        stmt = select(Transaction).where(
+            and_(
+                Transaction.user_id == position.user_id,
+                Transaction.tx_type == 'POSITION_CREATED',
+                Transaction.event_data['tokenId'].astext == str(position.nft_token_id)
+            )
+        ).limit(1)
+        result = await db.execute(stmt)
+        position_created_tx = result.scalar_one_or_none()
+        
+        if position_created_tx and position_created_tx.event_data:
+            amount = Decimal(str(position_created_tx.event_data.get('amount_usdc', 0)))
+            usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
+            net_entry_amount = amount - usdc_returned
+    
+    # Override the entry_amount_usdc with the net amount
+    position_dict['entry_amount_usdc'] = net_entry_amount
     
     # Skip blockchain fetch for closed positions - they don't exist on-chain anymore
     if position.status == DBPositionStatus.CLOSED:
@@ -49,8 +73,8 @@ async def enrich_position_with_pool_data(position) -> dict:
         position_dict['current_total_value'] = position.current_value_usdc or Decimal(0)
         position_dict['total_pnl_usdc'] = position.realized_pnl_usdc + position.fees_earned_usdc + position.rewards_earned_usdc
         
-        if position.entry_amount_usdc and position.entry_amount_usdc > 0:
-            position_dict['pnl_percentage'] = (position_dict['total_pnl_usdc'] / position.entry_amount_usdc) * Decimal(100)
+        if net_entry_amount and net_entry_amount > 0:
+            position_dict['pnl_percentage'] = (position_dict['total_pnl_usdc'] / net_entry_amount) * Decimal(100)
         else:
             position_dict['pnl_percentage'] = Decimal(0)
         
@@ -73,7 +97,7 @@ async def enrich_position_with_pool_data(position) -> dict:
                 position_dict['current_value_usdc'] = Decimal(0)
                 position_dict['current_total_value'] = Decimal(0)
                 position_dict['pool_name'] = "CLOSED/ERROR"
-                position_dict['total_pnl_usdc'] = Decimal(0) - (position.entry_amount_usdc or Decimal(0))
+                position_dict['total_pnl_usdc'] = Decimal(0) - net_entry_amount
                 position_dict['pnl_percentage'] = Decimal(-100)
                 position_dict['pool_base_apr'] = Decimal(0)
                 position_dict['effective_apr'] = Decimal(0)
@@ -113,14 +137,13 @@ async def enrich_position_with_pool_data(position) -> dict:
         position_dict['current_value_usdc'] = current_value_usd
         
         # Calculate PNL
-        entry_amount = position.entry_amount_usdc or Decimal(0)
-        if entry_amount > 0:
-            # Total PNL = current_total_value - entry_amount
-            total_pnl = current_total_value - entry_amount
+        if net_entry_amount > 0:
+            # Total PNL = current_total_value - net_entry_amount
+            total_pnl = current_total_value - net_entry_amount
             position_dict['total_pnl_usdc'] = total_pnl
             
             # PNL percentage
-            pnl_percentage = (total_pnl / entry_amount) * Decimal(100)
+            pnl_percentage = (total_pnl / net_entry_amount) * Decimal(100)
             position_dict['pnl_percentage'] = pnl_percentage
         else:
             position_dict['total_pnl_usdc'] = Decimal(0)
@@ -317,7 +340,25 @@ async def withdraw(
             max_slippage_percent=request.max_slippage_percent,
             withdraw_all=request.withdraw_all
         )
-        return TransactionResponse.model_validate(transaction)
+        # Create response manually to avoid property setter issues
+        return TransactionResponse(
+            transaction_id=transaction.id,
+            user_id=transaction.user_id,
+            transaction_type=transaction.tx_type,
+            amount_usdc=transaction.amount_usdc,  # This reads from the property
+            tx_hash=transaction.tx_hash,
+            status=transaction.status,
+            event_data=transaction.event_data,
+            created_at=transaction.created_at,
+            tx_metadata=transaction.tx_metadata,
+            # Include optional fields with None defaults
+            block_number=getattr(transaction, 'block_number', None),
+            block_timestamp=getattr(transaction, 'block_timestamp', None),
+            gas_used=getattr(transaction, 'gas_used', None),
+            gas_price=getattr(transaction, 'gas_price', None),
+            confirmed_at=getattr(transaction, 'confirmed_at', None),
+            pool_name=None
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -373,7 +414,7 @@ async def get_balance(
     # Get all confirmed withdrawals to calculate net deposits
     all_withdrawals = await service.get_user_transactions(
         user_id=user_id,
-        transaction_type=DBTransactionType.WITHDRAW,
+        transaction_type=DBTransactionType.WITHDRAWAL,
         status=DBTransactionStatus.CONFIRMED
     )
     total_withdrawn = sum(t.amount_usdc for t in all_withdrawals)
@@ -384,8 +425,25 @@ async def get_balance(
     # Get active positions to calculate current value and invested amount
     positions = await service.get_user_positions(user_id, status='ACTIVE')
     
-    # Calculate invested amount from ACTIVE positions only (entry amounts)
-    invested_in_pools = sum(p.entry_amount_usdc or Decimal(0) for p in positions)
+    # Calculate invested amount from ACTIVE positions using net amounts from transactions
+    invested_in_pools = Decimal(0)
+    for position in positions:
+        # Find the POSITION_CREATED transaction for this position
+        position_created_txs = await service.get_user_transactions(
+            user_id=user_id,
+            transaction_type=DBTransactionType.POSITION_CREATED,
+            status=DBTransactionStatus.CONFIRMED
+        )
+        
+        # Find the transaction for this specific position token
+        for tx in position_created_txs:
+            if tx.event_data and str(tx.event_data.get('tokenId')) == str(position.nft_token_id):
+                # Calculate net amount (amount - returned USDC)
+                amount = Decimal(str(tx.event_data.get('amount_usdc', 0)))
+                usdc_returned = Decimal(str(tx.event_data.get('usdc_returned', 0))) if tx.event_data.get('usdc_returned') else Decimal(0)
+                net_invested = amount - usdc_returned
+                invested_in_pools += net_invested
+                break
     
     # Calculate total positions value using real-time blockchain data
     current_positions_value = Decimal(0)
@@ -427,7 +485,7 @@ async def get_balance(
     
     pending_withdrawals = await service.get_user_transactions(
         user_id=user_id,
-        transaction_type=DBTransactionType.WITHDRAW,
+        transaction_type=DBTransactionType.WITHDRAWAL,
         status=DBTransactionStatus.PENDING
     )
     pending_withdrawals_amount = sum(t.amount_usdc for t in pending_withdrawals)
@@ -462,7 +520,7 @@ async def get_transactions(
     sort_order: str = "desc",  # "asc" for oldest first, "desc" for newest first
     db: AsyncSession = Depends(get_db)
 ):
-    """Get user transactions."""
+    """Get user transactions with AERO swaps linked to position closures."""
     service = UserService(db)
     transactions = await service.get_user_transactions(
         user_id=user_id,
@@ -471,6 +529,69 @@ async def get_transactions(
         transaction_type=transaction_type,
         sort_order=sort_order
     )
+    
+    # Fetch pool names for position transactions using pool address from event_data
+    # Also look up AERO swaps for POSITION_CLOSED transactions
+    from app.core.pools_service import pools_service
+    from sqlalchemy import select, and_, or_
+    from app.database.models import Transaction, Position
+    
+    for tx in transactions:
+        # Check if this is a position-related transaction
+        if hasattr(tx, 'event_data') and tx.event_data:
+            pool_address = None
+            
+            # For POSITION_CREATED, pool address is in event_data
+            if tx.tx_type == 'POSITION_CREATED' and 'pool' in tx.event_data:
+                pool_address = tx.event_data.get('pool')
+            
+            # For POSITION_CLOSED, fetch pool address from Position table using tokenId
+            elif tx.tx_type == 'POSITION_CLOSED' and 'tokenId' in tx.event_data:
+                token_id = tx.event_data.get('tokenId')
+                if token_id:
+                    # Fetch the position to get pool_address
+                    stmt = select(Position).where(Position.token_id == int(token_id))
+                    result = await db.execute(stmt)
+                    position = result.scalar_one_or_none()
+                    if position:
+                        pool_address = position.pool_address
+                        # Add pool_address to event_data for future reference
+                        tx.event_data['pool'] = pool_address
+            
+            # Now fetch pool_name if we have a pool_address and pool_name is missing
+            if pool_address and not tx.event_data.get('pool_name'):
+                try:
+                    pool_data = await pools_service.get_pool(pool_address)
+                    if pool_data and 'symbol' in pool_data:
+                        # Symbol format is like "WETH/USDC-5%" - extract just the pair name
+                        symbol = pool_data['symbol']
+                        # Remove the fee percentage part (e.g., "WETH/USDC-5%" -> "WETH/USDC")
+                        pool_name = symbol.split('-')[0] if '-' in symbol else symbol
+                        tx.event_data['pool_name'] = pool_name
+                except Exception as e:
+                    logger.debug(f"Could not fetch pool data for {pool_address}: {e}")
+        
+        # For POSITION_CLOSED transactions, look up matching AERO_SWAP
+        if hasattr(tx, 'tx_type') and tx.tx_type == 'POSITION_CLOSED' and hasattr(tx, 'event_data') and tx.event_data:
+            token_id = tx.event_data.get('tokenId')
+            if token_id:
+                # Look for AERO_SWAP with matching tokenId or position_token_id
+                stmt = select(Transaction).where(
+                    and_(
+                        Transaction.user_id == user_id,
+                        Transaction.tx_type == 'AERO_SWAP',
+                        or_(
+                            Transaction.event_data['tokenId'].astext == token_id,
+                            Transaction.event_data['position_token_id'].astext == token_id
+                        )
+                    )
+                ).limit(1)
+                result = await db.execute(stmt)
+                aero_swap = result.scalar_one_or_none()
+                
+                if aero_swap and hasattr(aero_swap, 'event_data') and aero_swap.event_data:
+                    # Add AERO swap amount to event_data
+                    tx.event_data['aero_swap_usdc'] = aero_swap.event_data.get('amount_usdc', 0)
     
     return TransactionListResponse(
         transactions=[TransactionResponse.model_validate(t) for t in transactions],
@@ -503,7 +624,7 @@ async def get_positions(
     # Enrich positions with pool data
     enriched_positions = []
     for position in positions:
-        enriched_position = await enrich_position_with_pool_data(position)
+        enriched_position = await enrich_position_with_pool_data(position, db)
         enriched_positions.append(PositionResponse.model_validate(enriched_position))
     
     return PositionListResponse(

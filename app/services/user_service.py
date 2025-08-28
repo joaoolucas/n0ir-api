@@ -135,16 +135,8 @@ class UserService:
         cost_basis_withdrawn: Optional[Decimal] = None
     ) -> Transaction:
         """Create a new transaction record."""
-        # Map old transaction_type enum to new tx_type string
-        tx_type_mapping = {
-            TransactionType.DEPOSIT: 'DEPOSIT',
-            TransactionType.WITHDRAW: 'WITHDRAWAL',
-            TransactionType.POSITION_ENTRY: 'POSITION_CREATED',
-            TransactionType.POSITION_EXIT: 'POSITION_CLOSED',
-            TransactionType.FEE_COLLECTION: 'FEES_COLLECTED'
-        }
-        
-        tx_type_value = tx_type_mapping.get(transaction_type, str(transaction_type).upper())
+        # Use the transaction type value directly (already uppercase in enum)
+        tx_type_value = transaction_type.value if hasattr(transaction_type, 'value') else str(transaction_type)
         
         # Prepare metadata with PnL values
         tx_metadata = metadata or {}
@@ -207,14 +199,61 @@ class UserService:
         return transaction
     
     async def get_user_balance(self, user_id: str) -> Decimal:
-        """Get user's current USDC balance from watcher-maintained field."""
-        # Read directly from the users table - watcher owns this data
-        user = await self.get_user(user_id)
-        if not user:
-            return Decimal(0)
+        """Calculate user's current USDC balance from transactions."""
+        # Calculate balance from all transactions to ensure accuracy
+        # Balance = Deposits + Position_Closed + AERO_Swaps - Withdrawals - Position_Created
         
-        # Return the watcher-maintained balance
-        return user.usdc_balance or Decimal(0)
+        # Get all confirmed transactions
+        stmt = select(Transaction).where(
+            Transaction.user_id == user_id,
+            Transaction.status == 'CONFIRMED'
+        )
+        
+        result = await self.db.execute(stmt)
+        transactions = result.scalars().all()
+        
+        deposits = Decimal(0)
+        withdrawals = Decimal(0)
+        position_created = Decimal(0)
+        position_closed = Decimal(0)
+        aero_swaps = Decimal(0)
+        
+        for tx in transactions:
+            # Get amount from event_data
+            amount = Decimal(0)
+            if tx.event_data and 'amount_usdc' in tx.event_data:
+                try:
+                    amount = Decimal(str(tx.event_data['amount_usdc']))
+                except:
+                    amount = Decimal(0)
+            
+            if tx.tx_type == 'DEPOSIT':
+                deposits += amount
+            elif tx.tx_type in ['WITHDRAWAL', 'WITHDRAW']:
+                withdrawals += amount
+            elif tx.tx_type == 'POSITION_CREATED':
+                # Account for USDC returns (change returned to user)
+                usdc_returned = Decimal(0)
+                if tx.event_data and 'usdc_returned' in tx.event_data:
+                    try:
+                        usdc_returned = Decimal(str(tx.event_data['usdc_returned']))
+                    except:
+                        usdc_returned = Decimal(0)
+                # Only subtract the net amount (amount sent - amount returned)
+                position_created += (amount - usdc_returned)
+            elif tx.tx_type == 'POSITION_CLOSED':
+                position_closed += amount
+            elif tx.tx_type == 'AERO_SWAP':
+                aero_swaps += amount
+        
+        # Calculate final balance
+        balance = deposits + position_closed + aero_swaps - withdrawals - position_created
+        
+        # Ensure non-negative (rounding errors might cause tiny negatives)
+        if balance < Decimal('0.01') and balance > Decimal('-0.01'):
+            balance = Decimal(0)
+        
+        return balance
     
     async def get_user_transactions(
         self,
@@ -229,16 +268,8 @@ class UserService:
         stmt = select(Transaction).where(Transaction.user_id == user_id)
         
         if transaction_type:
-            # Map old enum value to new tx_type string
-            tx_type_map = {
-                'deposit': 'DEPOSIT',
-                'withdraw': 'WITHDRAWAL', 
-                'position_entry': 'POSITION_CREATED',
-                'position_exit': 'POSITION_CLOSED',
-                'fee_collection': 'FEES_COLLECTED',
-                'protocol_fee': 'PROTOCOL_FEE'
-            }
-            tx_type_value = tx_type_map.get(transaction_type.value if hasattr(transaction_type, 'value') else transaction_type, transaction_type)
+            # Use the enum value directly - it should match the database
+            tx_type_value = transaction_type.value if hasattr(transaction_type, 'value') else str(transaction_type)
             stmt = stmt.where(Transaction.tx_type == tx_type_value)
         if status:
             stmt = stmt.where(Transaction.status == status)
@@ -338,7 +369,6 @@ class UserService:
         
         # Track positions that need to be closed
         positions_to_close = []
-        positions_closed = []
         
         # If withdraw_all is true and wallet has sufficient balance, use actual balance
         if withdraw_all and wallet_balance >= amount:
@@ -375,132 +405,65 @@ class UserService:
             agent_service = get_agent_service()
             
             try:
-                # If positions need to be closed, mark them as closed in DB first
-                # (will rollback if withdrawal fails)
-                if positions_to_close:
-                    for position in positions_to_close:
-                        closed_position = await self.close_position(
-                            user_id=user_id,
-                            nft_token_id=position.nft_token_id
-                        )
-                        if closed_position:
-                            positions_closed.append(closed_position)
-                            logger.info(f"Marked position {position.nft_token_id} as closed in DB")
-                    
-                    # Ensure all transactions are committed before checking balance
-                    await self.db.commit()
-                    
-                    # Re-check balance after marking positions closed
-                    wallet_balance = await self.get_user_balance(user_id)
-                    logger.info(f"Balance after closing {len(positions_closed)} positions: {wallet_balance} USDC")
-                    
-                    # If withdraw_all flag is set, use the actual balance
-                    if withdraw_all:
-                        logger.info(f"Withdraw all: using actual balance {wallet_balance} instead of requested {amount}")
-                        amount = wallet_balance
-                    elif wallet_balance < amount:
-                        # Rollback position closures
-                        await self._rollback_position_closures(positions_closed)
-                        raise ValueError(f"Still insufficient after closing positions. Available: {wallet_balance}, Requested: {amount}")
+                # DO NOT mark positions as closed in DB - let the agent handle it on-chain
+                # The watcher will detect POSITION_CLOSED events and update the DB
                 
-                # Request withdrawal through agent
+                # If withdraw_all and positions need to be closed, calculate expected total
+                if withdraw_all and positions_to_close:
+                    # Calculate expected balance after positions are closed (including AERO rewards)
+                    expected_total = wallet_balance
+                    for position in positions_to_close:
+                        expected_total += (position.current_value_usdc or position.entry_amount_usdc)
+                    
+                    # Note: AERO rewards will be handled by the agent when closing positions
+                    logger.info(f"Withdraw all: expecting ~{expected_total} USDC after closing {len(positions_to_close)} positions")
+                    # Use a high amount to ensure everything is withdrawn
+                    amount = expected_total * Decimal("1.1")  # Add 10% buffer to ensure all funds are withdrawn
+                
+                # Request withdrawal through agent (it will close positions on-chain if needed)
                 result = await agent_service.withdraw_usdc(
                     user_id=user_id,
                     amount=float(amount),
                     to_address=to_address,
-                    positions_to_close=[p.nft_token_id for p in positions_to_close],  # Tell agent which positions to close
+                    positions_to_close=[p.nft_token_id for p in positions_to_close],  # Tell agent which positions to close on-chain
                     withdraw_all=withdraw_all
                 )
                 
                 if not result.get('success'):
-                    # Rollback position closures if withdrawal failed
-                    if positions_closed:
-                        await self._rollback_position_closures(positions_closed)
                     error_msg = result.get('error', 'Unknown error')
                     raise ValueError(f"Withdrawal failed: {error_msg}")
                 
                 tx_hash = result.get('tx_hash')
                 if not tx_hash:
-                    # Rollback position closures if no tx_hash
-                    if positions_closed:
-                        await self._rollback_position_closures(positions_closed)
                     raise ValueError("Withdrawal executed but no transaction hash returned")
                     
             except Exception as e:
-                # Rollback any position closures on any error
-                if positions_closed:
-                    await self._rollback_position_closures(positions_closed)
                 raise
         
-        # Calculate realized PnL for this withdrawal
-        # Get total deposits and current portfolio value
-        all_deposits = await self.get_user_transactions(
+        # Don't create transaction in database - let the watcher handle it
+        # The watcher will detect the WITHDRAWAL event on-chain and create the transaction
+        # This prevents duplicate transactions
+        
+        # Return a temporary transaction object for API response only (not saved to DB)
+        from app.database.models import Transaction
+        from datetime import datetime, timezone
+        import uuid
+        
+        # Create a mock transaction for the API response
+        transaction = Transaction(
+            id=uuid.uuid4(),
             user_id=user_id,
-            transaction_type=TransactionType.DEPOSIT,
-            status=TransactionStatus.CONFIRMED
-        )
-        total_deposited = sum(t.amount_usdc for t in all_deposits)
-        
-        # Get current portfolio value before withdrawal
-        wallet_balance_before = await self.get_user_balance(user_id)
-        active_positions = await self.get_user_positions(user_id, status='ACTIVE')
-        positions_value = sum(p.current_value_usdc or p.entry_amount_usdc for p in active_positions)
-        portfolio_value_before = wallet_balance_before + positions_value
-        
-        # Calculate realized PnL when withdrawal occurs
-        # Realized PnL = total_withdrawals - total_deposits (after this withdrawal)
-        from app.services.pnl_calculator import PnLCalculator
-        
-        # Update realized PnL based on this withdrawal
-        pnl_result = await PnLCalculator.calculate_realized_pnl_on_withdrawal(
-            db=self.db,
-            user_id=user_id,
-            withdrawal_amount=amount
-        )
-        
-        realized_pnl_amount = pnl_result["realized_pnl_usd"]
-        
-        # Create withdrawal transaction record
-        transaction = await self.create_transaction(
-            user_id=user_id,
-            transaction_type=TransactionType.WITHDRAW,
-            amount_usdc=amount,
+            tx_type='WITHDRAWAL',
             tx_hash=tx_hash,
-            realized_pnl_usdc=Decimal(0),  # Don't attribute PnL to individual tx
-            portfolio_value_at_time=portfolio_value_before,
-            cost_basis_withdrawn=Decimal(0),
-            metadata={
-                "type": "withdrawal",
-                "to_address": to_address or user_id,
-                "realized_pnl_total": str(realized_pnl_amount)  # Track total realized PnL
-            }
+            status='PENDING' if not tx_hash else 'CONFIRMED',
+            event_data={
+                'amount_usdc': float(amount),
+                'to_address': to_address or user_id
+            },
+            created_at=datetime.now(timezone.utc)
         )
         
-        # Mark as confirmed since we have tx_hash
-        if tx_hash:
-            transaction = await self.update_transaction_status(
-                transaction_id=transaction.id,
-                status=TransactionStatus.CONFIRMED,
-                tx_hash=tx_hash
-            )
-        
-        # Don't recalculate PnL here - we already updated it above
-        # Just recalculate unrealized PnL from active positions
-        if tx_hash:  # Only for confirmed withdrawals
-            # Update only unrealized PnL from positions
-            await self._update_unrealized_pnl_only(user_id)
-            
-            # Publish balance change event for confirmed withdrawals
-            new_balance = await self.get_user_balance(user_id)
-            agent_service = get_agent_service()
-            await agent_service.publish_balance_event(
-                user_id=user_id,
-                balance=float(new_balance),
-                event_type='withdrawal'
-            )
-            logger.info(f"Published balance event after withdrawal for {user_id}: {new_balance} USDC")
-        
-        logger.info(f"Processed withdrawal of {amount} USDC for user {user_id} (tx: {tx_hash})")
+        logger.info(f"Withdrawal request processed for {amount} USDC from user {user_id} - watcher will create transaction record")
         return transaction
     
     async def preview_withdrawal(
@@ -650,7 +613,7 @@ class UserService:
         # Create transaction record for position entry (debit)
         transaction = Transaction(
             user_id=user_id,
-            transaction_type=TransactionType.POSITION_ENTRY,
+            transaction_type=TransactionType.POSITION_CREATED,
             amount_usdc=entry_amount_usdc,  # Store as positive, type indicates debit
             pool_name=pool_name,  # Add pool name to transaction
             tx_hash=entry_tx_hash,
@@ -808,14 +771,14 @@ class UserService:
             and_(
                 Position.token_id == nft_token_id,  # Use actual column name
                 Position.user_id == user_id,
-                Position.status.in_(['active', 'closed'])
+                Position.status.in_(['ACTIVE', 'CLOSED'])  # Use uppercase status values
             )
         )
         result = await self.db.execute(stmt)
         position = result.scalar_one_or_none()
         
         if not position:
-            logger.error(f"Position {nft_token_id} not found for user {user_id} with status='active'")
+            logger.error(f"Position {nft_token_id} not found for user {user_id} with status='ACTIVE' or 'CLOSED'")
             # Try to find it without status filter to debug
             debug_stmt = select(Position).where(
                 and_(
@@ -826,7 +789,7 @@ class UserService:
             debug_result = await self.db.execute(debug_stmt)
             debug_position = debug_result.scalar_one_or_none()
             if debug_position:
-                logger.error(f"Found position but with status='{debug_position.status}' instead of 'active'")
+                logger.error(f"Found position but with status='{debug_position.status}' instead of 'ACTIVE' or 'CLOSED'")
             else:
                 logger.error(f"Position {nft_token_id} not found at all for user {user_id}")
             return None
@@ -876,7 +839,7 @@ class UserService:
         transaction = Transaction(
             id=uuid.uuid4(),  # Ensure we have a primary key
             user_id=user_id,
-            tx_type='POSITION_CLOSED',  # Maps to TransactionType.POSITION_EXIT
+            tx_type='POSITION_CLOSED',  # Direct string since we're not using the enum here
             tx_hash=exit_tx_hash,
             status='CONFIRMED',  # Fixed to uppercase for consistency
             tx_metadata=tx_metadata,
@@ -998,7 +961,7 @@ class UserService:
         for position in active_positions:
             try:
                 # Try to get real-time value from blockchain
-                from app.services.positions_service import positions_service
+                from app.core.positions_service import positions_service
                 position_info = await positions_service.get_position_by_id(position.nft_token_id)
                 
                 if position_info:
@@ -1010,15 +973,49 @@ class UserService:
                     # Use cached value if blockchain fetch fails
                     position_current_value = position.current_value_usdc or position.entry_amount_usdc or Decimal(0)
                 
-                # Calculate unrealized PNL for this position
-                position_unrealized_pnl = position_current_value - position.entry_amount_usdc
+                # Calculate unrealized PNL for this position using net entry amount
+                # Get net entry amount from POSITION_CREATED transaction
+                net_entry_amount = position.entry_amount_usdc or Decimal(0)
+                stmt_tx = select(Transaction).where(
+                    Transaction.user_id == user_id,
+                    Transaction.tx_type == 'POSITION_CREATED',
+                    Transaction.event_data['tokenId'].astext == str(position.nft_token_id)
+                ).limit(1)
+                result_tx = await self.db.execute(stmt_tx)
+                position_created_tx = result_tx.scalar_one_or_none()
+                
+                if position_created_tx and position_created_tx.event_data:
+                    amount = Decimal(str(position_created_tx.event_data.get('amount_usdc', 0)))
+                    usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
+                    net_entry_amount = amount - usdc_returned
+                
+                position_unrealized_pnl = position_current_value - net_entry_amount
                 unrealized_pnl += position_unrealized_pnl
                 
             except Exception as e:
                 logger.error(f"Error fetching position {position.nft_token_id}: {e}")
-                # Use cached value as fallback
+                # Use cached value as fallback and try to get net entry amount
                 cached_value = position.current_value_usdc or position.entry_amount_usdc or Decimal(0)
-                position_unrealized_pnl = cached_value - position.entry_amount_usdc
+                
+                # Try to get net entry amount even in error case
+                net_entry_amount = position.entry_amount_usdc or Decimal(0)
+                try:
+                    stmt_tx = select(Transaction).where(
+                        Transaction.user_id == user_id,
+                        Transaction.tx_type == 'POSITION_CREATED',
+                        Transaction.event_data['tokenId'].astext == str(position.nft_token_id)
+                    ).limit(1)
+                    result_tx = await self.db.execute(stmt_tx)
+                    position_created_tx = result_tx.scalar_one_or_none()
+                    
+                    if position_created_tx and position_created_tx.event_data:
+                        amount = Decimal(str(position_created_tx.event_data.get('amount_usdc', 0)))
+                        usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
+                        net_entry_amount = amount - usdc_returned
+                except:
+                    pass  # Use default net_entry_amount
+                
+                position_unrealized_pnl = cached_value - net_entry_amount
                 unrealized_pnl += position_unrealized_pnl
         
         # Update only unrealized PnL fields
@@ -1063,11 +1060,96 @@ class UserService:
         total_deposits = Decimal(str(user.total_deposits_usdc or 0))
         total_withdrawals = Decimal(str(user.total_withdrawals_usdc or 0))
         
-        # Realized PNL should only be calculated when withdrawals are made
-        # It represents actual profit/loss that has been "realized" by withdrawing
-        # For now, use the existing realized_pnl_usd from the user record
-        # This should be updated only when processing WITHDRAWAL transactions
-        realized_pnl = Decimal(str(user.realized_pnl_usd or 0))
+        # Calculate realized PNL as net cash flow from all transactions
+        # This represents the actual profit/loss from completed trading activities
+        # Realized PNL = Net cash flow + Trading PnL from closed positions
+        
+        # Get net cash flow from transactions
+        stmt_tx = select(Transaction).where(
+            Transaction.user_id == user_id,
+            Transaction.status == 'CONFIRMED'
+        )
+        result_tx = await self.db.execute(stmt_tx)
+        transactions = result_tx.scalars().all()
+        
+        net_cash_flow = Decimal(0)
+        for tx in transactions:
+            amount = Decimal(0)
+            if tx.event_data and 'amount_usdc' in tx.event_data:
+                try:
+                    amount = Decimal(str(tx.event_data['amount_usdc']))
+                except:
+                    amount = Decimal(0)
+            
+            if tx.tx_type == 'DEPOSIT':
+                net_cash_flow += amount
+            elif tx.tx_type in ['WITHDRAWAL', 'WITHDRAW']:
+                net_cash_flow -= amount
+            elif tx.tx_type == 'POSITION_CREATED':
+                # Subtract net amount spent (amount - usdc_returned)
+                usdc_returned = Decimal(0)
+                if tx.event_data and 'usdc_returned' in tx.event_data:
+                    try:
+                        usdc_returned = Decimal(str(tx.event_data['usdc_returned']))
+                    except:
+                        usdc_returned = Decimal(0)
+                net_cash_flow -= (amount - usdc_returned)
+            elif tx.tx_type == 'POSITION_CLOSED':
+                net_cash_flow += amount
+            elif tx.tx_type == 'AERO_SWAP':
+                net_cash_flow += amount
+        
+        # Calculate realized PnL as actual trading performance from closed positions
+        # For each closed position: (amount_received - amount_invested)
+        
+        # Get all closed positions and calculate their individual PnL
+        stmt_closed = select(Transaction).where(
+            Transaction.user_id == user_id,
+            Transaction.tx_type == 'POSITION_CLOSED',
+            Transaction.status == 'CONFIRMED'
+        )
+        result_closed = await self.db.execute(stmt_closed)
+        closed_transactions = result_closed.scalars().all()
+        
+        realized_pnl = Decimal(0)
+        
+        for close_tx in closed_transactions:
+            if not close_tx.event_data:
+                continue
+                
+            # Get token ID to find corresponding POSITION_CREATED transaction
+            token_id = close_tx.event_data.get('tokenId') or close_tx.event_data.get('token_id')
+            if not token_id:
+                continue
+            
+            # Get amount received from closing position (including AERO swaps)
+            amount_received = Decimal(str(close_tx.event_data.get('amount_usdc', 0)))
+            aero_swap_amount = Decimal(str(close_tx.event_data.get('aero_swap_usdc', 0)))
+            total_received = amount_received + aero_swap_amount
+            
+            # Find the corresponding POSITION_CREATED transaction
+            stmt_created = select(Transaction).where(
+                Transaction.user_id == user_id,
+                Transaction.tx_type == 'POSITION_CREATED',
+                Transaction.event_data['tokenId'].astext == str(token_id),
+                Transaction.status == 'CONFIRMED'
+            ).limit(1)
+            result_created = await self.db.execute(stmt_created)
+            created_tx = result_created.scalar_one_or_none()
+            
+            if created_tx and created_tx.event_data:
+                # Calculate net amount invested (after USDC returns)
+                amount_invested = Decimal(str(created_tx.event_data.get('amount_usdc', 0)))
+                usdc_returned = Decimal(str(created_tx.event_data.get('usdc_returned', 0)))
+                net_invested = amount_invested - usdc_returned
+                
+                # Calculate PnL for this position
+                position_pnl = total_received - net_invested
+                realized_pnl += position_pnl
+                
+                logger.debug(f"Position {token_id}: invested={net_invested:.6f}, received={total_received:.6f}, PnL={position_pnl:.6f}")
+        
+        logger.info(f"Calculated realized PnL from {len(closed_transactions)} closed positions: {realized_pnl:.6f} USDC")
         
         # Get all active positions for unrealized PNL
         all_positions = await self.get_user_positions(user_id)
@@ -1091,13 +1173,56 @@ class UserService:
                     # Update position's current value in DB for caching
                     position.current_value_usdc = position_current_value
                     
+                    # Get net entry amount from POSITION_CREATED transaction
+                    # ALWAYS fetch from transactions since position.entry_amount_usdc might be 0 or wrong
+                    net_entry_amount = Decimal(0)
+                    stmt_tx = select(Transaction).where(
+                        Transaction.user_id == user_id,
+                        Transaction.tx_type == 'POSITION_CREATED',
+                        Transaction.event_data['tokenId'].astext == str(position.nft_token_id)
+                    ).limit(1)
+                    result_tx = await self.db.execute(stmt_tx)
+                    position_created_tx = result_tx.scalar_one_or_none()
+                    
+                    if position_created_tx and position_created_tx.event_data:
+                        amount = Decimal(str(position_created_tx.event_data.get('amount_usdc', 0)))
+                        usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
+                        net_entry_amount = amount - usdc_returned
+                        logger.debug(f"Position {position.nft_token_id}: amount={amount}, returned={usdc_returned}, net={net_entry_amount}")
+                    else:
+                        # Fallback: if no transaction found, use position entry or assume current value
+                        net_entry_amount = position.entry_amount_usdc or position_current_value
+                        logger.warning(f"No POSITION_CREATED tx found for position {position.nft_token_id}, using fallback: {net_entry_amount}")
+                    
                     # Calculate unrealized PNL for this position
-                    position_unrealized_pnl = position_current_value - position.entry_amount_usdc
+                    position_unrealized_pnl = position_current_value - net_entry_amount
                     unrealized_pnl += position_unrealized_pnl
                 else:
                     # If blockchain fetch fails, use database value
                     cached_value = position.current_value_usdc or position.entry_amount_usdc or Decimal(0)
-                    position_unrealized_pnl = cached_value - position.entry_amount_usdc
+                    
+                    # Get net entry amount from POSITION_CREATED transaction
+                    # ALWAYS fetch from transactions since position.entry_amount_usdc might be 0 or wrong
+                    net_entry_amount = Decimal(0)
+                    stmt_tx = select(Transaction).where(
+                        Transaction.user_id == user_id,
+                        Transaction.tx_type == 'POSITION_CREATED',
+                        Transaction.event_data['tokenId'].astext == str(position.nft_token_id)
+                    ).limit(1)
+                    result_tx = await self.db.execute(stmt_tx)
+                    position_created_tx = result_tx.scalar_one_or_none()
+                    
+                    if position_created_tx and position_created_tx.event_data:
+                        amount = Decimal(str(position_created_tx.event_data.get('amount_usdc', 0)))
+                        usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
+                        net_entry_amount = amount - usdc_returned
+                        logger.debug(f"Position {position.nft_token_id}: amount={amount}, returned={usdc_returned}, net={net_entry_amount}")
+                    else:
+                        # Fallback: if no transaction found, use position entry or assume current value
+                        net_entry_amount = position.entry_amount_usdc or position_current_value
+                        logger.warning(f"No POSITION_CREATED tx found for position {position.nft_token_id}, using fallback: {net_entry_amount}")
+                    
+                    position_unrealized_pnl = cached_value - net_entry_amount
                     unrealized_pnl += position_unrealized_pnl
                     
             except Exception as e:
@@ -1106,24 +1231,67 @@ class UserService:
                     logger.warning(f"Position {position.nft_token_id} not found on-chain, may be closed externally")
                     # Mark position as closed if it doesn't exist on-chain
                     position.status = 'CLOSED'
-                    position.realized_pnl_usd = position.current_value_usdc - position.entry_amount_usdc
+                    
+                    # Get net entry amount for realized PnL calculation
+                    net_entry_amount = position.entry_amount_usdc or Decimal(0)
+                    try:
+                        stmt_tx = select(Transaction).where(
+                            Transaction.user_id == user_id,
+                            Transaction.tx_type == 'POSITION_CREATED',
+                            Transaction.event_data['tokenId'].astext == str(position.nft_token_id)
+                        ).limit(1)
+                        result_tx = await self.db.execute(stmt_tx)
+                        position_created_tx = result_tx.scalar_one_or_none()
+                        
+                        if position_created_tx and position_created_tx.event_data:
+                            amount = Decimal(str(position_created_tx.event_data.get('amount_usdc', 0)))
+                            usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
+                            net_entry_amount = amount - usdc_returned
+                    except:
+                        pass
+                    
+                    position.realized_pnl_usd = position.current_value_usdc - net_entry_amount
                     # Move its PNL to realized
                     realized_pnl += position.realized_pnl_usdc or Decimal(0)
                 else:
                     logger.error(f"Error fetching position {position.nft_token_id}: {e}")
                     # Use database value as fallback for unrealized PNL
                     cached_value = position.current_value_usdc or position.entry_amount_usdc or Decimal(0)
-                    position_unrealized_pnl = cached_value - position.entry_amount_usdc
+                    
+                    # Get net entry amount
+                    net_entry_amount = position.entry_amount_usdc or Decimal(0)
+                    try:
+                        stmt_tx = select(Transaction).where(
+                            Transaction.user_id == user_id,
+                            Transaction.tx_type == 'POSITION_CREATED',
+                            Transaction.event_data['tokenId'].astext == str(position.nft_token_id)
+                        ).limit(1)
+                        result_tx = await self.db.execute(stmt_tx)
+                        position_created_tx = result_tx.scalar_one_or_none()
+                        
+                        if position_created_tx and position_created_tx.event_data:
+                            amount = Decimal(str(position_created_tx.event_data.get('amount_usdc', 0)))
+                            usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
+                            net_entry_amount = amount - usdc_returned
+                    except:
+                        pass
+                    
+                    position_unrealized_pnl = cached_value - net_entry_amount
                     unrealized_pnl += position_unrealized_pnl
         
         # Commit any position value updates
         await self.db.commit()
         
-        # Calculate percentages based on total deposits
-        # This shows the return on actual money invested
-        if total_deposits > 0:
-            realized_pnl_percentage = (realized_pnl / total_deposits) * Decimal(100)
-            unrealized_pnl_percentage = (unrealized_pnl / total_deposits) * Decimal(100)
+        # Calculate percentages based on total deposits (not net)
+        # This represents the total capital the user has deposited
+        # Using total deposits (not net) for PnL calculation as per user feedback
+        base_for_pnl = total_deposits
+        
+        # Calculate percentages
+        if base_for_pnl > 0:
+            # Both realized and unrealized PnL percentages should be based on total deposits
+            realized_pnl_percentage = (realized_pnl / base_for_pnl) * Decimal(100)
+            unrealized_pnl_percentage = (unrealized_pnl / base_for_pnl) * Decimal(100)
         else:
             realized_pnl_percentage = Decimal(0)
             unrealized_pnl_percentage = Decimal(0)

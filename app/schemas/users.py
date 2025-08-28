@@ -1,7 +1,7 @@
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from decimal import Decimal
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 from uuid import UUID
 import enum
 
@@ -14,14 +14,11 @@ class UserStatus(str, enum.Enum):
 
 
 class TransactionType(str, enum.Enum):
-    DEPOSIT = "deposit"
-    WITHDRAW = "withdraw"
-    POSITION_ENTRY = "position_entry"
-    POSITION_EXIT = "position_exit"
-    FEE_COLLECTION = "fee_collection"
-    AERO_SWAP = "aero_swap"
-    POSITION_CREATED = "position_created"
-    POSITION_CLOSED = "position_closed"
+    DEPOSIT = "DEPOSIT"
+    WITHDRAWAL = "WITHDRAWAL"
+    POSITION_CREATED = "POSITION_CREATED"
+    POSITION_CLOSED = "POSITION_CLOSED"
+    AERO_SWAP = "AERO_SWAP"
 
 
 class TransactionStatus(str, enum.Enum):
@@ -128,22 +125,84 @@ class BalanceResponse(BaseModel):
 
 
 class TransactionResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
     
-    transaction_id: UUID
+    transaction_id: UUID = Field(validation_alias='id')
     user_id: str
-    transaction_type: TransactionType
+    transaction_type: TransactionType = Field(validation_alias='tx_type')
     amount_usdc: Decimal
     pool_name: Optional[str] = Field(None, description="Pool name for position entry/exit transactions")
     tx_hash: Optional[str]
     block_number: Optional[int]
+    block_timestamp: Optional[datetime] = Field(None, description="On-chain block timestamp")
     gas_used: Optional[int]
     gas_price: Optional[Decimal]
     status: TransactionStatus
     tx_metadata: Optional[Dict[str, Any]] = Field(None, description="Additional transaction metadata as JSON")
+    event_data: Optional[Dict[str, Any]] = Field(None, description="Event data from blockchain")
     created_at: datetime
     confirmed_at: Optional[datetime]
     aero_swap_usdc: Optional[Decimal] = Field(None, description="AERO rewards swapped to USDC (for POSITION_CLOSED only)")
+    total_amount_usdc: Optional[Decimal] = Field(None, description="Net amount: adds AERO for closes, subtracts returns for creates")
+    
+    @model_validator(mode='before')
+    @classmethod
+    def extract_aero_swap(cls, values):
+        """Extract aero_swap_usdc from event_data if present and normalize transaction type."""
+        if isinstance(values, dict):
+            # Extract aero_swap_usdc from event_data if not already set
+            event_data = values.get('event_data', {})
+            if event_data and not values.get('aero_swap_usdc'):
+                values['aero_swap_usdc'] = event_data.get('aero_swap_usdc', 0)
+            
+            # Normalize transaction type from database to match enum
+            # Database has 'tx_type' field, we need to normalize it
+            if 'tx_type' in values:
+                tx_type = values['tx_type']
+                type_mapping = {
+                    'withdraw': 'WITHDRAWAL',
+                    'WITHDRAW': 'WITHDRAWAL',
+                    'WITHDRAWAL': 'WITHDRAWAL',
+                    'deposit': 'DEPOSIT',
+                    'DEPOSIT': 'DEPOSIT',
+                    'position_created': 'POSITION_CREATED',
+                    'POSITION_CREATED': 'POSITION_CREATED',
+                    'position_closed': 'POSITION_CLOSED',
+                    'POSITION_CLOSED': 'POSITION_CLOSED',
+                    'aero_swap': 'AERO_SWAP',
+                    'AERO_SWAP': 'AERO_SWAP'
+                }
+                normalized = type_mapping.get(tx_type, tx_type)
+                values['tx_type'] = normalized
+        return values
+    
+    @model_validator(mode='after')
+    def calculate_total_amount(self):
+        """Calculate total_amount_usdc for different transaction types."""
+        # For POSITION_CLOSED transactions, add AERO swap amount
+        if self.transaction_type == TransactionType.POSITION_CLOSED or self.transaction_type == 'POSITION_CLOSED':
+            # Use aero_swap_usdc if available
+            aero_amount = Decimal(str(self.aero_swap_usdc or 0))
+            
+            # Calculate total
+            self.total_amount_usdc = self.amount_usdc + aero_amount
+        # For POSITION_CREATED transactions, subtract USDC returned (net amount spent)
+        elif self.transaction_type == TransactionType.POSITION_CREATED or self.transaction_type == 'POSITION_CREATED':
+            # Extract usdc_returned from event_data if available
+            usdc_returned = Decimal(0)
+            if self.event_data and 'usdc_returned' in self.event_data:
+                try:
+                    usdc_returned = Decimal(str(self.event_data['usdc_returned']))
+                except:
+                    usdc_returned = Decimal(0)
+            
+            # Calculate net amount (what was actually spent)
+            self.total_amount_usdc = self.amount_usdc - usdc_returned
+        else:
+            # For other transaction types, total is same as amount
+            self.total_amount_usdc = self.amount_usdc
+            
+        return self
 
 
 class PositionResponse(BaseModel):
