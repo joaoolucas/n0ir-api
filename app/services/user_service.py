@@ -408,7 +408,6 @@ class UserService:
             user_id=user_id,
             tx_type='WITHDRAWAL',
             tx_hash=tx_hash,
-            amount_usdc=amount,
             status='PENDING' if not tx_hash else 'CONFIRMED',
             event_data={
                 'amount_usdc': float(amount),

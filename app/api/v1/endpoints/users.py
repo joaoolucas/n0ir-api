@@ -317,7 +317,18 @@ async def withdraw(
             max_slippage_percent=request.max_slippage_percent,
             withdraw_all=request.withdraw_all
         )
-        return TransactionResponse.model_validate(transaction)
+        # Create response manually to avoid property setter issues
+        return TransactionResponse(
+            transaction_id=transaction.id,
+            user_id=transaction.user_id,
+            transaction_type=transaction.tx_type,
+            amount_usdc=transaction.amount_usdc,  # This reads from the property
+            tx_hash=transaction.tx_hash,
+            status=transaction.status,
+            event_data=transaction.event_data,
+            created_at=transaction.created_at,
+            tx_metadata=transaction.tx_metadata
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
