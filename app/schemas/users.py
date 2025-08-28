@@ -137,6 +137,7 @@ class TransactionResponse(BaseModel):
     pool_name: Optional[str] = Field(None, description="Pool name for position entry/exit transactions")
     tx_hash: Optional[str]
     block_number: Optional[int]
+    block_timestamp: Optional[datetime] = Field(None, description="On-chain block timestamp")
     gas_used: Optional[int]
     gas_price: Optional[Decimal]
     status: TransactionStatus
