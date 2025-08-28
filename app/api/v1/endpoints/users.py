@@ -21,6 +21,7 @@ DBTransactionType = TransactionType
 DBTransactionStatus = TransactionStatus
 DBPositionStatus = PositionStatus
 from app.core.logger import logger
+from app.core.signature_service import signature_service
 
 router = APIRouter(prefix="/users")
 
@@ -245,9 +246,10 @@ async def create_user(
     if not request.user_id.startswith("0x") or len(request.user_id) != 42:
         raise HTTPException(status_code=400, detail="Invalid wallet address format")
     
-    # TODO: Verify signature to prove wallet ownership (optional but recommended)
-    # if request.signature:
-    #     verify_wallet_signature(request.user_id, request.signature)
+    # Verify signature to prove wallet ownership
+    sign_message = signature_service.create_sign_message("Register account", request.user_id)
+    if not signature_service.verify_signature(sign_message, request.signature, request.user_id):
+        raise HTTPException(status_code=401, detail="Invalid signature - wallet ownership verification failed")
     
     user_service = UserService(db)
     
@@ -330,6 +332,14 @@ async def withdraw(
         request: Withdrawal request with amount and options
     """
     try:
+        # Verify signature to prove wallet ownership
+        withdrawal_data = f"{request.amount_usdc} USDC"
+        if request.withdraw_all:
+            withdrawal_data = "all USDC"
+        sign_message = signature_service.create_sign_message("Withdraw", user_id, withdrawal_data)
+        if not signature_service.verify_signature(sign_message, request.signature, user_id):
+            raise HTTPException(status_code=401, detail="Invalid signature - withdrawal authorization failed")
+        
         service = UserService(db)
         transaction = await service.withdraw_usdc(
             user_id=user_id,
