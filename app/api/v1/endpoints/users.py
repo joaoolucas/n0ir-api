@@ -482,12 +482,16 @@ async def get_transactions(
         if tx.tx_type == 'POSITION_CLOSED' and tx.event_data:
             token_id = tx.event_data.get('tokenId')
             if token_id:
-                # Look for AERO_SWAP with matching tokenId
+                # Look for AERO_SWAP with matching tokenId or position_token_id
+                from sqlalchemy import or_
                 stmt = select(Transaction).where(
                     and_(
                         Transaction.user_id == user_id,
                         Transaction.tx_type == 'AERO_SWAP',
-                        Transaction.event_data['tokenId'].astext == token_id
+                        or_(
+                            Transaction.event_data['tokenId'].astext == token_id,
+                            Transaction.event_data['position_token_id'].astext == token_id
+                        )
                     )
                 ).limit(1)
                 result = await db.execute(stmt)
