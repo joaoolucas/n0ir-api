@@ -1089,7 +1089,8 @@ class UserService:
                     position.current_value_usdc = position_current_value
                     
                     # Get net entry amount from POSITION_CREATED transaction
-                    net_entry_amount = position.entry_amount_usdc or Decimal(0)
+                    # ALWAYS fetch from transactions since position.entry_amount_usdc might be 0 or wrong
+                    net_entry_amount = Decimal(0)
                     stmt_tx = select(Transaction).where(
                         Transaction.user_id == user_id,
                         Transaction.tx_type == 'POSITION_CREATED',
@@ -1102,6 +1103,11 @@ class UserService:
                         amount = Decimal(str(position_created_tx.event_data.get('amount_usdc', 0)))
                         usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
                         net_entry_amount = amount - usdc_returned
+                        logger.debug(f"Position {position.nft_token_id}: amount={amount}, returned={usdc_returned}, net={net_entry_amount}")
+                    else:
+                        # Fallback: if no transaction found, use position entry or assume current value
+                        net_entry_amount = position.entry_amount_usdc or position_current_value
+                        logger.warning(f"No POSITION_CREATED tx found for position {position.nft_token_id}, using fallback: {net_entry_amount}")
                     
                     # Calculate unrealized PNL for this position
                     position_unrealized_pnl = position_current_value - net_entry_amount
@@ -1111,7 +1117,8 @@ class UserService:
                     cached_value = position.current_value_usdc or position.entry_amount_usdc or Decimal(0)
                     
                     # Get net entry amount from POSITION_CREATED transaction
-                    net_entry_amount = position.entry_amount_usdc or Decimal(0)
+                    # ALWAYS fetch from transactions since position.entry_amount_usdc might be 0 or wrong
+                    net_entry_amount = Decimal(0)
                     stmt_tx = select(Transaction).where(
                         Transaction.user_id == user_id,
                         Transaction.tx_type == 'POSITION_CREATED',
@@ -1124,6 +1131,11 @@ class UserService:
                         amount = Decimal(str(position_created_tx.event_data.get('amount_usdc', 0)))
                         usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
                         net_entry_amount = amount - usdc_returned
+                        logger.debug(f"Position {position.nft_token_id}: amount={amount}, returned={usdc_returned}, net={net_entry_amount}")
+                    else:
+                        # Fallback: if no transaction found, use position entry or assume current value
+                        net_entry_amount = position.entry_amount_usdc or position_current_value
+                        logger.warning(f"No POSITION_CREATED tx found for position {position.nft_token_id}, using fallback: {net_entry_amount}")
                     
                     position_unrealized_pnl = cached_value - net_entry_amount
                     unrealized_pnl += position_unrealized_pnl
@@ -1185,11 +1197,33 @@ class UserService:
         # Commit any position value updates
         await self.db.commit()
         
-        # Calculate percentages based on total deposits
-        # This shows the return on actual money invested
+        # Calculate percentages based on actual invested amounts
+        # For unrealized PnL, calculate percentage based on total net invested in active positions
+        total_net_invested_active = Decimal(0)
+        for position in active_positions:
+            # Get net amount invested in each active position
+            stmt_tx = select(Transaction).where(
+                Transaction.user_id == user_id,
+                Transaction.tx_type == 'POSITION_CREATED',
+                Transaction.event_data['tokenId'].astext == str(position.nft_token_id)
+            ).limit(1)
+            result_tx = await self.db.execute(stmt_tx)
+            position_created_tx = result_tx.scalar_one_or_none()
+            
+            if position_created_tx and position_created_tx.event_data:
+                amount = Decimal(str(position_created_tx.event_data.get('amount_usdc', 0)))
+                usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
+                net_invested = amount - usdc_returned
+                total_net_invested_active += net_invested
+        
+        # Calculate percentages
         if total_deposits > 0:
             realized_pnl_percentage = (realized_pnl / total_deposits) * Decimal(100)
-            unrealized_pnl_percentage = (unrealized_pnl / total_deposits) * Decimal(100)
+        else:
+            realized_pnl_percentage = Decimal(0)
+            
+        if total_net_invested_active > 0:
+            unrealized_pnl_percentage = (unrealized_pnl / total_net_invested_active) * Decimal(100)
         else:
             realized_pnl_percentage = Decimal(0)
             unrealized_pnl_percentage = Decimal(0)
