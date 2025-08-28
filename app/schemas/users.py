@@ -143,7 +143,7 @@ class TransactionResponse(BaseModel):
     created_at: datetime
     confirmed_at: Optional[datetime]
     aero_swap_usdc: Optional[Decimal] = Field(None, description="AERO rewards swapped to USDC (for POSITION_CLOSED only)")
-    total_amount_usdc: Optional[Decimal] = Field(None, description="Total amount including AERO swaps (for POSITION_CLOSED only)")
+    total_amount_usdc: Optional[Decimal] = Field(None, description="Net amount: adds AERO for closes, subtracts returns for creates")
     
     @model_validator(mode='before')
     @classmethod
@@ -178,14 +178,26 @@ class TransactionResponse(BaseModel):
     
     @model_validator(mode='after')
     def calculate_total_amount(self):
-        """Calculate total_amount_usdc for POSITION_CLOSED transactions."""
-        # Only calculate for POSITION_CLOSED transactions
+        """Calculate total_amount_usdc for different transaction types."""
+        # For POSITION_CLOSED transactions, add AERO swap amount
         if self.transaction_type == TransactionType.POSITION_CLOSED or self.transaction_type == 'POSITION_CLOSED':
             # Use aero_swap_usdc if available
             aero_amount = Decimal(str(self.aero_swap_usdc or 0))
             
             # Calculate total
             self.total_amount_usdc = self.amount_usdc + aero_amount
+        # For POSITION_CREATED transactions, subtract USDC returned (net amount spent)
+        elif self.transaction_type == TransactionType.POSITION_CREATED or self.transaction_type == 'POSITION_CREATED':
+            # Extract usdc_returned from event_data if available
+            usdc_returned = Decimal(0)
+            if self.event_data and 'usdc_returned' in self.event_data:
+                try:
+                    usdc_returned = Decimal(str(self.event_data['usdc_returned']))
+                except:
+                    usdc_returned = Decimal(0)
+            
+            # Calculate net amount (what was actually spent)
+            self.total_amount_usdc = self.amount_usdc - usdc_returned
         else:
             # For other transaction types, total is same as amount
             self.total_amount_usdc = self.amount_usdc
