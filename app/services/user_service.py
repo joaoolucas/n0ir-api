@@ -1060,11 +1060,96 @@ class UserService:
         total_deposits = Decimal(str(user.total_deposits_usdc or 0))
         total_withdrawals = Decimal(str(user.total_withdrawals_usdc or 0))
         
-        # Realized PNL should only be calculated when withdrawals are made
-        # It represents actual profit/loss that has been "realized" by withdrawing
-        # For now, use the existing realized_pnl_usd from the user record
-        # This should be updated only when processing WITHDRAWAL transactions
-        realized_pnl = Decimal(str(user.realized_pnl_usd or 0))
+        # Calculate realized PNL as net cash flow from all transactions
+        # This represents the actual profit/loss from completed trading activities
+        # Realized PNL = Net cash flow + Trading PnL from closed positions
+        
+        # Get net cash flow from transactions
+        stmt_tx = select(Transaction).where(
+            Transaction.user_id == user_id,
+            Transaction.status == 'CONFIRMED'
+        )
+        result_tx = await self.db.execute(stmt_tx)
+        transactions = result_tx.scalars().all()
+        
+        net_cash_flow = Decimal(0)
+        for tx in transactions:
+            amount = Decimal(0)
+            if tx.event_data and 'amount_usdc' in tx.event_data:
+                try:
+                    amount = Decimal(str(tx.event_data['amount_usdc']))
+                except:
+                    amount = Decimal(0)
+            
+            if tx.tx_type == 'DEPOSIT':
+                net_cash_flow += amount
+            elif tx.tx_type in ['WITHDRAWAL', 'WITHDRAW']:
+                net_cash_flow -= amount
+            elif tx.tx_type == 'POSITION_CREATED':
+                # Subtract net amount spent (amount - usdc_returned)
+                usdc_returned = Decimal(0)
+                if tx.event_data and 'usdc_returned' in tx.event_data:
+                    try:
+                        usdc_returned = Decimal(str(tx.event_data['usdc_returned']))
+                    except:
+                        usdc_returned = Decimal(0)
+                net_cash_flow -= (amount - usdc_returned)
+            elif tx.tx_type == 'POSITION_CLOSED':
+                net_cash_flow += amount
+            elif tx.tx_type == 'AERO_SWAP':
+                net_cash_flow += amount
+        
+        # Calculate realized PnL as actual trading performance from closed positions
+        # For each closed position: (amount_received - amount_invested)
+        
+        # Get all closed positions and calculate their individual PnL
+        stmt_closed = select(Transaction).where(
+            Transaction.user_id == user_id,
+            Transaction.tx_type == 'POSITION_CLOSED',
+            Transaction.status == 'CONFIRMED'
+        )
+        result_closed = await self.db.execute(stmt_closed)
+        closed_transactions = result_closed.scalars().all()
+        
+        realized_pnl = Decimal(0)
+        
+        for close_tx in closed_transactions:
+            if not close_tx.event_data:
+                continue
+                
+            # Get token ID to find corresponding POSITION_CREATED transaction
+            token_id = close_tx.event_data.get('tokenId') or close_tx.event_data.get('token_id')
+            if not token_id:
+                continue
+            
+            # Get amount received from closing position (including AERO swaps)
+            amount_received = Decimal(str(close_tx.event_data.get('amount_usdc', 0)))
+            aero_swap_amount = Decimal(str(close_tx.event_data.get('aero_swap_usdc', 0)))
+            total_received = amount_received + aero_swap_amount
+            
+            # Find the corresponding POSITION_CREATED transaction
+            stmt_created = select(Transaction).where(
+                Transaction.user_id == user_id,
+                Transaction.tx_type == 'POSITION_CREATED',
+                Transaction.event_data['tokenId'].astext == str(token_id),
+                Transaction.status == 'CONFIRMED'
+            ).limit(1)
+            result_created = await self.db.execute(stmt_created)
+            created_tx = result_created.scalar_one_or_none()
+            
+            if created_tx and created_tx.event_data:
+                # Calculate net amount invested (after USDC returns)
+                amount_invested = Decimal(str(created_tx.event_data.get('amount_usdc', 0)))
+                usdc_returned = Decimal(str(created_tx.event_data.get('usdc_returned', 0)))
+                net_invested = amount_invested - usdc_returned
+                
+                # Calculate PnL for this position
+                position_pnl = total_received - net_invested
+                realized_pnl += position_pnl
+                
+                logger.debug(f"Position {token_id}: invested={net_invested:.6f}, received={total_received:.6f}, PnL={position_pnl:.6f}")
+        
+        logger.info(f"Calculated realized PnL from {len(closed_transactions)} closed positions: {realized_pnl:.6f} USDC")
         
         # Get all active positions for unrealized PNL
         all_positions = await self.get_user_positions(user_id)
