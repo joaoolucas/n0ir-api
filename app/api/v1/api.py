@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import pools, tokens, health, positions, wallets, strategy, users, transactions, admin
+from app.api.v1.endpoints import pools, tokens, health, positions, wallets, strategy, users, transactions
 
 api_router = APIRouter()
 
@@ -43,10 +43,4 @@ api_router.include_router(
     transactions.router,
     prefix="/transactions",
     tags=["Transactions"]
-)
-
-api_router.include_router(
-    admin.router,
-    prefix="/admin",
-    tags=["Admin"]
 )
