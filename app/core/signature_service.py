@@ -169,9 +169,11 @@ class SignatureService:
             ).call()
             
             # Check if the result matches the magic value
-            is_valid = result.hex() == self.EIP_1271_MAGIC_VALUE
+            # The contract returns bytes4 without 0x prefix, so we need to compare correctly
+            result_hex = result.hex()
+            is_valid = result_hex == self.EIP_1271_MAGIC_VALUE[2:] or f"0x{result_hex}" == self.EIP_1271_MAGIC_VALUE
             
-            logger.info(f"EIP-1271 verification result for {wallet_address}: {result.hex()} (valid: {is_valid})")
+            logger.info(f"EIP-1271 verification result for {wallet_address}: 0x{result_hex} (valid: {is_valid})")
             return is_valid
             
         except Exception as e:
