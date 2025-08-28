@@ -477,13 +477,14 @@ async def get_transactions(
     # Also add pool_name for POSITION_CREATED and POSITION_CLOSED transactions
     from sqlalchemy import select, and_
     from app.database.models import Transaction, Position
+    from app.core.pools_service import pools_service
     
     for tx in transactions:
         # Add pool_name for POSITION_CREATED or POSITION_CLOSED
         if tx.tx_type in ['POSITION_CREATED', 'POSITION_CLOSED'] and tx.event_data:
             token_id = tx.event_data.get('tokenId')
             if token_id:
-                # Look up the position to get pool_name
+                # Look up the position to get pool_name and pool_address
                 stmt = select(Position).where(Position.token_id == int(token_id))
                 result = await db.execute(stmt)
                 position = result.scalar_one_or_none()
@@ -495,6 +496,16 @@ async def get_transactions(
                         pool_name = position.position_data['pool_name']
                     elif position.pool_name:  # If it's stored as a column
                         pool_name = position.pool_name
+                    
+                    # If no pool_name found but we have pool_address, fetch from pools service
+                    if not pool_name and position.pool_address:
+                        try:
+                            pool_data = await pools_service.get_pool(position.pool_address)
+                            if pool_data and hasattr(pool_data, 'symbol'):
+                                # Remove percentage if present (e.g., "WETH-USDC 0.3%" -> "WETH-USDC")
+                                pool_name = pool_data.symbol.split(' ')[0] if ' ' in pool_data.symbol else pool_data.symbol
+                        except Exception as e:
+                            logger.debug(f"Could not fetch pool data for {position.pool_address}: {e}")
                     
                     if pool_name:
                         tx.event_data['pool_name'] = pool_name
