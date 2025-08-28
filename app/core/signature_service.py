@@ -140,7 +140,11 @@ class SignatureService:
             True if signature is valid according to the contract, False otherwise
         """
         try:
-            # Hash the message according to EIP-191
+            # For EIP-1271, we need to provide the hash that matches what the wallet expects
+            # Base smart wallets and most modern wallets expect the personal_sign hash
+            # which includes the EIP-191 prefix: "\x19Ethereum Signed Message:\n<length>"
+            
+            # Method 1: Try with personal_sign hash (most common)
             encoded_message = encode_defunct(text=message)
             message_hash = self.w3.keccak(encoded_message.body)
             
@@ -150,6 +154,9 @@ class SignatureService:
                 abi=self.IS_VALID_SIGNATURE_ABI
             )
             
+            # Log the hash we're verifying
+            logger.info(f"Verifying with personal_sign hash: {message_hash.hex()}")
+            
             # Call isValidSignature function
             result = contract.functions.isValidSignature(
                 message_hash,
@@ -158,6 +165,31 @@ class SignatureService:
             
             # Check if the result matches the magic value
             is_valid = result.hex() == self.EIP_1271_MAGIC_VALUE
+            
+            if not is_valid:
+                # Method 2: Try with direct message hash (some wallets use this)
+                direct_hash = self.w3.keccak(text=message)
+                logger.info(f"First attempt failed, trying direct hash: {direct_hash.hex()}")
+                
+                result = contract.functions.isValidSignature(
+                    direct_hash,
+                    bytes.fromhex(signature[2:])
+                ).call()
+                
+                is_valid = result.hex() == self.EIP_1271_MAGIC_VALUE
+                
+                if not is_valid:
+                    # Method 3: Try with just the message bytes (for typed data signatures)
+                    message_bytes = message.encode('utf-8')
+                    message_bytes_hash = self.w3.keccak(message_bytes)
+                    logger.info(f"Second attempt failed, trying bytes hash: {message_bytes_hash.hex()}")
+                    
+                    result = contract.functions.isValidSignature(
+                        message_bytes_hash,
+                        bytes.fromhex(signature[2:])
+                    ).call()
+                    
+                    is_valid = result.hex() == self.EIP_1271_MAGIC_VALUE
             
             logger.info(f"EIP-1271 verification result for {wallet_address}: {result.hex()} (valid: {is_valid})")
             return is_valid
