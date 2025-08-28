@@ -462,7 +462,7 @@ async def get_transactions(
     sort_order: str = "desc",  # "asc" for oldest first, "desc" for newest first
     db: AsyncSession = Depends(get_db)
 ):
-    """Get user transactions."""
+    """Get user transactions with AERO swaps linked to position closures."""
     service = UserService(db)
     transactions = await service.get_user_transactions(
         user_id=user_id,
@@ -471,6 +471,30 @@ async def get_transactions(
         transaction_type=transaction_type,
         sort_order=sort_order
     )
+    
+    # For POSITION_CLOSED transactions, look up matching AERO_SWAP
+    # to populate the aero_swap_usdc field
+    from sqlalchemy import select, and_
+    from app.database.models import Transaction
+    
+    for tx in transactions:
+        if tx.tx_type == 'POSITION_CLOSED' and tx.event_data:
+            token_id = tx.event_data.get('tokenId')
+            if token_id:
+                # Look for AERO_SWAP with matching tokenId
+                stmt = select(Transaction).where(
+                    and_(
+                        Transaction.user_id == user_id,
+                        Transaction.tx_type == 'AERO_SWAP',
+                        Transaction.event_data['tokenId'].astext == token_id
+                    )
+                ).limit(1)
+                result = await db.execute(stmt)
+                aero_swap = result.scalar_one_or_none()
+                
+                if aero_swap and aero_swap.event_data:
+                    # Add AERO swap amount to event_data
+                    tx.event_data['aero_swap_usdc'] = aero_swap.event_data.get('amount_usdc', 0)
     
     return TransactionListResponse(
         transactions=[TransactionResponse.model_validate(t) for t in transactions],
