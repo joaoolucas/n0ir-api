@@ -148,12 +148,33 @@ class TransactionResponse(BaseModel):
     @model_validator(mode='before')
     @classmethod
     def extract_aero_swap(cls, values):
-        """Extract aero_swap_usdc from event_data if present."""
+        """Extract aero_swap_usdc from event_data if present and normalize transaction type."""
         if isinstance(values, dict):
             # Extract aero_swap_usdc from event_data if not already set
             event_data = values.get('event_data', {})
             if event_data and not values.get('aero_swap_usdc'):
                 values['aero_swap_usdc'] = event_data.get('aero_swap_usdc', 0)
+            
+            # Normalize transaction type from database to match enum
+            tx_type = values.get('tx_type') or values.get('transaction_type')
+            if tx_type:
+                type_mapping = {
+                    'withdraw': 'WITHDRAWAL',
+                    'WITHDRAW': 'WITHDRAWAL',
+                    'WITHDRAWAL': 'WITHDRAWAL',
+                    'deposit': 'DEPOSIT',
+                    'DEPOSIT': 'DEPOSIT',
+                    'position_created': 'POSITION_CREATED',
+                    'POSITION_CREATED': 'POSITION_CREATED',
+                    'position_closed': 'POSITION_CLOSED',
+                    'POSITION_CLOSED': 'POSITION_CLOSED',
+                    'aero_swap': 'AERO_SWAP',
+                    'AERO_SWAP': 'AERO_SWAP'
+                }
+                normalized = type_mapping.get(tx_type, tx_type)
+                values['transaction_type'] = normalized
+                if 'tx_type' in values:
+                    values['tx_type'] = normalized
         return values
     
     @model_validator(mode='after')
