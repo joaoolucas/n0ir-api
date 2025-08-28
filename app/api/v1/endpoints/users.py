@@ -474,11 +474,32 @@ async def get_transactions(
     
     # For POSITION_CLOSED or position_exit transactions, look up matching AERO_SWAP
     # to populate the aero_swap_usdc field
+    # Also add pool_name for POSITION_CREATED and POSITION_CLOSED transactions
     from sqlalchemy import select, and_
-    from app.database.models import Transaction
+    from app.database.models import Transaction, Position
     
     for tx in transactions:
-        # Handle POSITION_CLOSED transactions
+        # Add pool_name for POSITION_CREATED or POSITION_CLOSED
+        if tx.tx_type in ['POSITION_CREATED', 'POSITION_CLOSED'] and tx.event_data:
+            token_id = tx.event_data.get('tokenId')
+            if token_id:
+                # Look up the position to get pool_name
+                stmt = select(Position).where(Position.token_id == int(token_id))
+                result = await db.execute(stmt)
+                position = result.scalar_one_or_none()
+                
+                if position:
+                    # Extract pool_name from position_data if available
+                    pool_name = None
+                    if position.position_data and 'pool_name' in position.position_data:
+                        pool_name = position.position_data['pool_name']
+                    elif position.pool_name:  # If it's stored as a column
+                        pool_name = position.pool_name
+                    
+                    if pool_name:
+                        tx.event_data['pool_name'] = pool_name
+        
+        # Handle POSITION_CLOSED transactions for AERO_SWAP lookup
         if tx.tx_type == 'POSITION_CLOSED' and tx.event_data:
             token_id = tx.event_data.get('tokenId')
             if token_id:
