@@ -641,7 +641,9 @@ async def get_performance(
                     if hasattr(monitor_response, 'average_apr') and monitor_response.average_apr:
                         apr = float(monitor_response.average_apr)
                     elif hasattr(monitor_response, 'portfolio_metrics') and monitor_response.portfolio_metrics:
-                        apr = float(monitor_response.portfolio_metrics.get('current_apr', 0))
+                        # portfolio_metrics is an object, not a dict
+                        if hasattr(monitor_response.portfolio_metrics, 'current_apr'):
+                            apr = float(monitor_response.portfolio_metrics.current_apr or 0)
                     elif monitor_response.portfolio_summary:
                         apr = float(monitor_response.portfolio_summary.weighted_apr or 0)
         except Exception as e:
