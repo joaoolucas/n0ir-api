@@ -23,7 +23,7 @@ class User(Base):
     cdp_wallet_address = Column(String(42), unique=True, nullable=True, index=True)
     cdp_wallet_name = Column(String(100), nullable=True)
     
-    # Wallet balance tracking fields (watcher-owned)
+    # Wallet balance tracking fields (watcher-owned) - these DO exist
     usdc_balance = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
     last_deposit_block = Column(Integer, nullable=True)
     last_withdrawal_block = Column(Integer, nullable=True)
@@ -36,6 +36,12 @@ class User(Base):
     unrealized_pnl_pct = Column(Numeric(precision=10, scale=4), default=0, nullable=False)
     realized_pnl_usd = Column(Numeric(precision=20, scale=2), default=0, nullable=False)
     realized_pnl_pct = Column(Numeric(precision=10, scale=4), default=0, nullable=False)
+    
+    # Agent tracking fields (optional)
+    agent_started_at = Column(DateTime(timezone=True), nullable=True)
+    agent_stopped_at = Column(DateTime(timezone=True), nullable=True)
+    last_balance_check = Column(DateTime(timezone=True), nullable=True)
+    agent_metadata = Column(JSONB, nullable=True)
     
     # Flexible metadata storage
     user_metadata = Column(JSONB, default={}, nullable=False)

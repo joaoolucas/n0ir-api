@@ -1197,33 +1197,16 @@ class UserService:
         # Commit any position value updates
         await self.db.commit()
         
-        # Calculate percentages based on actual invested amounts
-        # For unrealized PnL, calculate percentage based on total net invested in active positions
-        total_net_invested_active = Decimal(0)
-        for position in active_positions:
-            # Get net amount invested in each active position
-            stmt_tx = select(Transaction).where(
-                Transaction.user_id == user_id,
-                Transaction.tx_type == 'POSITION_CREATED',
-                Transaction.event_data['tokenId'].astext == str(position.nft_token_id)
-            ).limit(1)
-            result_tx = await self.db.execute(stmt_tx)
-            position_created_tx = result_tx.scalar_one_or_none()
-            
-            if position_created_tx and position_created_tx.event_data:
-                amount = Decimal(str(position_created_tx.event_data.get('amount_usdc', 0)))
-                usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
-                net_invested = amount - usdc_returned
-                total_net_invested_active += net_invested
+        # Calculate percentages based on total deposits (not net)
+        # This represents the total capital the user has deposited
+        # Using total deposits (not net) for PnL calculation as per user feedback
+        base_for_pnl = total_deposits
         
         # Calculate percentages
-        if total_deposits > 0:
-            realized_pnl_percentage = (realized_pnl / total_deposits) * Decimal(100)
-        else:
-            realized_pnl_percentage = Decimal(0)
-            
-        if total_net_invested_active > 0:
-            unrealized_pnl_percentage = (unrealized_pnl / total_net_invested_active) * Decimal(100)
+        if base_for_pnl > 0:
+            # Both realized and unrealized PnL percentages should be based on total deposits
+            realized_pnl_percentage = (realized_pnl / base_for_pnl) * Decimal(100)
+            unrealized_pnl_percentage = (unrealized_pnl / base_for_pnl) * Decimal(100)
         else:
             realized_pnl_percentage = Decimal(0)
             unrealized_pnl_percentage = Decimal(0)
