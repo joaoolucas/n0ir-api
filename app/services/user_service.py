@@ -199,14 +199,51 @@ class UserService:
         return transaction
     
     async def get_user_balance(self, user_id: str) -> Decimal:
-        """Get user's current USDC balance from watcher-maintained field."""
-        # Read directly from the users table - watcher owns this data
-        user = await self.get_user(user_id)
-        if not user:
-            return Decimal(0)
+        """Calculate user's current USDC balance from transactions."""
+        # Calculate balance from all transactions to ensure accuracy
+        # Balance = Deposits + Position_Closed + AERO_Swaps - Withdrawals - Position_Created
         
-        # Return the watcher-maintained balance
-        return user.usdc_balance or Decimal(0)
+        from sqlalchemy import func
+        
+        # Get sum by transaction type
+        stmt = select(
+            Transaction.tx_type,
+            func.sum(func.cast(Transaction.event_data['amount_usdc'].astext, Decimal))
+        ).where(
+            Transaction.user_id == user_id,
+            Transaction.status == 'CONFIRMED'
+        ).group_by(Transaction.tx_type)
+        
+        result = await self.db.execute(stmt)
+        
+        deposits = Decimal(0)
+        withdrawals = Decimal(0)
+        position_created = Decimal(0)
+        position_closed = Decimal(0)
+        aero_swaps = Decimal(0)
+        
+        for tx_type, amount in result:
+            if amount is None:
+                continue
+            if tx_type == 'DEPOSIT':
+                deposits = amount
+            elif tx_type in ['WITHDRAWAL', 'WITHDRAW']:
+                withdrawals = amount
+            elif tx_type == 'POSITION_CREATED':
+                position_created = amount
+            elif tx_type == 'POSITION_CLOSED':
+                position_closed = amount
+            elif tx_type == 'AERO_SWAP':
+                aero_swaps = amount
+        
+        # Calculate final balance
+        balance = deposits + position_closed + aero_swaps - withdrawals - position_created
+        
+        # Ensure non-negative (rounding errors might cause tiny negatives)
+        if balance < Decimal('0.01') and balance > Decimal('-0.01'):
+            balance = Decimal(0)
+        
+        return balance
     
     async def get_user_transactions(
         self,
