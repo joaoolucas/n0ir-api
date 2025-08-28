@@ -126,6 +126,12 @@ class Settings(BaseSettings):
         env="REDIS_URL"
     )
     
+    # API Authentication
+    api_bearer_token: Optional[str] = Field(
+        default=None,
+        env="API_BEARER_TOKEN"
+    )
+    
     @property
     def get_database_url(self) -> Optional[str]:
         """Get the appropriate database URL for Railway."""
