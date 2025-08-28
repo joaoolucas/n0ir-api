@@ -327,7 +327,14 @@ async def withdraw(
             status=transaction.status,
             event_data=transaction.event_data,
             created_at=transaction.created_at,
-            tx_metadata=transaction.tx_metadata
+            tx_metadata=transaction.tx_metadata,
+            # Include optional fields with None defaults
+            block_number=getattr(transaction, 'block_number', None),
+            block_timestamp=getattr(transaction, 'block_timestamp', None),
+            gas_used=getattr(transaction, 'gas_used', None),
+            gas_price=getattr(transaction, 'gas_price', None),
+            confirmed_at=getattr(transaction, 'confirmed_at', None),
+            pool_name=None
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
