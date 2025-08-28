@@ -808,14 +808,14 @@ class UserService:
             and_(
                 Position.token_id == nft_token_id,  # Use actual column name
                 Position.user_id == user_id,
-                Position.status.in_(['active', 'closed'])
+                Position.status.in_(['ACTIVE', 'CLOSED'])  # Use uppercase status values
             )
         )
         result = await self.db.execute(stmt)
         position = result.scalar_one_or_none()
         
         if not position:
-            logger.error(f"Position {nft_token_id} not found for user {user_id} with status='active'")
+            logger.error(f"Position {nft_token_id} not found for user {user_id} with status='ACTIVE' or 'CLOSED'")
             # Try to find it without status filter to debug
             debug_stmt = select(Position).where(
                 and_(
@@ -826,7 +826,7 @@ class UserService:
             debug_result = await self.db.execute(debug_stmt)
             debug_position = debug_result.scalar_one_or_none()
             if debug_position:
-                logger.error(f"Found position but with status='{debug_position.status}' instead of 'active'")
+                logger.error(f"Found position but with status='{debug_position.status}' instead of 'ACTIVE' or 'CLOSED'")
             else:
                 logger.error(f"Position {nft_token_id} not found at all for user {user_id}")
             return None
@@ -998,7 +998,7 @@ class UserService:
         for position in active_positions:
             try:
                 # Try to get real-time value from blockchain
-                from app.services.positions_service import positions_service
+                from app.core.positions_service import positions_service
                 position_info = await positions_service.get_position_by_id(position.nft_token_id)
                 
                 if position_info:
