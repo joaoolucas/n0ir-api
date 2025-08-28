@@ -25,9 +25,33 @@ from app.core.logger import logger
 router = APIRouter(prefix="/users")
 
 
-async def enrich_position_with_pool_data(position) -> dict:
+async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = None) -> dict:
     """Enrich position with pool information, PNL, APR, and calculated values from blockchain."""
     position_dict = PositionResponse.model_validate(position).model_dump()
+    
+    # Get the net entry amount from the POSITION_CREATED transaction if db is provided
+    net_entry_amount = position.entry_amount_usdc or Decimal(0)
+    if db:
+        from sqlalchemy import select, and_
+        from app.database.models import Transaction
+        
+        stmt = select(Transaction).where(
+            and_(
+                Transaction.user_id == position.user_id,
+                Transaction.tx_type == 'POSITION_CREATED',
+                Transaction.event_data['tokenId'].astext == str(position.nft_token_id)
+            )
+        ).limit(1)
+        result = await db.execute(stmt)
+        position_created_tx = result.scalar_one_or_none()
+        
+        if position_created_tx and position_created_tx.event_data:
+            amount = Decimal(str(position_created_tx.event_data.get('amount_usdc', 0)))
+            usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
+            net_entry_amount = amount - usdc_returned
+    
+    # Override the entry_amount_usdc with the net amount
+    position_dict['entry_amount_usdc'] = net_entry_amount
     
     # Skip blockchain fetch for closed positions - they don't exist on-chain anymore
     if position.status == DBPositionStatus.CLOSED:
@@ -49,8 +73,8 @@ async def enrich_position_with_pool_data(position) -> dict:
         position_dict['current_total_value'] = position.current_value_usdc or Decimal(0)
         position_dict['total_pnl_usdc'] = position.realized_pnl_usdc + position.fees_earned_usdc + position.rewards_earned_usdc
         
-        if position.entry_amount_usdc and position.entry_amount_usdc > 0:
-            position_dict['pnl_percentage'] = (position_dict['total_pnl_usdc'] / position.entry_amount_usdc) * Decimal(100)
+        if net_entry_amount and net_entry_amount > 0:
+            position_dict['pnl_percentage'] = (position_dict['total_pnl_usdc'] / net_entry_amount) * Decimal(100)
         else:
             position_dict['pnl_percentage'] = Decimal(0)
         
@@ -73,7 +97,7 @@ async def enrich_position_with_pool_data(position) -> dict:
                 position_dict['current_value_usdc'] = Decimal(0)
                 position_dict['current_total_value'] = Decimal(0)
                 position_dict['pool_name'] = "CLOSED/ERROR"
-                position_dict['total_pnl_usdc'] = Decimal(0) - (position.entry_amount_usdc or Decimal(0))
+                position_dict['total_pnl_usdc'] = Decimal(0) - net_entry_amount
                 position_dict['pnl_percentage'] = Decimal(-100)
                 position_dict['pool_base_apr'] = Decimal(0)
                 position_dict['effective_apr'] = Decimal(0)
@@ -113,14 +137,13 @@ async def enrich_position_with_pool_data(position) -> dict:
         position_dict['current_value_usdc'] = current_value_usd
         
         # Calculate PNL
-        entry_amount = position.entry_amount_usdc or Decimal(0)
-        if entry_amount > 0:
-            # Total PNL = current_total_value - entry_amount
-            total_pnl = current_total_value - entry_amount
+        if net_entry_amount > 0:
+            # Total PNL = current_total_value - net_entry_amount
+            total_pnl = current_total_value - net_entry_amount
             position_dict['total_pnl_usdc'] = total_pnl
             
             # PNL percentage
-            pnl_percentage = (total_pnl / entry_amount) * Decimal(100)
+            pnl_percentage = (total_pnl / net_entry_amount) * Decimal(100)
             position_dict['pnl_percentage'] = pnl_percentage
         else:
             position_dict['total_pnl_usdc'] = Decimal(0)
@@ -601,7 +624,7 @@ async def get_positions(
     # Enrich positions with pool data
     enriched_positions = []
     for position in positions:
-        enriched_position = await enrich_position_with_pool_data(position)
+        enriched_position = await enrich_position_with_pool_data(position, db)
         enriched_positions.append(PositionResponse.model_validate(enriched_position))
     
     return PositionListResponse(
