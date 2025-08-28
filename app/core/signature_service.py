@@ -2,7 +2,8 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from eth_account import Account
-from eth_account.messages import encode_defunct
+from eth_account.messages import encode_defunct, defunct_hash_message
+from eth_utils import keccak
 from web3 import Web3
 from web3.providers import HTTPProvider
 from loguru import logger
@@ -131,6 +132,12 @@ class SignatureService:
     def _verify_eip1271_signature(self, message: str, signature: str, wallet_address: str) -> bool:
         """Verify signature using EIP-1271 standard for deployed smart contracts.
         
+        Base Account smart wallets expect:
+        1. Hash the message with keccak256
+        2. Apply EIP-191 prefix ("\x19Ethereum Signed Message:\n<length>")
+        3. Hash again with keccak256
+        4. Pass this final hash to isValidSignature
+        
         Args:
             message: The original message that was signed
             signature: The signature to verify
@@ -140,13 +147,11 @@ class SignatureService:
             True if signature is valid according to the contract, False otherwise
         """
         try:
-            # For EIP-1271, we need to provide the hash that matches what the wallet expects
-            # Base smart wallets and most modern wallets expect the personal_sign hash
-            # which includes the EIP-191 prefix: "\x19Ethereum Signed Message:\n<length>"
-            
-            # Method 1: Try with personal_sign hash (most common)
-            encoded_message = encode_defunct(text=message)
-            message_hash = self.w3.keccak(encoded_message.body)
+            # Base Account expects the Ethereum signed message hash
+            # This is exactly what eth_account's defunct_hash_message does:
+            # 1. Adds the EIP-191 prefix
+            # 2. Hashes the entire thing with keccak256
+            message_hash = defunct_hash_message(text=message)
             
             # Create contract instance
             contract = self.w3.eth.contract(
@@ -155,7 +160,7 @@ class SignatureService:
             )
             
             # Log the hash we're verifying
-            logger.info(f"Verifying with personal_sign hash: {message_hash.hex()}")
+            logger.info(f"Verifying Base Account with EIP-191 prefixed hash: {message_hash.hex()}")
             
             # Call isValidSignature function
             result = contract.functions.isValidSignature(
@@ -165,31 +170,6 @@ class SignatureService:
             
             # Check if the result matches the magic value
             is_valid = result.hex() == self.EIP_1271_MAGIC_VALUE
-            
-            if not is_valid:
-                # Method 2: Try with direct message hash (some wallets use this)
-                direct_hash = self.w3.keccak(text=message)
-                logger.info(f"First attempt failed, trying direct hash: {direct_hash.hex()}")
-                
-                result = contract.functions.isValidSignature(
-                    direct_hash,
-                    bytes.fromhex(signature[2:])
-                ).call()
-                
-                is_valid = result.hex() == self.EIP_1271_MAGIC_VALUE
-                
-                if not is_valid:
-                    # Method 3: Try with just the message bytes (for typed data signatures)
-                    message_bytes = message.encode('utf-8')
-                    message_bytes_hash = self.w3.keccak(message_bytes)
-                    logger.info(f"Second attempt failed, trying bytes hash: {message_bytes_hash.hex()}")
-                    
-                    result = contract.functions.isValidSignature(
-                        message_bytes_hash,
-                        bytes.fromhex(signature[2:])
-                    ).call()
-                    
-                    is_valid = result.hex() == self.EIP_1271_MAGIC_VALUE
             
             logger.info(f"EIP-1271 verification result for {wallet_address}: {result.hex()} (valid: {is_valid})")
             return is_valid
