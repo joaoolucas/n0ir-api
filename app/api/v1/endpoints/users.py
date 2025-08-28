@@ -373,7 +373,7 @@ async def get_balance(
     # Get all confirmed withdrawals to calculate net deposits
     all_withdrawals = await service.get_user_transactions(
         user_id=user_id,
-        transaction_type=DBTransactionType.WITHDRAW,
+        transaction_type=DBTransactionType.WITHDRAWAL,
         status=DBTransactionStatus.CONFIRMED
     )
     total_withdrawn = sum(t.amount_usdc for t in all_withdrawals)
@@ -427,7 +427,7 @@ async def get_balance(
     
     pending_withdrawals = await service.get_user_transactions(
         user_id=user_id,
-        transaction_type=DBTransactionType.WITHDRAW,
+        transaction_type=DBTransactionType.WITHDRAWAL,
         status=DBTransactionStatus.PENDING
     )
     pending_withdrawals_amount = sum(t.amount_usdc for t in pending_withdrawals)
@@ -472,12 +472,13 @@ async def get_transactions(
         sort_order=sort_order
     )
     
-    # For POSITION_CLOSED transactions, look up matching AERO_SWAP
+    # For POSITION_CLOSED or position_exit transactions, look up matching AERO_SWAP
     # to populate the aero_swap_usdc field
     from sqlalchemy import select, and_
     from app.database.models import Transaction
     
     for tx in transactions:
+        # Handle POSITION_CLOSED transactions
         if tx.tx_type == 'POSITION_CLOSED' and tx.event_data:
             token_id = tx.event_data.get('tokenId')
             if token_id:

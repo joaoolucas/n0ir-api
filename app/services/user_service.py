@@ -135,16 +135,8 @@ class UserService:
         cost_basis_withdrawn: Optional[Decimal] = None
     ) -> Transaction:
         """Create a new transaction record."""
-        # Map old transaction_type enum to new tx_type string
-        tx_type_mapping = {
-            TransactionType.DEPOSIT: 'DEPOSIT',
-            TransactionType.WITHDRAW: 'WITHDRAWAL',
-            TransactionType.POSITION_ENTRY: 'POSITION_CREATED',
-            TransactionType.POSITION_EXIT: 'POSITION_CLOSED',
-            TransactionType.FEE_COLLECTION: 'FEES_COLLECTED'
-        }
-        
-        tx_type_value = tx_type_mapping.get(transaction_type, str(transaction_type).upper())
+        # Use the transaction type value directly (already uppercase in enum)
+        tx_type_value = transaction_type.value if hasattr(transaction_type, 'value') else str(transaction_type)
         
         # Prepare metadata with PnL values
         tx_metadata = metadata or {}
@@ -229,16 +221,8 @@ class UserService:
         stmt = select(Transaction).where(Transaction.user_id == user_id)
         
         if transaction_type:
-            # Map old enum value to new tx_type string
-            tx_type_map = {
-                'deposit': 'DEPOSIT',
-                'withdraw': 'WITHDRAWAL', 
-                'position_entry': 'POSITION_CREATED',
-                'position_exit': 'POSITION_CLOSED',
-                'fee_collection': 'FEES_COLLECTED',
-                'protocol_fee': 'PROTOCOL_FEE'
-            }
-            tx_type_value = tx_type_map.get(transaction_type.value if hasattr(transaction_type, 'value') else transaction_type, transaction_type)
+            # Use the enum value directly - it should match the database
+            tx_type_value = transaction_type.value if hasattr(transaction_type, 'value') else str(transaction_type)
             stmt = stmt.where(Transaction.tx_type == tx_type_value)
         if status:
             stmt = stmt.where(Transaction.status == status)
@@ -583,7 +567,7 @@ class UserService:
         # Create transaction record for position entry (debit)
         transaction = Transaction(
             user_id=user_id,
-            transaction_type=TransactionType.POSITION_ENTRY,
+            transaction_type=TransactionType.POSITION_CREATED,
             amount_usdc=entry_amount_usdc,  # Store as positive, type indicates debit
             pool_name=pool_name,  # Add pool name to transaction
             tx_hash=entry_tx_hash,
@@ -809,7 +793,7 @@ class UserService:
         transaction = Transaction(
             id=uuid.uuid4(),  # Ensure we have a primary key
             user_id=user_id,
-            tx_type='POSITION_CLOSED',  # Maps to TransactionType.POSITION_EXIT
+            tx_type='POSITION_CLOSED',  # Direct string since we're not using the enum here
             tx_hash=exit_tx_hash,
             status='CONFIRMED',  # Fixed to uppercase for consistency
             tx_metadata=tx_metadata,

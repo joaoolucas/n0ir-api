@@ -14,14 +14,11 @@ class UserStatus(str, enum.Enum):
 
 
 class TransactionType(str, enum.Enum):
-    DEPOSIT = "deposit"
-    WITHDRAW = "withdraw"
-    POSITION_ENTRY = "position_entry"
-    POSITION_EXIT = "position_exit"
-    FEE_COLLECTION = "fee_collection"
-    AERO_SWAP = "aero_swap"
-    POSITION_CREATED = "position_created"
-    POSITION_CLOSED = "position_closed"
+    DEPOSIT = "DEPOSIT"
+    WITHDRAWAL = "WITHDRAWAL"
+    POSITION_CREATED = "POSITION_CREATED"
+    POSITION_CLOSED = "POSITION_CLOSED"
+    AERO_SWAP = "AERO_SWAP"
 
 
 class TransactionStatus(str, enum.Enum):
@@ -162,8 +159,8 @@ class TransactionResponse(BaseModel):
     @model_validator(mode='after')
     def calculate_total_amount(self):
         """Calculate total_amount_usdc for POSITION_CLOSED transactions."""
-        # Only calculate for POSITION_CLOSED or position_exit transactions
-        if self.transaction_type in [TransactionType.POSITION_CLOSED, TransactionType.POSITION_EXIT, 'position_closed', 'position_exit']:
+        # Only calculate for POSITION_CLOSED transactions
+        if self.transaction_type == TransactionType.POSITION_CLOSED or self.transaction_type == 'POSITION_CLOSED':
             # Use aero_swap_usdc if available
             aero_amount = Decimal(str(self.aero_swap_usdc or 0))
             

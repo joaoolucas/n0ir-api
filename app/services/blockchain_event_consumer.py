@@ -260,7 +260,7 @@ class BlockchainEventConsumer:
                             
                             tx = Transaction(
                                 user_id=user_id,
-                                transaction_type=TransactionType.POSITION_EXIT,
+                                transaction_type=TransactionType.POSITION_CLOSED,
                                 amount_usdc=final_value,
                                 status=TransactionStatus.CONFIRMED,
                                 tx_hash=data.get('tx_hash', ''),
