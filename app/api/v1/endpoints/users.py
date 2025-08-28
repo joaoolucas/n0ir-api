@@ -251,7 +251,14 @@ async def create_user(
     logger.info(f"Verifying signature for user {request.user_id}")
     logger.info(f"Message: {request.message}")
     logger.info(f"Signature length: {len(request.signature)}")
-    logger.info(f"Signature preview: {request.signature[:20]}...")
+    logger.info(f"Signature preview: {request.signature[:50]}...")
+    logger.info(f"Signature type: {type(request.signature)}")
+    
+    # Check if signature looks correct (should be 0x followed by 130 hex chars)
+    if len(request.signature) != 132:
+        logger.error(f"Invalid signature length: expected 132, got {len(request.signature)}")
+        logger.error(f"Full signature for debugging: {request.signature}")
+        raise HTTPException(status_code=400, detail=f"Invalid signature format - expected 132 characters, got {len(request.signature)}")
     
     if not signature_service.verify_signature(request.message, request.signature, request.user_id):
         raise HTTPException(status_code=401, detail="Invalid signature - wallet ownership verification failed")
