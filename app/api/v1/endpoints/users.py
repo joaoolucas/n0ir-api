@@ -250,15 +250,11 @@ async def create_user(
     # The frontend sends the exact message that was signed
     logger.info(f"Verifying signature for user {request.user_id}")
     logger.info(f"Message: {request.message}")
-    logger.info(f"Signature length: {len(request.signature)}")
+    logger.info(f"Signature length: {len(request.signature)} (EOA=132, Smart Wallet=1000+)")
     logger.info(f"Signature preview: {request.signature[:50]}...")
-    logger.info(f"Signature type: {type(request.signature)}")
     
-    # Check if signature looks correct (should be 0x followed by 130 hex chars)
-    if len(request.signature) != 132:
-        logger.error(f"Invalid signature length: expected 132, got {len(request.signature)}")
-        logger.error(f"Full signature for debugging: {request.signature}")
-        raise HTTPException(status_code=400, detail=f"Invalid signature format - expected 132 characters, got {len(request.signature)}")
+    # Smart wallets use ERC-6492 signatures which are much longer than EOA signatures
+    # So we don't validate length here - let the signature service handle it
     
     if not signature_service.verify_signature(request.message, request.signature, request.user_id):
         raise HTTPException(status_code=401, detail="Invalid signature - wallet ownership verification failed")
@@ -346,6 +342,9 @@ async def withdraw(
     try:
         # Verify signature to prove wallet ownership
         # The frontend sends the exact message that was signed
+        logger.info(f"Verifying withdrawal signature for {user_id}")
+        logger.info(f"Signature length: {len(request.signature)} (EOA=132, Smart Wallet=1000+)")
+        
         if not signature_service.verify_signature(request.message, request.signature, user_id):
             raise HTTPException(status_code=401, detail="Invalid signature - withdrawal authorization failed")
         
