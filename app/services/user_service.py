@@ -338,7 +338,6 @@ class UserService:
         
         # Track positions that need to be closed
         positions_to_close = []
-        positions_closed = []
         
         # If withdraw_all is true and wallet has sufficient balance, use actual balance
         if withdraw_all and wallet_balance >= amount:
@@ -375,61 +374,39 @@ class UserService:
             agent_service = get_agent_service()
             
             try:
-                # If positions need to be closed, mark them as closed in DB first
-                # (will rollback if withdrawal fails)
-                if positions_to_close:
-                    for position in positions_to_close:
-                        closed_position = await self.close_position(
-                            user_id=user_id,
-                            nft_token_id=position.nft_token_id
-                        )
-                        if closed_position:
-                            positions_closed.append(closed_position)
-                            logger.info(f"Marked position {position.nft_token_id} as closed in DB")
-                    
-                    # Ensure all transactions are committed before checking balance
-                    await self.db.commit()
-                    
-                    # Re-check balance after marking positions closed
-                    wallet_balance = await self.get_user_balance(user_id)
-                    logger.info(f"Balance after closing {len(positions_closed)} positions: {wallet_balance} USDC")
-                    
-                    # If withdraw_all flag is set, use the actual balance
-                    if withdraw_all:
-                        logger.info(f"Withdraw all: using actual balance {wallet_balance} instead of requested {amount}")
-                        amount = wallet_balance
-                    elif wallet_balance < amount:
-                        # Rollback position closures
-                        await self._rollback_position_closures(positions_closed)
-                        raise ValueError(f"Still insufficient after closing positions. Available: {wallet_balance}, Requested: {amount}")
+                # DO NOT mark positions as closed in DB - let the agent handle it on-chain
+                # The watcher will detect POSITION_CLOSED events and update the DB
                 
-                # Request withdrawal through agent
+                # If withdraw_all and positions need to be closed, calculate expected total
+                if withdraw_all and positions_to_close:
+                    # Calculate expected balance after positions are closed (including AERO rewards)
+                    expected_total = wallet_balance
+                    for position in positions_to_close:
+                        expected_total += (position.current_value_usdc or position.entry_amount_usdc)
+                    
+                    # Note: AERO rewards will be handled by the agent when closing positions
+                    logger.info(f"Withdraw all: expecting ~{expected_total} USDC after closing {len(positions_to_close)} positions")
+                    # Use a high amount to ensure everything is withdrawn
+                    amount = expected_total * Decimal("1.1")  # Add 10% buffer to ensure all funds are withdrawn
+                
+                # Request withdrawal through agent (it will close positions on-chain if needed)
                 result = await agent_service.withdraw_usdc(
                     user_id=user_id,
                     amount=float(amount),
                     to_address=to_address,
-                    positions_to_close=[p.nft_token_id for p in positions_to_close],  # Tell agent which positions to close
+                    positions_to_close=[p.nft_token_id for p in positions_to_close],  # Tell agent which positions to close on-chain
                     withdraw_all=withdraw_all
                 )
                 
                 if not result.get('success'):
-                    # Rollback position closures if withdrawal failed
-                    if positions_closed:
-                        await self._rollback_position_closures(positions_closed)
                     error_msg = result.get('error', 'Unknown error')
                     raise ValueError(f"Withdrawal failed: {error_msg}")
                 
                 tx_hash = result.get('tx_hash')
                 if not tx_hash:
-                    # Rollback position closures if no tx_hash
-                    if positions_closed:
-                        await self._rollback_position_closures(positions_closed)
                     raise ValueError("Withdrawal executed but no transaction hash returned")
                     
             except Exception as e:
-                # Rollback any position closures on any error
-                if positions_closed:
-                    await self._rollback_position_closures(positions_closed)
                 raise
         
         # Calculate realized PnL for this withdrawal
