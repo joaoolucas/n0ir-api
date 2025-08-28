@@ -1,7 +1,7 @@
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from decimal import Decimal
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 from uuid import UUID
 import enum
 
@@ -142,9 +142,38 @@ class TransactionResponse(BaseModel):
     gas_price: Optional[Decimal]
     status: TransactionStatus
     tx_metadata: Optional[Dict[str, Any]] = Field(None, description="Additional transaction metadata as JSON")
+    event_data: Optional[Dict[str, Any]] = Field(None, description="Event data from blockchain")
     created_at: datetime
     confirmed_at: Optional[datetime]
     aero_swap_usdc: Optional[Decimal] = Field(None, description="AERO rewards swapped to USDC (for POSITION_CLOSED only)")
+    total_amount_usdc: Optional[Decimal] = Field(None, description="Total amount including AERO swaps (for POSITION_CLOSED only)")
+    
+    @model_validator(mode='before')
+    @classmethod
+    def extract_aero_swap(cls, values):
+        """Extract aero_swap_usdc from event_data if present."""
+        if isinstance(values, dict):
+            # Extract aero_swap_usdc from event_data if not already set
+            event_data = values.get('event_data', {})
+            if event_data and not values.get('aero_swap_usdc'):
+                values['aero_swap_usdc'] = event_data.get('aero_swap_usdc', 0)
+        return values
+    
+    @model_validator(mode='after')
+    def calculate_total_amount(self):
+        """Calculate total_amount_usdc for POSITION_CLOSED transactions."""
+        # Only calculate for POSITION_CLOSED or position_exit transactions
+        if self.transaction_type in [TransactionType.POSITION_CLOSED, TransactionType.POSITION_EXIT, 'position_closed', 'position_exit']:
+            # Use aero_swap_usdc if available
+            aero_amount = Decimal(str(self.aero_swap_usdc or 0))
+            
+            # Calculate total
+            self.total_amount_usdc = self.amount_usdc + aero_amount
+        else:
+            # For other transaction types, total is same as amount
+            self.total_amount_usdc = self.amount_usdc
+            
+        return self
 
 
 class PositionResponse(BaseModel):
