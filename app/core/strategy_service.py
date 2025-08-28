@@ -39,9 +39,6 @@ from app.schemas.strategy import (
 WHITELISTED_POOLS = {
     "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59",  # WETH/USDC
     "0x4e962bb3889bf030368f56810a9c96b83cb3e778",  # cbBTC/USDC
-    "0x95Ff4985af7ED78421215be100c18a2b987f7E90",  # cbXRP/cbBTC
-    "0x8782d97C8b25B4d17dBFbaa03f25dC18e51e909D",  # cbADA/cbBTC
-    "0x6044c817e55A03DAdc5F6b8B7045aF1985aE90fA",  # cbLTC/cbBTC
 }
 
 

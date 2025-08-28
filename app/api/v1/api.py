@@ -1,46 +1,55 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from app.api.v1.endpoints import pools, tokens, health, positions, wallets, strategy, users, transactions
+from app.core.auth import verify_bearer_token
 
 api_router = APIRouter()
 
-# Include all endpoint routers
+# Include health endpoint without auth (for monitoring)
 api_router.include_router(
     health.router,
     tags=["Health"]
 )
 
+# Include all other endpoints with Bearer token authentication
 api_router.include_router(
     pools.router,
-    tags=["Pools"]
+    tags=["Pools"],
+    dependencies=[Depends(verify_bearer_token)]
 )
 
 api_router.include_router(
     tokens.router,
-    tags=["Tokens"]
+    tags=["Tokens"],
+    dependencies=[Depends(verify_bearer_token)]
 )
 
 api_router.include_router(
     positions.router,
-    tags=["Positions"]
+    tags=["Positions"],
+    dependencies=[Depends(verify_bearer_token)]
 )
 
 api_router.include_router(
     wallets.router,
-    tags=["Wallet Registry"]
+    tags=["Wallet Registry"],
+    dependencies=[Depends(verify_bearer_token)]
 )
 
 api_router.include_router(
     strategy.router,
-    tags=["Strategy"]
+    tags=["Strategy"],
+    dependencies=[Depends(verify_bearer_token)]
 )
 
 api_router.include_router(
     users.router,
-    tags=["Users"]
+    tags=["Users"],
+    dependencies=[Depends(verify_bearer_token)]
 )
 
 api_router.include_router(
     transactions.router,
     prefix="/transactions",
-    tags=["Transactions"]
+    tags=["Transactions"],
+    dependencies=[Depends(verify_bearer_token)]
 )
