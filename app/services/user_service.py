@@ -409,75 +409,31 @@ class UserService:
             except Exception as e:
                 raise
         
-        # Calculate realized PnL for this withdrawal
-        # Get total deposits and current portfolio value
-        all_deposits = await self.get_user_transactions(
+        # Don't create transaction in database - let the watcher handle it
+        # The watcher will detect the WITHDRAWAL event on-chain and create the transaction
+        # This prevents duplicate transactions
+        
+        # Return a temporary transaction object for API response only (not saved to DB)
+        from app.database.models import Transaction
+        from datetime import datetime, timezone
+        import uuid
+        
+        # Create a mock transaction for the API response
+        transaction = Transaction(
+            id=uuid.uuid4(),
             user_id=user_id,
-            transaction_type=TransactionType.DEPOSIT,
-            status=TransactionStatus.CONFIRMED
-        )
-        total_deposited = sum(t.amount_usdc for t in all_deposits)
-        
-        # Get current portfolio value before withdrawal
-        wallet_balance_before = await self.get_user_balance(user_id)
-        active_positions = await self.get_user_positions(user_id, status='ACTIVE')
-        positions_value = sum(p.current_value_usdc or p.entry_amount_usdc for p in active_positions)
-        portfolio_value_before = wallet_balance_before + positions_value
-        
-        # Calculate realized PnL when withdrawal occurs
-        # Realized PnL = total_withdrawals - total_deposits (after this withdrawal)
-        from app.services.pnl_calculator import PnLCalculator
-        
-        # Update realized PnL based on this withdrawal
-        pnl_result = await PnLCalculator.calculate_realized_pnl_on_withdrawal(
-            db=self.db,
-            user_id=user_id,
-            withdrawal_amount=amount
-        )
-        
-        realized_pnl_amount = pnl_result["realized_pnl_usd"]
-        
-        # Create withdrawal transaction record
-        transaction = await self.create_transaction(
-            user_id=user_id,
-            transaction_type=TransactionType.WITHDRAW,
-            amount_usdc=amount,
+            tx_type='WITHDRAWAL',
             tx_hash=tx_hash,
-            realized_pnl_usdc=Decimal(0),  # Don't attribute PnL to individual tx
-            portfolio_value_at_time=portfolio_value_before,
-            cost_basis_withdrawn=Decimal(0),
-            metadata={
-                "type": "withdrawal",
-                "to_address": to_address or user_id,
-                "realized_pnl_total": str(realized_pnl_amount)  # Track total realized PnL
-            }
+            amount_usdc=amount,
+            status='PENDING' if not tx_hash else 'CONFIRMED',
+            event_data={
+                'amount_usdc': float(amount),
+                'to_address': to_address or user_id
+            },
+            created_at=datetime.now(timezone.utc)
         )
         
-        # Mark as confirmed since we have tx_hash
-        if tx_hash:
-            transaction = await self.update_transaction_status(
-                transaction_id=transaction.id,
-                status=TransactionStatus.CONFIRMED,
-                tx_hash=tx_hash
-            )
-        
-        # Don't recalculate PnL here - we already updated it above
-        # Just recalculate unrealized PnL from active positions
-        if tx_hash:  # Only for confirmed withdrawals
-            # Update only unrealized PnL from positions
-            await self._update_unrealized_pnl_only(user_id)
-            
-            # Publish balance change event for confirmed withdrawals
-            new_balance = await self.get_user_balance(user_id)
-            agent_service = get_agent_service()
-            await agent_service.publish_balance_event(
-                user_id=user_id,
-                balance=float(new_balance),
-                event_type='withdrawal'
-            )
-            logger.info(f"Published balance event after withdrawal for {user_id}: {new_balance} USDC")
-        
-        logger.info(f"Processed withdrawal of {amount} USDC for user {user_id} (tx: {tx_hash})")
+        logger.info(f"Withdrawal request processed for {amount} USDC from user {user_id} - watcher will create transaction record")
         return transaction
     
     async def preview_withdrawal(
