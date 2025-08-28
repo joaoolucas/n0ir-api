@@ -247,8 +247,8 @@ async def create_user(
         raise HTTPException(status_code=400, detail="Invalid wallet address format")
     
     # Verify signature to prove wallet ownership
-    sign_message = signature_service.create_sign_message("Register account", request.user_id)
-    if not signature_service.verify_signature(sign_message, request.signature, request.user_id):
+    # The frontend sends the exact message that was signed
+    if not signature_service.verify_signature(request.message, request.signature, request.user_id):
         raise HTTPException(status_code=401, detail="Invalid signature - wallet ownership verification failed")
     
     user_service = UserService(db)
@@ -333,11 +333,8 @@ async def withdraw(
     """
     try:
         # Verify signature to prove wallet ownership
-        withdrawal_data = f"{request.amount_usdc} USDC"
-        if request.withdraw_all:
-            withdrawal_data = "all USDC"
-        sign_message = signature_service.create_sign_message("Withdraw", user_id, withdrawal_data)
-        if not signature_service.verify_signature(sign_message, request.signature, user_id):
+        # The frontend sends the exact message that was signed
+        if not signature_service.verify_signature(request.message, request.signature, user_id):
             raise HTTPException(status_code=401, detail="Invalid signature - withdrawal authorization failed")
         
         service = UserService(db)
