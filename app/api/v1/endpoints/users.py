@@ -473,7 +473,10 @@ async def get_transactions(
     )
     
     # Fetch pool names for position transactions using pool address from event_data
+    # Also look up AERO swaps for POSITION_CLOSED transactions
     from app.core.pools_service import pools_service
+    from sqlalchemy import select, and_, or_
+    from app.database.models import Transaction
     
     for tx in transactions:
         # For POSITION_CREATED and POSITION_CLOSED, fetch pool name from pools service
@@ -488,6 +491,28 @@ async def get_transactions(
                         tx.event_data['pool_name'] = pool_name
                 except Exception as e:
                     logger.debug(f"Could not fetch pool data for {pool_address}: {e}")
+        
+        # For POSITION_CLOSED transactions, look up matching AERO_SWAP
+        if hasattr(tx, 'tx_type') and tx.tx_type == 'POSITION_CLOSED' and hasattr(tx, 'event_data') and tx.event_data:
+            token_id = tx.event_data.get('tokenId')
+            if token_id:
+                # Look for AERO_SWAP with matching tokenId or position_token_id
+                stmt = select(Transaction).where(
+                    and_(
+                        Transaction.user_id == user_id,
+                        Transaction.tx_type == 'AERO_SWAP',
+                        or_(
+                            Transaction.event_data['tokenId'].astext == token_id,
+                            Transaction.event_data['position_token_id'].astext == token_id
+                        )
+                    )
+                ).limit(1)
+                result = await db.execute(stmt)
+                aero_swap = result.scalar_one_or_none()
+                
+                if aero_swap and hasattr(aero_swap, 'event_data') and aero_swap.event_data:
+                    # Add AERO swap amount to event_data
+                    tx.event_data['aero_swap_usdc'] = aero_swap.event_data.get('amount_usdc', 0)
     
     return TransactionListResponse(
         transactions=[TransactionResponse.model_validate(t) for t in transactions],
