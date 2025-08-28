@@ -203,18 +203,14 @@ class UserService:
         # Calculate balance from all transactions to ensure accuracy
         # Balance = Deposits + Position_Closed + AERO_Swaps - Withdrawals - Position_Created
         
-        from sqlalchemy import func
-        
-        # Get sum by transaction type
-        stmt = select(
-            Transaction.tx_type,
-            func.sum(func.cast(Transaction.event_data['amount_usdc'].astext, Decimal))
-        ).where(
+        # Get all confirmed transactions
+        stmt = select(Transaction).where(
             Transaction.user_id == user_id,
             Transaction.status == 'CONFIRMED'
-        ).group_by(Transaction.tx_type)
+        )
         
         result = await self.db.execute(stmt)
+        transactions = result.scalars().all()
         
         deposits = Decimal(0)
         withdrawals = Decimal(0)
@@ -222,19 +218,25 @@ class UserService:
         position_closed = Decimal(0)
         aero_swaps = Decimal(0)
         
-        for tx_type, amount in result:
-            if amount is None:
-                continue
-            if tx_type == 'DEPOSIT':
-                deposits = amount
-            elif tx_type in ['WITHDRAWAL', 'WITHDRAW']:
-                withdrawals = amount
-            elif tx_type == 'POSITION_CREATED':
-                position_created = amount
-            elif tx_type == 'POSITION_CLOSED':
-                position_closed = amount
-            elif tx_type == 'AERO_SWAP':
-                aero_swaps = amount
+        for tx in transactions:
+            # Get amount from event_data
+            amount = Decimal(0)
+            if tx.event_data and 'amount_usdc' in tx.event_data:
+                try:
+                    amount = Decimal(str(tx.event_data['amount_usdc']))
+                except:
+                    amount = Decimal(0)
+            
+            if tx.tx_type == 'DEPOSIT':
+                deposits += amount
+            elif tx.tx_type in ['WITHDRAWAL', 'WITHDRAW']:
+                withdrawals += amount
+            elif tx.tx_type == 'POSITION_CREATED':
+                position_created += amount
+            elif tx.tx_type == 'POSITION_CLOSED':
+                position_closed += amount
+            elif tx.tx_type == 'AERO_SWAP':
+                aero_swaps += amount
         
         # Calculate final balance
         balance = deposits + position_closed + aero_swaps - withdrawals - position_created
