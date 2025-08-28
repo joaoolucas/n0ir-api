@@ -58,7 +58,6 @@ async def create_balance_adjustment(
         },
         tx_hash=tx_hash,
         created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
         tx_metadata={
             'adjustment': True,
             'manual': True,
