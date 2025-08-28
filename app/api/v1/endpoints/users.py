@@ -472,66 +472,9 @@ async def get_transactions(
         sort_order=sort_order
     )
     
-    # For POSITION_CLOSED or position_exit transactions, look up matching AERO_SWAP
-    # to populate the aero_swap_usdc field
-    # Also add pool_name for POSITION_CREATED and POSITION_CLOSED transactions
-    from sqlalchemy import select, and_
-    from app.database.models import Transaction, Position
-    from app.core.pools_service import pools_service
-    
-    for tx in transactions:
-        # Add pool_name for POSITION_CREATED or POSITION_CLOSED
-        if tx.tx_type in ['POSITION_CREATED', 'POSITION_CLOSED'] and tx.event_data:
-            token_id = tx.event_data.get('tokenId')
-            if token_id:
-                # Look up the position to get pool_name and pool_address
-                stmt = select(Position).where(Position.token_id == int(token_id))
-                result = await db.execute(stmt)
-                position = result.scalar_one_or_none()
-                
-                if position:
-                    # Extract pool_name from position_data if available
-                    pool_name = None
-                    if position.position_data and 'pool_name' in position.position_data:
-                        pool_name = position.position_data['pool_name']
-                    elif position.pool_name:  # If it's stored as a column
-                        pool_name = position.pool_name
-                    
-                    # If no pool_name found but we have pool_address, fetch from pools service
-                    if not pool_name and position.pool_address:
-                        try:
-                            pool_data = await pools_service.get_pool(position.pool_address)
-                            if pool_data and hasattr(pool_data, 'symbol'):
-                                # Remove percentage if present (e.g., "WETH-USDC 0.3%" -> "WETH-USDC")
-                                pool_name = pool_data.symbol.split(' ')[0] if ' ' in pool_data.symbol else pool_data.symbol
-                        except Exception as e:
-                            logger.debug(f"Could not fetch pool data for {position.pool_address}: {e}")
-                    
-                    if pool_name:
-                        tx.event_data['pool_name'] = pool_name
-        
-        # Handle POSITION_CLOSED transactions for AERO_SWAP lookup
-        if tx.tx_type == 'POSITION_CLOSED' and tx.event_data:
-            token_id = tx.event_data.get('tokenId')
-            if token_id:
-                # Look for AERO_SWAP with matching tokenId or position_token_id
-                from sqlalchemy import or_
-                stmt = select(Transaction).where(
-                    and_(
-                        Transaction.user_id == user_id,
-                        Transaction.tx_type == 'AERO_SWAP',
-                        or_(
-                            Transaction.event_data['tokenId'].astext == token_id,
-                            Transaction.event_data['position_token_id'].astext == token_id
-                        )
-                    )
-                ).limit(1)
-                result = await db.execute(stmt)
-                aero_swap = result.scalar_one_or_none()
-                
-                if aero_swap and aero_swap.event_data:
-                    # Add AERO swap amount to event_data
-                    tx.event_data['aero_swap_usdc'] = aero_swap.event_data.get('amount_usdc', 0)
+    # Since the database has the old schema where pool_name is a direct column in transactions,
+    # and transactions don't have event_data or tx_type columns, we don't need to do any
+    # additional processing. The pool_name is already available in the transaction objects.
     
     return TransactionListResponse(
         transactions=[TransactionResponse.model_validate(t) for t in transactions],
