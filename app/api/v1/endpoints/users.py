@@ -248,6 +248,11 @@ async def create_user(
     
     # Verify signature to prove wallet ownership
     # The frontend sends the exact message that was signed
+    logger.info(f"Verifying signature for user {request.user_id}")
+    logger.info(f"Message: {request.message}")
+    logger.info(f"Signature length: {len(request.signature)}")
+    logger.info(f"Signature preview: {request.signature[:20]}...")
+    
     if not signature_service.verify_signature(request.message, request.signature, request.user_id):
         raise HTTPException(status_code=401, detail="Invalid signature - wallet ownership verification failed")
     
