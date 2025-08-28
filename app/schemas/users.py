@@ -125,11 +125,11 @@ class BalanceResponse(BaseModel):
 
 
 class TransactionResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
     
-    transaction_id: UUID
+    transaction_id: UUID = Field(validation_alias='id')
     user_id: str
-    transaction_type: TransactionType
+    transaction_type: TransactionType = Field(validation_alias='tx_type')
     amount_usdc: Decimal
     pool_name: Optional[str] = Field(None, description="Pool name for position entry/exit transactions")
     tx_hash: Optional[str]
@@ -156,8 +156,9 @@ class TransactionResponse(BaseModel):
                 values['aero_swap_usdc'] = event_data.get('aero_swap_usdc', 0)
             
             # Normalize transaction type from database to match enum
-            tx_type = values.get('tx_type') or values.get('transaction_type')
-            if tx_type:
+            # Database has 'tx_type' field, we need to normalize it
+            if 'tx_type' in values:
+                tx_type = values['tx_type']
                 type_mapping = {
                     'withdraw': 'WITHDRAWAL',
                     'WITHDRAW': 'WITHDRAWAL',
@@ -172,9 +173,7 @@ class TransactionResponse(BaseModel):
                     'AERO_SWAP': 'AERO_SWAP'
                 }
                 normalized = type_mapping.get(tx_type, tx_type)
-                values['transaction_type'] = normalized
-                if 'tx_type' in values:
-                    values['tx_type'] = normalized
+                values['tx_type'] = normalized
         return values
     
     @model_validator(mode='after')
