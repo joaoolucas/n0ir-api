@@ -476,29 +476,42 @@ async def get_transactions(
     # Also look up AERO swaps for POSITION_CLOSED transactions
     from app.core.pools_service import pools_service
     from sqlalchemy import select, and_, or_
-    from app.database.models import Transaction
+    from app.database.models import Transaction, Position
     
     for tx in transactions:
-        # For POSITION_CREATED and POSITION_CLOSED, fetch pool name from pools service
-        if hasattr(tx, 'event_data') and tx.event_data and 'pool' in tx.event_data:
-            # First check if pool_name already exists and is not null
-            if tx.event_data.get('pool_name'):
-                # Pool name already exists, no need to fetch
-                pass
-            else:
-                # Pool name is null or missing, fetch from pools service
+        # Check if this is a position-related transaction
+        if hasattr(tx, 'event_data') and tx.event_data:
+            pool_address = None
+            
+            # For POSITION_CREATED, pool address is in event_data
+            if tx.tx_type == 'POSITION_CREATED' and 'pool' in tx.event_data:
                 pool_address = tx.event_data.get('pool')
-                if pool_address:
-                    try:
-                        pool_data = await pools_service.get_pool(pool_address)
-                        if pool_data and 'symbol' in pool_data:
-                            # Symbol format is like "WETH/USDC-5%" - extract just the pair name
-                            symbol = pool_data['symbol']
-                            # Remove the fee percentage part (e.g., "WETH/USDC-5%" -> "WETH/USDC")
-                            pool_name = symbol.split('-')[0] if '-' in symbol else symbol
-                            tx.event_data['pool_name'] = pool_name
-                    except Exception as e:
-                        logger.debug(f"Could not fetch pool data for {pool_address}: {e}")
+            
+            # For POSITION_CLOSED, fetch pool address from Position table using tokenId
+            elif tx.tx_type == 'POSITION_CLOSED' and 'tokenId' in tx.event_data:
+                token_id = tx.event_data.get('tokenId')
+                if token_id:
+                    # Fetch the position to get pool_address
+                    stmt = select(Position).where(Position.token_id == int(token_id))
+                    result = await db.execute(stmt)
+                    position = result.scalar_one_or_none()
+                    if position:
+                        pool_address = position.pool_address
+                        # Add pool_address to event_data for future reference
+                        tx.event_data['pool'] = pool_address
+            
+            # Now fetch pool_name if we have a pool_address and pool_name is missing
+            if pool_address and not tx.event_data.get('pool_name'):
+                try:
+                    pool_data = await pools_service.get_pool(pool_address)
+                    if pool_data and 'symbol' in pool_data:
+                        # Symbol format is like "WETH/USDC-5%" - extract just the pair name
+                        symbol = pool_data['symbol']
+                        # Remove the fee percentage part (e.g., "WETH/USDC-5%" -> "WETH/USDC")
+                        pool_name = symbol.split('-')[0] if '-' in symbol else symbol
+                        tx.event_data['pool_name'] = pool_name
+                except Exception as e:
+                    logger.debug(f"Could not fetch pool data for {pool_address}: {e}")
         
         # For POSITION_CLOSED transactions, look up matching AERO_SWAP
         if hasattr(tx, 'tx_type') and tx.tx_type == 'POSITION_CLOSED' and hasattr(tx, 'event_data') and tx.event_data:
