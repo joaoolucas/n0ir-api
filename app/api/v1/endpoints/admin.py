@@ -9,7 +9,7 @@ from datetime import datetime
 
 from app.database.session import get_db
 from app.database.models import Transaction
-from app.schemas.transaction import TransactionResponse
+from app.schemas.users import TransactionResponse
 from sqlalchemy import select, and_
 
 router = APIRouter()
