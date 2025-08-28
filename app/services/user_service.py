@@ -232,7 +232,15 @@ class UserService:
             elif tx.tx_type in ['WITHDRAWAL', 'WITHDRAW']:
                 withdrawals += amount
             elif tx.tx_type == 'POSITION_CREATED':
-                position_created += amount
+                # Account for USDC returns (change returned to user)
+                usdc_returned = Decimal(0)
+                if tx.event_data and 'usdc_returned' in tx.event_data:
+                    try:
+                        usdc_returned = Decimal(str(tx.event_data['usdc_returned']))
+                    except:
+                        usdc_returned = Decimal(0)
+                # Only subtract the net amount (amount sent - amount returned)
+                position_created += (amount - usdc_returned)
             elif tx.tx_type == 'POSITION_CLOSED':
                 position_closed += amount
             elif tx.tx_type == 'AERO_SWAP':

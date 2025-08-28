@@ -402,8 +402,25 @@ async def get_balance(
     # Get active positions to calculate current value and invested amount
     positions = await service.get_user_positions(user_id, status='ACTIVE')
     
-    # Calculate invested amount from ACTIVE positions only (entry amounts)
-    invested_in_pools = sum(p.entry_amount_usdc or Decimal(0) for p in positions)
+    # Calculate invested amount from ACTIVE positions using net amounts from transactions
+    invested_in_pools = Decimal(0)
+    for position in positions:
+        # Find the POSITION_CREATED transaction for this position
+        position_created_txs = await service.get_user_transactions(
+            user_id=user_id,
+            transaction_type=DBTransactionType.POSITION_CREATED,
+            status=DBTransactionStatus.CONFIRMED
+        )
+        
+        # Find the transaction for this specific position token
+        for tx in position_created_txs:
+            if tx.event_data and str(tx.event_data.get('tokenId')) == str(position.nft_token_id):
+                # Calculate net amount (amount - returned USDC)
+                amount = Decimal(str(tx.event_data.get('amount_usdc', 0)))
+                usdc_returned = Decimal(str(tx.event_data.get('usdc_returned', 0))) if tx.event_data.get('usdc_returned') else Decimal(0)
+                net_invested = amount - usdc_returned
+                invested_in_pools += net_invested
+                break
     
     # Calculate total positions value using real-time blockchain data
     current_positions_value = Decimal(0)
