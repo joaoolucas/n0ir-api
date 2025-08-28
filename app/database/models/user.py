@@ -93,14 +93,17 @@ class User(Base):
     def status(self) -> str:
         """Get user status - for compatibility with UserResponse schema."""
         # Users are always active unless specified otherwise in metadata
-        return self.user_metadata.get('status', 'active') if self.user_metadata else 'active'
+        # Always return uppercase status for consistency with UserStatus enum
+        status = self.user_metadata.get('status', 'ACTIVE') if self.user_metadata else 'ACTIVE'
+        return status.upper() if isinstance(status, str) else 'ACTIVE'
     
     @status.setter
     def status(self, value: str):
         """Set user status in user_metadata."""
         if not self.user_metadata:
             self.user_metadata = {}
-        self.user_metadata['status'] = value
+        # Always store uppercase status for consistency
+        self.user_metadata['status'] = value.upper() if isinstance(value, str) else 'ACTIVE'
     
     @property
     def total_pnl_usd(self) -> float:

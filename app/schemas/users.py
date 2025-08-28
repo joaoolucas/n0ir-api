@@ -155,9 +155,9 @@ class PositionResponse(BaseModel):
     pool_name: Optional[str] = Field(None, description="Pool name (e.g. ZORA/USDC)")
     token0_address: str
     token1_address: str
-    tick_lower: int
-    tick_upper: int
-    tick_spacing: int
+    tick_lower: Optional[int] = None
+    tick_upper: Optional[int] = None
+    tick_spacing: Optional[int] = None
     liquidity: str
     staked: bool
     gauge_address: Optional[str]
@@ -196,6 +196,7 @@ class PnLResponse(BaseModel):
     realized_pnl_usdc: Decimal
     unrealized_pnl_usdc: Decimal
     unrealized_pnl_percentage: Decimal
+    unrealized_pnl_pct: Decimal  # Alias for unrealized_pnl_percentage
     realized_pnl_percentage: Decimal
     fees_earned_usdc: Decimal
     rewards_earned_usdc: Decimal
@@ -205,30 +206,11 @@ class PnLResponse(BaseModel):
 
 
 class PerformanceResponse(BaseModel):
-    total_invested: float
-    total_current_value: float
-    total_realized_pnl: float
-    total_unrealized_pnl: float
-    total_fees_earned: float
-    total_rewards_earned: float
-    total_pnl: float
-    total_protocol_fees_pending: float
     apr: float
+    balance: Decimal
+    pnl_usdc: Decimal
+    pnl_pct: Decimal
     active_positions: int
-    total_positions: int
-    roi_percentage: float
-    
-    @classmethod
-    def from_service_data(cls, data: Dict[str, Any]) -> "PerformanceResponse":
-        """Create response from service layer data."""
-        roi = 0.0
-        if data["total_invested"] > 0:
-            roi = (data["total_pnl"] / data["total_invested"]) * 100
-        
-        return cls(
-            **data,
-            roi_percentage=roi
-        )
 
 
 # List Response Models

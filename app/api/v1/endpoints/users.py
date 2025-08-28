@@ -288,27 +288,7 @@ async def get_user(
 
 
 # Financial Operations
-@router.post("/{user_id}/deposit", response_model=TransactionResponse, status_code=201)
-async def deposit(
-    user_id: str,
-    request: DepositRequest,
-    db: AsyncSession = Depends(get_db)
-):
-    """Deposit USDC to user account."""
-    try:
-        service = UserService(db)
-        transaction = await service.deposit_usdc(
-            user_id=user_id,
-            amount=request.amount_usdc,
-            tx_hash=request.tx_hash
-        )
-        return TransactionResponse.model_validate(transaction)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error processing deposit: {e}")
-        raise HTTPException(status_code=500, detail="Failed to process deposit")
-
+# NOTE: Deposit and withdrawal endpoints removed - these are now tracked automatically by the watcher from blockchain events
 
 @router.post("/{user_id}/withdraw", response_model=TransactionResponse, status_code=201)
 async def withdraw(
@@ -402,7 +382,7 @@ async def get_balance(
     net_deposited = total_deposited - total_withdrawn
     
     # Get active positions to calculate current value and invested amount
-    positions = await service.get_user_positions(user_id, status='active')
+    positions = await service.get_user_positions(user_id, status='ACTIVE')
     
     # Calculate invested amount from ACTIVE positions only (entry amounts)
     invested_in_pools = sum(p.entry_amount_usdc or Decimal(0) for p in positions)
@@ -501,71 +481,7 @@ async def get_transactions(
 
 
 # Position Management
-@router.post("/{user_id}/intents/position", status_code=201)
-async def log_position_intent(
-    user_id: str,
-    request: CreatePositionRequest,
-    db: AsyncSession = Depends(get_db)
-):
-    """Log intent to create position - actual creation happens via blockchain.
-    
-    This endpoint only logs the intent. The actual position will be created
-    when the blockchain transaction is confirmed and processed by the watcher.
-    """
-    try:
-        # Import Redis client
-        import redis.asyncio as aioredis
-        from app.core.config import settings
-        import json
-        from datetime import datetime
-        
-        # Connect to Redis
-        redis_client = await aioredis.from_url(
-            settings.redis_url,
-            decode_responses=False
-        )
-        
-        # Prepare intent data
-        intent_data = {
-            "user_id": user_id,
-            "type": "position.create",
-            "nft_token_id": str(request.nft_token_id),
-            "pool_address": request.pool_address,
-            "pool_name": request.pool_name or "",
-            "token0_address": request.token0_address,
-            "token1_address": request.token1_address,
-            "tick_lower": str(request.tick_lower),
-            "tick_upper": str(request.tick_upper),
-            "tick_spacing": str(request.tick_spacing),
-            "liquidity": request.liquidity,
-            "entry_amount_usdc": str(request.entry_amount_usdc),
-            "entry_tx_hash": request.entry_tx_hash or "",
-            "staked": "true" if request.staked else "false",
-            "gauge_address": request.gauge_address or "",
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        
-        # Log to execution:intents stream
-        await redis_client.xadd(
-            "execution:intents",
-            {k: v.encode() if isinstance(v, str) else str(v).encode() for k, v in intent_data.items()}
-        )
-        
-        await redis_client.close()
-        
-        logger.info(f"Position intent logged for user {user_id}, token_id {request.nft_token_id}")
-        
-        return {
-            "status": "intent_logged",
-            "message": "Position creation intent logged. Waiting for blockchain confirmation.",
-            "nft_token_id": request.nft_token_id,
-            "tx_hash": request.entry_tx_hash
-        }
-        
-    except Exception as e:
-        logger.error(f"Error logging position intent: {e}")
-        raise HTTPException(status_code=500, detail="Failed to log position intent")
-
+# NOTE: Position intent endpoint removed - positions are now tracked automatically by the watcher from blockchain events
 
 @router.get("/{user_id}/positions", response_model=PositionListResponse)
 async def get_positions(
@@ -596,32 +512,7 @@ async def get_positions(
     )
 
 
-@router.delete("/{user_id}/positions/{nft_token_id}", response_model=PositionResponse)
-async def close_position(
-    user_id: str,
-    nft_token_id: int,
-    request: Optional[ClosePositionRequest] = None,
-    db: AsyncSession = Depends(get_db)
-):
-    """Close a position and return funds to user balance."""
-    try:
-        service = UserService(db)
-        position = await service.close_position(
-            user_id=user_id,
-            nft_token_id=nft_token_id,
-            exit_tx_hash=request.exit_tx_hash if request else None,
-            final_value_usdc=request.final_value_usdc if request else None,
-            realized_pnl_usdc=request.realized_pnl_usdc if request else None
-        )
-        if not position:
-            raise HTTPException(status_code=404, detail="Position not found or already closed")
-        
-        # Enrich the closed position with pool data
-        enriched_position = await enrich_position_with_pool_data(position)
-        return PositionResponse.model_validate(enriched_position)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
+# NOTE: Close position endpoint removed - position closes are detected automatically by the watcher from blockchain events
 
 # Position sync endpoint removed - positions are now synced automatically via blockchain events
 # The watcher continuously monitors the blockchain and updates position state
@@ -674,6 +565,7 @@ async def get_pnl(
         realized_pnl_usdc=user.realized_pnl_usdc,
         unrealized_pnl_usdc=user.unrealized_pnl_usdc,
         unrealized_pnl_percentage=user.unrealized_pnl_percentage,
+        unrealized_pnl_pct=user.unrealized_pnl_percentage,  # Same value with different name
         realized_pnl_percentage=user.realized_pnl_percentage,
         fees_earned_usdc=total_fees_earned,
         rewards_earned_usdc=total_rewards_earned,
@@ -683,77 +575,22 @@ async def get_pnl(
     )
 
 
-@router.get("/{user_id}/pnl-details", response_model=Dict[str, Decimal])
-async def get_pnl_details(
-    user_id: str,
-    db: AsyncSession = Depends(get_db)
-):
-    """Get detailed PnL values with real-time position values.
-    
-    Returns all PnL metrics including percentages, recalculated with
-    current blockchain position values.
-    """
-    service = UserService(db)
-    user = await service.get_user(user_id)
-    
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # Recalculate PnL with real-time position values
-    await service.recalculate_user_pnl(user_id)
-    
-    # Refresh user to get updated values
-    await db.refresh(user)
-    
-    return {
-        "unrealized_pnl_usdc": user.unrealized_pnl_usdc,
-        "realized_pnl_usdc": user.realized_pnl_usdc,
-        "unrealized_pnl_percentage": user.unrealized_pnl_percentage,
-        "realized_pnl_percentage": user.realized_pnl_percentage,
-        "last_updated": user.updated_at
-    }
+# NOTE: pnl-details endpoint removed - use /pnl endpoint instead which provides all the same data plus more
 
-
-@router.post("/{user_id}/sync-pnl", status_code=200)
-async def sync_user_pnl(
-    user_id: str,
-    db: AsyncSession = Depends(get_db)
-):
-    """Manually trigger PnL recalculation for a user.
-    
-    This will fetch current balances, positions, and transactions to recalculate
-    and update the stored PnL values. Normally this happens automatically on
-    deposits, withdrawals, and position changes.
-    """
-    service = UserService(db)
-    
-    # Verify user exists
-    user = await service.get_user(user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # Recalculate and update PnL
-    await service.recalculate_user_pnl(user_id)
-    
-    # Return updated values
-    await db.refresh(user)
-    
-    return {
-        "message": "PnL values synced successfully",
-        "unrealized_pnl_usdc": user.unrealized_pnl_usdc,
-        "realized_pnl_usdc": user.realized_pnl_usdc,
-        "unrealized_pnl_percentage": user.unrealized_pnl_percentage,
-        "realized_pnl_percentage": user.realized_pnl_percentage,
-        "last_updated": user.updated_at
-    }
-
+# NOTE: Sync PnL endpoint removed - PnL is calculated automatically by the watcher on every transaction
 
 @router.get("/{user_id}/performance", response_model=PerformanceResponse)
 async def get_performance(
     user_id: str,
     db: AsyncSession = Depends(get_db)
 ):
-    """Get user performance metrics."""
+    """Get simplified user performance metrics.
+    
+    Returns key metrics aggregated from other endpoints:
+    - balance from /balance endpoint (total_portfolio_value_usdc)
+    - pnl from /pnl endpoint (unrealized values)
+    - apr and active positions count
+    """
     service = UserService(db)
     
     # Verify user exists
@@ -761,41 +598,66 @@ async def get_performance(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    metrics = await service.get_performance_metrics(user_id)
+    # Get balance info (same logic as /balance endpoint)
+    wallet_balance = await service.get_user_balance(user_id)
+    positions = await service.get_user_positions(user_id, status='ACTIVE')
     
-    return PerformanceResponse.from_service_data(metrics)
-
-
-# Protocol Fees
-@router.get("/{user_id}/fees", response_model=ProtocolFeeListResponse)
-async def get_protocol_fees(
-    user_id: str,
-    collected: Optional[bool] = None,
-    db: AsyncSession = Depends(get_db)
-):
-    """Get protocol fees for user."""
-    service = UserService(db)
-    
-    # Get fees from positions
-    positions = await service.get_user_positions(user_id)
-    
-    fees = []
+    # Calculate total portfolio value (same as balance endpoint)
+    current_positions_value = Decimal(0)
     for position in positions:
-        if position.protocol_fee_amount and position.protocol_fee_amount > 0:
-            if collected is None or position.protocol_fee_collected == collected:
-                fees.append(ProtocolFeeResponse(
-                    position_id=str(position.position_id or position.nft_token_id),
-                    fee_amount_usdc=position.protocol_fee_amount,
-                    collected=position.protocol_fee_collected,
-                    collection_tx_hash=position.protocol_fee_tx_hash
-                ))
+        try:
+            # Try to get real-time value from blockchain
+            position_info = await positions_service.get_position_by_id(position.nft_token_id)
+            current_value_usd = Decimal(str(position_info.current_value_usd or 0))
+            unclaimed_fees_usd = Decimal(str(position_info.unclaimed_fees_usd or 0))
+            position_total = current_value_usd + unclaimed_fees_usd
+            position_total += (position.rewards_earned_usdc or Decimal(0))
+            position_total += (position.fees_earned_usdc or Decimal(0))
+            current_positions_value += position_total
+        except Exception:
+            # Fall back to database value if blockchain fetch fails
+            current_positions_value += (position.current_value_usdc or Decimal(0))
     
-    total_collected = sum(f.fee_amount_usdc for f in fees if f.collected)
-    total_pending = sum(f.fee_amount_usdc for f in fees if not f.collected)
+    total_portfolio_value = wallet_balance + current_positions_value
     
-    return ProtocolFeeListResponse(
-        fees=fees,
-        total_collected_usdc=total_collected,
-        total_pending_usdc=total_pending
+    # Get PnL info (same logic as /pnl endpoint)
+    await service.recalculate_user_pnl(user_id)
+    await db.refresh(user)
+    
+    # Calculate APR - simple average of active positions
+    apr = 0.0
+    if positions:
+        try:
+            # Get APR from strategy monitor for accurate calculation
+            from app.schemas.strategy import MonitorPositionsRequest
+            from app.core.strategy_service import strategy_service
+            
+            if user.cdp_wallet_address:
+                monitor_request = MonitorPositionsRequest(user_address=user.cdp_wallet_address)
+                monitor_response = await strategy_service.monitor_positions(monitor_request)
+                
+                # Check different possible APR fields in the response
+                if monitor_response:
+                    if hasattr(monitor_response, 'average_apr') and monitor_response.average_apr:
+                        apr = float(monitor_response.average_apr)
+                    elif hasattr(monitor_response, 'portfolio_metrics') and monitor_response.portfolio_metrics:
+                        # portfolio_metrics is an object, not a dict
+                        if hasattr(monitor_response.portfolio_metrics, 'current_apr'):
+                            apr = float(monitor_response.portfolio_metrics.current_apr or 0)
+                    elif monitor_response.portfolio_summary:
+                        apr = float(monitor_response.portfolio_summary.weighted_apr or 0)
+        except Exception as e:
+            logger.warning(f"Failed to get APR from strategy service: {e}")
+            # Fallback to 0 if strategy service fails
+            apr = 0.0
+    
+    return PerformanceResponse(
+        apr=apr,
+        balance=total_portfolio_value,
+        pnl_usdc=user.unrealized_pnl_usdc,
+        pnl_pct=user.unrealized_pnl_percentage,
+        active_positions=len(positions)
     )
+
+# NOTE: Protocol fees endpoint removed - fees are included in other endpoints like /pnl
 

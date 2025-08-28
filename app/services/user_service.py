@@ -351,7 +351,7 @@ class UserService:
                 raise ValueError(f"Insufficient wallet balance. Available: {wallet_balance}, Requested: {amount}")
             
             # Get active positions
-            active_positions = await self.get_user_positions(user_id, status='active')
+            active_positions = await self.get_user_positions(user_id, status='ACTIVE')
             
             if not active_positions:
                 raise ValueError(f"Insufficient funds. Wallet: {wallet_balance}, No active positions to close")
@@ -443,27 +443,36 @@ class UserService:
         
         # Get current portfolio value before withdrawal
         wallet_balance_before = await self.get_user_balance(user_id)
-        active_positions = await self.get_user_positions(user_id, status='active')
+        active_positions = await self.get_user_positions(user_id, status='ACTIVE')
         positions_value = sum(p.current_value_usdc or p.entry_amount_usdc for p in active_positions)
         portfolio_value_before = wallet_balance_before + positions_value
         
-        # Withdrawals don't realize PNL - PNL is tracked at position level
-        # Withdrawals are just cash movements
-        realized_pnl_amount = Decimal(0)
-        cost_basis_withdrawn = Decimal(0)
+        # Calculate realized PnL when withdrawal occurs
+        # Realized PnL = total_withdrawals - total_deposits (after this withdrawal)
+        from app.services.pnl_calculator import PnLCalculator
         
-        # Create withdrawal transaction record without PNL attribution
+        # Update realized PnL based on this withdrawal
+        pnl_result = await PnLCalculator.calculate_realized_pnl_on_withdrawal(
+            db=self.db,
+            user_id=user_id,
+            withdrawal_amount=amount
+        )
+        
+        realized_pnl_amount = pnl_result["realized_pnl_usd"]
+        
+        # Create withdrawal transaction record
         transaction = await self.create_transaction(
             user_id=user_id,
             transaction_type=TransactionType.WITHDRAW,
             amount_usdc=amount,
             tx_hash=tx_hash,
-            realized_pnl_usdc=realized_pnl_amount,  # Always 0 for withdrawals
+            realized_pnl_usdc=Decimal(0),  # Don't attribute PnL to individual tx
             portfolio_value_at_time=portfolio_value_before,
-            cost_basis_withdrawn=cost_basis_withdrawn,  # Always 0, not used
+            cost_basis_withdrawn=Decimal(0),
             metadata={
                 "type": "withdrawal",
-                "to_address": to_address or user_id
+                "to_address": to_address or user_id,
+                "realized_pnl_total": str(realized_pnl_amount)  # Track total realized PnL
             }
         )
         
@@ -475,9 +484,11 @@ class UserService:
                 tx_hash=tx_hash
             )
         
-        # Recalculate user PnL after withdrawal
-        if tx_hash:  # Only recalculate for confirmed withdrawals
-            await self.recalculate_user_pnl(user_id)
+        # Don't recalculate PnL here - we already updated it above
+        # Just recalculate unrealized PnL from active positions
+        if tx_hash:  # Only for confirmed withdrawals
+            # Update only unrealized PnL from positions
+            await self._update_unrealized_pnl_only(user_id)
             
             # Publish balance change event for confirmed withdrawals
             new_balance = await self.get_user_balance(user_id)
@@ -506,7 +517,7 @@ class UserService:
         wallet_balance = await self.get_user_balance(user_id)
         
         # Get active positions
-        active_positions = await self.get_user_positions(user_id, status='active')
+        active_positions = await self.get_user_positions(user_id, status='ACTIVE')
         
         # Calculate total positions value
         positions_value = Decimal(0)
@@ -631,7 +642,7 @@ class UserService:
             entry_tx_hash=entry_tx_hash,
             staked=staked,
             gauge_address=gauge_address,
-            status='active',  # Use lowercase status
+            status='ACTIVE',  # Use uppercase status for consistency
             entry_date=datetime.utcnow(),
             last_updated=datetime.utcnow()
         )
@@ -730,7 +741,7 @@ class UserService:
         """Sync all position values with blockchain for a user."""
         from app.core.positions_service import positions_service
         
-        positions = await self.get_user_positions(user_id, status='active')
+        positions = await self.get_user_positions(user_id, status='ACTIVE')
         
         for position in positions:
             try:
@@ -967,6 +978,63 @@ class UserService:
         
         await self.db.commit()
     
+    async def _update_unrealized_pnl_only(self, user_id: str) -> None:
+        """Update only unrealized PnL from active positions without changing realized PnL."""
+        stmt = select(User).where(User.user_id == user_id)
+        result = await self.db.execute(stmt)
+        user = result.scalar_one_or_none()
+        
+        if not user:
+            logger.error(f"User {user_id} not found for unrealized PnL update")
+            return
+        
+        # Get all active positions for unrealized PNL
+        all_positions = await self.get_user_positions(user_id)
+        active_positions = [p for p in all_positions if p.status == 'ACTIVE']
+        
+        # Calculate unrealized PNL from active positions
+        unrealized_pnl = Decimal(0)
+        
+        for position in active_positions:
+            try:
+                # Try to get real-time value from blockchain
+                from app.services.positions_service import positions_service
+                position_info = await positions_service.get_position_by_id(position.nft_token_id)
+                
+                if position_info:
+                    current_value_usd = Decimal(str(position_info.current_value_usd or 0))
+                    unclaimed_fees_usd = Decimal(str(position_info.unclaimed_fees_usd or 0))
+                    position_current_value = current_value_usd + unclaimed_fees_usd
+                    position.current_value_usdc = position_current_value
+                else:
+                    # Use cached value if blockchain fetch fails
+                    position_current_value = position.current_value_usdc or position.entry_amount_usdc or Decimal(0)
+                
+                # Calculate unrealized PNL for this position
+                position_unrealized_pnl = position_current_value - position.entry_amount_usdc
+                unrealized_pnl += position_unrealized_pnl
+                
+            except Exception as e:
+                logger.error(f"Error fetching position {position.nft_token_id}: {e}")
+                # Use cached value as fallback
+                cached_value = position.current_value_usdc or position.entry_amount_usdc or Decimal(0)
+                position_unrealized_pnl = cached_value - position.entry_amount_usdc
+                unrealized_pnl += position_unrealized_pnl
+        
+        # Update only unrealized PnL fields
+        total_deposits = Decimal(str(user.total_deposits_usdc or 0))
+        if total_deposits > 0:
+            unrealized_pnl_percentage = (unrealized_pnl / total_deposits) * Decimal(100)
+        else:
+            unrealized_pnl_percentage = Decimal(0)
+        
+        user.unrealized_pnl_usd = unrealized_pnl
+        user.unrealized_pnl_pct = unrealized_pnl_percentage
+        user.updated_at = datetime.now(timezone.utc)
+        
+        await self.db.commit()
+        logger.info(f"Updated unrealized PnL for user {user_id}: ${unrealized_pnl} ({unrealized_pnl_percentage:.2f}%)")
+    
     async def recalculate_user_pnl(self, user_id: str) -> None:
         """Recalculate and update user's PnL values.
         
@@ -995,9 +1063,11 @@ class UserService:
         total_deposits = Decimal(str(user.total_deposits_usdc or 0))
         total_withdrawals = Decimal(str(user.total_withdrawals_usdc or 0))
         
-        # Calculate realized PNL as simple cash-on-cash return
-        # This is what the user actually gained/lost in real money
-        realized_pnl = total_withdrawals - total_deposits
+        # Realized PNL should only be calculated when withdrawals are made
+        # It represents actual profit/loss that has been "realized" by withdrawing
+        # For now, use the existing realized_pnl_usd from the user record
+        # This should be updated only when processing WITHDRAWAL transactions
+        realized_pnl = Decimal(str(user.realized_pnl_usd or 0))
         
         # Get all active positions for unrealized PNL
         all_positions = await self.get_user_positions(user_id)
