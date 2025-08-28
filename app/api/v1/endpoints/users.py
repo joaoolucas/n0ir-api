@@ -481,16 +481,24 @@ async def get_transactions(
     for tx in transactions:
         # For POSITION_CREATED and POSITION_CLOSED, fetch pool name from pools service
         if hasattr(tx, 'event_data') and tx.event_data and 'pool' in tx.event_data:
-            pool_address = tx.event_data.get('pool')
-            if pool_address:
-                try:
-                    pool_data = await pools_service.get_pool(pool_address)
-                    if pool_data and hasattr(pool_data, 'symbol'):
-                        # Remove percentage if present (e.g., "WETH-USDC 0.3%" -> "WETH-USDC")
-                        pool_name = pool_data.symbol.split(' ')[0] if ' ' in pool_data.symbol else pool_data.symbol
-                        tx.event_data['pool_name'] = pool_name
-                except Exception as e:
-                    logger.debug(f"Could not fetch pool data for {pool_address}: {e}")
+            # First check if pool_name already exists and is not null
+            if tx.event_data.get('pool_name'):
+                # Pool name already exists, no need to fetch
+                pass
+            else:
+                # Pool name is null or missing, fetch from pools service
+                pool_address = tx.event_data.get('pool')
+                if pool_address:
+                    try:
+                        pool_data = await pools_service.get_pool(pool_address)
+                        if pool_data and 'symbol' in pool_data:
+                            # Symbol format is like "WETH/USDC-5%" - extract just the pair name
+                            symbol = pool_data['symbol']
+                            # Remove the fee percentage part (e.g., "WETH/USDC-5%" -> "WETH/USDC")
+                            pool_name = symbol.split('-')[0] if '-' in symbol else symbol
+                            tx.event_data['pool_name'] = pool_name
+                    except Exception as e:
+                        logger.debug(f"Could not fetch pool data for {pool_address}: {e}")
         
         # For POSITION_CLOSED transactions, look up matching AERO_SWAP
         if hasattr(tx, 'tx_type') and tx.tx_type == 'POSITION_CLOSED' and hasattr(tx, 'event_data') and tx.event_data:
