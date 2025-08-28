@@ -1,5 +1,5 @@
 """Service for verifying Ethereum signatures including smart wallet signatures."""
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from eth_account import Account
 from eth_account.messages import encode_defunct
@@ -112,16 +112,26 @@ class SignatureService:
             True if timestamp is within MAX_MESSAGE_AGE_SECONDS, False otherwise
         """
         try:
-            # Extract timestamp from message (format: "... at YYYY-MM-DDTHH:MM:SS.ffffff")
+            # Extract timestamp from message (format: "... at YYYY-MM-DDTHH:MM:SS.ffffffZ")
             parts = message.split(" at ")
             if len(parts) != 2:
                 return False
                 
             timestamp_str = parts[-1].strip()
-            message_time = datetime.fromisoformat(timestamp_str)
+            
+            # Handle both timezone-aware and naive timestamps
+            if timestamp_str.endswith('Z'):
+                # Replace 'Z' with '+00:00' for proper ISO format parsing
+                timestamp_str = timestamp_str[:-1] + '+00:00'
+                message_time = datetime.fromisoformat(timestamp_str)
+                # Make current time timezone-aware (UTC)
+                current_time = datetime.now(timezone.utc)
+            else:
+                # Naive datetime (no timezone)
+                message_time = datetime.fromisoformat(timestamp_str)
+                current_time = datetime.utcnow()
             
             # Check if timestamp is within acceptable range
-            current_time = datetime.utcnow()
             time_diff = current_time - message_time
             
             # Message should not be from the future
