@@ -472,9 +472,22 @@ async def get_transactions(
         sort_order=sort_order
     )
     
-    # Since the database has the old schema where pool_name is a direct column in transactions,
-    # and transactions don't have event_data or tx_type columns, we don't need to do any
-    # additional processing. The pool_name is already available in the transaction objects.
+    # Fetch pool names for position transactions using pool address from event_data
+    from app.core.pools_service import pools_service
+    
+    for tx in transactions:
+        # For POSITION_CREATED and POSITION_CLOSED, fetch pool name from pools service
+        if hasattr(tx, 'event_data') and tx.event_data and 'pool' in tx.event_data:
+            pool_address = tx.event_data.get('pool')
+            if pool_address:
+                try:
+                    pool_data = await pools_service.get_pool(pool_address)
+                    if pool_data and hasattr(pool_data, 'symbol'):
+                        # Remove percentage if present (e.g., "WETH-USDC 0.3%" -> "WETH-USDC")
+                        pool_name = pool_data.symbol.split(' ')[0] if ' ' in pool_data.symbol else pool_data.symbol
+                        tx.event_data['pool_name'] = pool_name
+                except Exception as e:
+                    logger.debug(f"Could not fetch pool data for {pool_address}: {e}")
     
     return TransactionListResponse(
         transactions=[TransactionResponse.model_validate(t) for t in transactions],
