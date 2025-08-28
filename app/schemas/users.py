@@ -38,7 +38,8 @@ class PositionStatus(str, enum.Enum):
 class CreateUserRequest(BaseModel):
     user_id: str = Field(..., description="User's wallet address (EOA)")
     start_agent: bool = Field(True, description="Whether to start agent and create CDP wallet")
-    signature: Optional[str] = Field(None, description="Signature to prove wallet ownership (optional)")
+    signature: str = Field(..., description="Signature to prove wallet ownership")
+    message: str = Field(..., description="The message that was signed")
 
 
 class UpdateUserRequest(BaseModel):
@@ -52,6 +53,8 @@ class DepositRequest(BaseModel):
 
 class WithdrawRequest(BaseModel):
     amount_usdc: Decimal = Field(..., gt=0, description="Amount to withdraw in USDC")
+    signature: str = Field(..., description="Signature to authorize withdrawal")
+    message: str = Field(..., description="The message that was signed")
     destination_address: Optional[str] = Field(None, description="Destination wallet address (defaults to user's address)")
     tx_hash: Optional[str] = Field(None, description="Transaction hash if already executed")
     force_close_positions: bool = Field(True, description="Automatically close positions if needed for withdrawal")
