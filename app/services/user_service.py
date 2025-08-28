@@ -973,15 +973,49 @@ class UserService:
                     # Use cached value if blockchain fetch fails
                     position_current_value = position.current_value_usdc or position.entry_amount_usdc or Decimal(0)
                 
-                # Calculate unrealized PNL for this position
-                position_unrealized_pnl = position_current_value - position.entry_amount_usdc
+                # Calculate unrealized PNL for this position using net entry amount
+                # Get net entry amount from POSITION_CREATED transaction
+                net_entry_amount = position.entry_amount_usdc or Decimal(0)
+                stmt_tx = select(Transaction).where(
+                    Transaction.user_id == user_id,
+                    Transaction.tx_type == 'POSITION_CREATED',
+                    Transaction.event_data['tokenId'].astext == str(position.nft_token_id)
+                ).limit(1)
+                result_tx = await self.db.execute(stmt_tx)
+                position_created_tx = result_tx.scalar_one_or_none()
+                
+                if position_created_tx and position_created_tx.event_data:
+                    amount = Decimal(str(position_created_tx.event_data.get('amount_usdc', 0)))
+                    usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
+                    net_entry_amount = amount - usdc_returned
+                
+                position_unrealized_pnl = position_current_value - net_entry_amount
                 unrealized_pnl += position_unrealized_pnl
                 
             except Exception as e:
                 logger.error(f"Error fetching position {position.nft_token_id}: {e}")
-                # Use cached value as fallback
+                # Use cached value as fallback and try to get net entry amount
                 cached_value = position.current_value_usdc or position.entry_amount_usdc or Decimal(0)
-                position_unrealized_pnl = cached_value - position.entry_amount_usdc
+                
+                # Try to get net entry amount even in error case
+                net_entry_amount = position.entry_amount_usdc or Decimal(0)
+                try:
+                    stmt_tx = select(Transaction).where(
+                        Transaction.user_id == user_id,
+                        Transaction.tx_type == 'POSITION_CREATED',
+                        Transaction.event_data['tokenId'].astext == str(position.nft_token_id)
+                    ).limit(1)
+                    result_tx = await self.db.execute(stmt_tx)
+                    position_created_tx = result_tx.scalar_one_or_none()
+                    
+                    if position_created_tx and position_created_tx.event_data:
+                        amount = Decimal(str(position_created_tx.event_data.get('amount_usdc', 0)))
+                        usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
+                        net_entry_amount = amount - usdc_returned
+                except:
+                    pass  # Use default net_entry_amount
+                
+                position_unrealized_pnl = cached_value - net_entry_amount
                 unrealized_pnl += position_unrealized_pnl
         
         # Update only unrealized PnL fields
@@ -1054,13 +1088,44 @@ class UserService:
                     # Update position's current value in DB for caching
                     position.current_value_usdc = position_current_value
                     
+                    # Get net entry amount from POSITION_CREATED transaction
+                    net_entry_amount = position.entry_amount_usdc or Decimal(0)
+                    stmt_tx = select(Transaction).where(
+                        Transaction.user_id == user_id,
+                        Transaction.tx_type == 'POSITION_CREATED',
+                        Transaction.event_data['tokenId'].astext == str(position.nft_token_id)
+                    ).limit(1)
+                    result_tx = await self.db.execute(stmt_tx)
+                    position_created_tx = result_tx.scalar_one_or_none()
+                    
+                    if position_created_tx and position_created_tx.event_data:
+                        amount = Decimal(str(position_created_tx.event_data.get('amount_usdc', 0)))
+                        usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
+                        net_entry_amount = amount - usdc_returned
+                    
                     # Calculate unrealized PNL for this position
-                    position_unrealized_pnl = position_current_value - position.entry_amount_usdc
+                    position_unrealized_pnl = position_current_value - net_entry_amount
                     unrealized_pnl += position_unrealized_pnl
                 else:
                     # If blockchain fetch fails, use database value
                     cached_value = position.current_value_usdc or position.entry_amount_usdc or Decimal(0)
-                    position_unrealized_pnl = cached_value - position.entry_amount_usdc
+                    
+                    # Get net entry amount from POSITION_CREATED transaction
+                    net_entry_amount = position.entry_amount_usdc or Decimal(0)
+                    stmt_tx = select(Transaction).where(
+                        Transaction.user_id == user_id,
+                        Transaction.tx_type == 'POSITION_CREATED',
+                        Transaction.event_data['tokenId'].astext == str(position.nft_token_id)
+                    ).limit(1)
+                    result_tx = await self.db.execute(stmt_tx)
+                    position_created_tx = result_tx.scalar_one_or_none()
+                    
+                    if position_created_tx and position_created_tx.event_data:
+                        amount = Decimal(str(position_created_tx.event_data.get('amount_usdc', 0)))
+                        usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
+                        net_entry_amount = amount - usdc_returned
+                    
+                    position_unrealized_pnl = cached_value - net_entry_amount
                     unrealized_pnl += position_unrealized_pnl
                     
             except Exception as e:
@@ -1069,14 +1134,52 @@ class UserService:
                     logger.warning(f"Position {position.nft_token_id} not found on-chain, may be closed externally")
                     # Mark position as closed if it doesn't exist on-chain
                     position.status = 'CLOSED'
-                    position.realized_pnl_usd = position.current_value_usdc - position.entry_amount_usdc
+                    
+                    # Get net entry amount for realized PnL calculation
+                    net_entry_amount = position.entry_amount_usdc or Decimal(0)
+                    try:
+                        stmt_tx = select(Transaction).where(
+                            Transaction.user_id == user_id,
+                            Transaction.tx_type == 'POSITION_CREATED',
+                            Transaction.event_data['tokenId'].astext == str(position.nft_token_id)
+                        ).limit(1)
+                        result_tx = await self.db.execute(stmt_tx)
+                        position_created_tx = result_tx.scalar_one_or_none()
+                        
+                        if position_created_tx and position_created_tx.event_data:
+                            amount = Decimal(str(position_created_tx.event_data.get('amount_usdc', 0)))
+                            usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
+                            net_entry_amount = amount - usdc_returned
+                    except:
+                        pass
+                    
+                    position.realized_pnl_usd = position.current_value_usdc - net_entry_amount
                     # Move its PNL to realized
                     realized_pnl += position.realized_pnl_usdc or Decimal(0)
                 else:
                     logger.error(f"Error fetching position {position.nft_token_id}: {e}")
                     # Use database value as fallback for unrealized PNL
                     cached_value = position.current_value_usdc or position.entry_amount_usdc or Decimal(0)
-                    position_unrealized_pnl = cached_value - position.entry_amount_usdc
+                    
+                    # Get net entry amount
+                    net_entry_amount = position.entry_amount_usdc or Decimal(0)
+                    try:
+                        stmt_tx = select(Transaction).where(
+                            Transaction.user_id == user_id,
+                            Transaction.tx_type == 'POSITION_CREATED',
+                            Transaction.event_data['tokenId'].astext == str(position.nft_token_id)
+                        ).limit(1)
+                        result_tx = await self.db.execute(stmt_tx)
+                        position_created_tx = result_tx.scalar_one_or_none()
+                        
+                        if position_created_tx and position_created_tx.event_data:
+                            amount = Decimal(str(position_created_tx.event_data.get('amount_usdc', 0)))
+                            usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
+                            net_entry_amount = amount - usdc_returned
+                    except:
+                        pass
+                    
+                    position_unrealized_pnl = cached_value - net_entry_amount
                     unrealized_pnl += position_unrealized_pnl
         
         # Commit any position value updates
