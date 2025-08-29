@@ -1141,6 +1141,7 @@ class UserService:
         closed_transactions = result_closed.scalars().all()
         
         realized_pnl = Decimal(0)
+        total_closed_investment = Decimal(0)  # Track total investment for closed positions
         
         for close_tx in closed_transactions:
             if not close_tx.event_data:
@@ -1172,6 +1173,9 @@ class UserService:
                 usdc_returned = Decimal(str(created_tx.event_data.get('usdc_returned', 0)))
                 net_invested = amount_invested - usdc_returned
                 
+                # Track total investment for percentage calculation
+                total_closed_investment += net_invested
+                
                 # Calculate PnL for this position
                 position_pnl = total_received - net_invested
                 realized_pnl += position_pnl
@@ -1186,6 +1190,7 @@ class UserService:
         
         # Calculate unrealized PNL from active positions
         unrealized_pnl = Decimal(0)
+        total_active_investment = Decimal(0)  # Track total investment for active positions
         
         for position in active_positions:
             try:
@@ -1223,6 +1228,9 @@ class UserService:
                         net_entry_amount = position.entry_amount_usdc or position_current_value
                         logger.warning(f"No POSITION_CREATED tx found for position {position.nft_token_id}, using fallback: {net_entry_amount}")
                     
+                    # Track total active investment
+                    total_active_investment += net_entry_amount
+                    
                     # Calculate unrealized PNL for this position
                     position_unrealized_pnl = position_current_value - net_entry_amount
                     unrealized_pnl += position_unrealized_pnl
@@ -1250,6 +1258,9 @@ class UserService:
                         # Fallback: if no transaction found, use position entry or assume current value
                         net_entry_amount = position.entry_amount_usdc or position_current_value
                         logger.warning(f"No POSITION_CREATED tx found for position {position.nft_token_id}, using fallback: {net_entry_amount}")
+                    
+                    # Track total active investment
+                    total_active_investment += net_entry_amount
                     
                     position_unrealized_pnl = cached_value - net_entry_amount
                     unrealized_pnl += position_unrealized_pnl
@@ -1311,18 +1322,17 @@ class UserService:
         # Commit any position value updates
         await self.db.commit()
         
-        # Calculate percentages based on total deposits (not net)
-        # This represents the total capital the user has deposited
-        # Using total deposits (not net) for PnL calculation as per user feedback
-        base_for_pnl = total_deposits
-        
-        # Calculate percentages
-        if base_for_pnl > 0:
-            # Both realized and unrealized PnL percentages should be based on total deposits
-            realized_pnl_percentage = (realized_pnl / base_for_pnl) * Decimal(100)
-            unrealized_pnl_percentage = (unrealized_pnl / base_for_pnl) * Decimal(100)
+        # Calculate percentages based on actual invested amounts for each PnL type
+        # Realized PnL % = realized PnL / total investment in closed positions
+        if total_closed_investment > 0:
+            realized_pnl_percentage = (realized_pnl / total_closed_investment) * Decimal(100)
         else:
             realized_pnl_percentage = Decimal(0)
+        
+        # Unrealized PnL % = unrealized PnL / total investment in active positions
+        if total_active_investment > 0:
+            unrealized_pnl_percentage = (unrealized_pnl / total_active_investment) * Decimal(100)
+        else:
             unrealized_pnl_percentage = Decimal(0)
         
         # Update user PnL values
