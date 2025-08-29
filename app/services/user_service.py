@@ -198,8 +198,35 @@ class UserService:
         await self.db.refresh(transaction)
         return transaction
     
+    async def check_and_update_deposit_flag(self, user_id: str) -> bool:
+        """Check if user has deposited 50 USDC and update flag if needed.
+        
+        Returns:
+            True if user has deposited 50 USDC (ever), False otherwise
+        """
+        user = await self.get_user(user_id)
+        if not user:
+            return False
+        
+        # If already marked, just return True
+        if user.has_deposited_50_usdc:
+            return True
+        
+        # Check total deposits
+        total_deposits = Decimal(str(user.total_deposits_usdc or 0))
+        if total_deposits >= Decimal('50'):
+            user.has_deposited_50_usdc = True
+            await self.db.commit()
+            logger.info(f"User {user_id} marked as having deposited 50+ USDC (total: {total_deposits})")
+            return True
+        
+        return False
+    
     async def get_user_balance(self, user_id: str) -> Decimal:
         """Calculate user's current USDC balance from transactions."""
+        # Check and update deposit flag
+        await self.check_and_update_deposit_flag(user_id)
+        
         # Calculate balance from all transactions to ensure accuracy
         # Balance = Deposits + Position_Closed + AERO_Swaps - Withdrawals - Position_Created
         
@@ -327,13 +354,15 @@ class UserService:
         
         # Publish balance change event for confirmed deposits
         new_balance = await self.get_user_balance(user_id)
+        has_deposited_50 = await self.check_and_update_deposit_flag(user_id)
         agent_service = get_agent_service()
         await agent_service.publish_balance_event(
             user_id=user_id,
             balance=float(new_balance),
-            event_type='deposit'
+            event_type='deposit',
+            has_deposited_50_usdc=has_deposited_50
         )
-        logger.info(f"Published balance event after deposit for {user_id}: {new_balance} USDC")
+        logger.info(f"Published balance event after deposit for {user_id}: {new_balance} USDC (50+ deposited: {has_deposited_50})")
         
         logger.info(f"Processed deposit of {amount} USDC for user {user_id}")
         return transaction
