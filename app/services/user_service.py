@@ -198,62 +198,50 @@ class UserService:
         await self.db.refresh(transaction)
         return transaction
     
+    async def check_and_update_deposit_flag(self, user_id: str) -> bool:
+        """Check if user has net deposits of 50 USDC and update flag if needed.
+        
+        Returns:
+            True if user has net deposits >= 50 USDC, False otherwise
+        """
+        user = await self.get_user(user_id)
+        if not user:
+            return False
+        
+        # Calculate net deposits (deposits minus withdrawals)
+        total_deposits = Decimal(str(user.total_deposits_usdc or 0))
+        total_withdrawals = Decimal(str(user.total_withdrawals_usdc or 0))
+        net_deposits = total_deposits - total_withdrawals
+        
+        # Update flag based on net deposits
+        should_have_flag = net_deposits >= Decimal('50')
+        
+        if should_have_flag != user.has_deposited_50_usdc:
+            user.has_deposited_50_usdc = should_have_flag
+            await self.db.commit()
+            logger.info(
+                f"User {user_id} 50+ USDC flag {'granted' if should_have_flag else 'revoked'}: "
+                f"net deposits = {net_deposits} USDC (deposits: {total_deposits}, withdrawals: {total_withdrawals})"
+            )
+        
+        return should_have_flag
+    
     async def get_user_balance(self, user_id: str) -> Decimal:
-        """Calculate user's current USDC balance from transactions."""
-        # Calculate balance from all transactions to ensure accuracy
-        # Balance = Deposits + Position_Closed + AERO_Swaps - Withdrawals - Position_Created
+        """Get user's current USDC balance from database."""
+        # Check and update deposit flag
+        await self.check_and_update_deposit_flag(user_id)
         
-        # Get all confirmed transactions
-        stmt = select(Transaction).where(
-            Transaction.user_id == user_id,
-            Transaction.status == 'CONFIRMED'
-        )
-        
+        # Get the balance from the user record which should be kept in sync by the watcher
+        stmt = select(User).where(User.user_id == user_id)
         result = await self.db.execute(stmt)
-        transactions = result.scalars().all()
+        user = result.scalar_one_or_none()
         
-        deposits = Decimal(0)
-        withdrawals = Decimal(0)
-        position_created = Decimal(0)
-        position_closed = Decimal(0)
-        aero_swaps = Decimal(0)
+        if not user:
+            return Decimal(0)
         
-        for tx in transactions:
-            # Get amount from event_data
-            amount = Decimal(0)
-            if tx.event_data and 'amount_usdc' in tx.event_data:
-                try:
-                    amount = Decimal(str(tx.event_data['amount_usdc']))
-                except:
-                    amount = Decimal(0)
-            
-            if tx.tx_type == 'DEPOSIT':
-                deposits += amount
-            elif tx.tx_type in ['WITHDRAWAL', 'WITHDRAW']:
-                withdrawals += amount
-            elif tx.tx_type == 'POSITION_CREATED':
-                # Account for USDC returns (change returned to user)
-                usdc_returned = Decimal(0)
-                if tx.event_data and 'usdc_returned' in tx.event_data:
-                    try:
-                        usdc_returned = Decimal(str(tx.event_data['usdc_returned']))
-                    except:
-                        usdc_returned = Decimal(0)
-                # Only subtract the net amount (amount sent - amount returned)
-                position_created += (amount - usdc_returned)
-            elif tx.tx_type == 'POSITION_CLOSED':
-                position_closed += amount
-            elif tx.tx_type == 'AERO_SWAP':
-                aero_swaps += amount
-        
-        # Calculate final balance
-        balance = deposits + position_closed + aero_swaps - withdrawals - position_created
-        
-        # Ensure non-negative (rounding errors might cause tiny negatives)
-        if balance < Decimal('0.01') and balance > Decimal('-0.01'):
-            balance = Decimal(0)
-        
-        return balance
+        # Return the stored balance which should be maintained by the watcher
+        # The watcher updates this balance whenever transactions occur
+        return Decimal(str(user.usdc_balance or 0))
     
     async def get_user_transactions(
         self,
@@ -327,13 +315,15 @@ class UserService:
         
         # Publish balance change event for confirmed deposits
         new_balance = await self.get_user_balance(user_id)
+        has_deposited_50 = await self.check_and_update_deposit_flag(user_id)
         agent_service = get_agent_service()
         await agent_service.publish_balance_event(
             user_id=user_id,
             balance=float(new_balance),
-            event_type='deposit'
+            event_type='deposit',
+            has_deposited_50_usdc=has_deposited_50
         )
-        logger.info(f"Published balance event after deposit for {user_id}: {new_balance} USDC")
+        logger.info(f"Published balance event after deposit for {user_id}: {new_balance} USDC (50+ deposited: {has_deposited_50})")
         
         logger.info(f"Processed deposit of {amount} USDC for user {user_id}")
         return transaction
@@ -425,7 +415,7 @@ class UserService:
                     user_id=user_id,
                     amount=float(amount),
                     to_address=to_address,
-                    positions_to_close=[p.nft_token_id for p in positions_to_close],  # Tell agent which positions to close on-chain
+                    positions_to_close=[int(p.nft_token_id) for p in positions_to_close if p.nft_token_id],  # Ensure NFT IDs are integers
                     withdraw_all=withdraw_all
                 )
                 
@@ -462,6 +452,9 @@ class UserService:
             },
             created_at=datetime.now(timezone.utc)
         )
+        
+        # Check and update deposit flag after withdrawal
+        await self.check_and_update_deposit_flag(user_id)
         
         logger.info(f"Withdrawal request processed for {amount} USDC from user {user_id} - watcher will create transaction record")
         return transaction
@@ -1112,6 +1105,7 @@ class UserService:
         closed_transactions = result_closed.scalars().all()
         
         realized_pnl = Decimal(0)
+        total_closed_investment = Decimal(0)  # Track total investment for closed positions
         
         for close_tx in closed_transactions:
             if not close_tx.event_data:
@@ -1143,6 +1137,9 @@ class UserService:
                 usdc_returned = Decimal(str(created_tx.event_data.get('usdc_returned', 0)))
                 net_invested = amount_invested - usdc_returned
                 
+                # Track total investment for percentage calculation
+                total_closed_investment += net_invested
+                
                 # Calculate PnL for this position
                 position_pnl = total_received - net_invested
                 realized_pnl += position_pnl
@@ -1157,6 +1154,7 @@ class UserService:
         
         # Calculate unrealized PNL from active positions
         unrealized_pnl = Decimal(0)
+        total_active_investment = Decimal(0)  # Track total investment for active positions
         
         for position in active_positions:
             try:
@@ -1194,6 +1192,9 @@ class UserService:
                         net_entry_amount = position.entry_amount_usdc or position_current_value
                         logger.warning(f"No POSITION_CREATED tx found for position {position.nft_token_id}, using fallback: {net_entry_amount}")
                     
+                    # Track total active investment
+                    total_active_investment += net_entry_amount
+                    
                     # Calculate unrealized PNL for this position
                     position_unrealized_pnl = position_current_value - net_entry_amount
                     unrealized_pnl += position_unrealized_pnl
@@ -1221,6 +1222,9 @@ class UserService:
                         # Fallback: if no transaction found, use position entry or assume current value
                         net_entry_amount = position.entry_amount_usdc or position_current_value
                         logger.warning(f"No POSITION_CREATED tx found for position {position.nft_token_id}, using fallback: {net_entry_amount}")
+                    
+                    # Track total active investment
+                    total_active_investment += net_entry_amount
                     
                     position_unrealized_pnl = cached_value - net_entry_amount
                     unrealized_pnl += position_unrealized_pnl
@@ -1282,18 +1286,17 @@ class UserService:
         # Commit any position value updates
         await self.db.commit()
         
-        # Calculate percentages based on total deposits (not net)
-        # This represents the total capital the user has deposited
-        # Using total deposits (not net) for PnL calculation as per user feedback
-        base_for_pnl = total_deposits
-        
-        # Calculate percentages
-        if base_for_pnl > 0:
-            # Both realized and unrealized PnL percentages should be based on total deposits
-            realized_pnl_percentage = (realized_pnl / base_for_pnl) * Decimal(100)
-            unrealized_pnl_percentage = (unrealized_pnl / base_for_pnl) * Decimal(100)
+        # Calculate percentages based on actual invested amounts for each PnL type
+        # Realized PnL % = realized PnL / total investment in closed positions
+        if total_closed_investment > 0:
+            realized_pnl_percentage = (realized_pnl / total_closed_investment) * Decimal(100)
         else:
             realized_pnl_percentage = Decimal(0)
+        
+        # Unrealized PnL % = unrealized PnL / total investment in active positions
+        if total_active_investment > 0:
+            unrealized_pnl_percentage = (unrealized_pnl / total_active_investment) * Decimal(100)
+        else:
             unrealized_pnl_percentage = Decimal(0)
         
         # Update user PnL values

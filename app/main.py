@@ -61,13 +61,16 @@ async def lifespan(app: FastAPI):
                         balance = await user_service.get_user_balance(user.user_id)
                         
                         if balance and balance > 0:
-                            # Publish balance event to trigger agent startup if balance >= 10
+                            # Check if user has deposited 50 USDC
+                            has_deposited_50 = user.has_deposited_50_usdc if hasattr(user, 'has_deposited_50_usdc') else False
+                            # Publish balance event to trigger agent startup if requirements met
                             await agent_service.publish_balance_event(
                                 user_id=user.user_id,
                                 balance=float(balance),
-                                event_type='startup_check'
+                                event_type='startup_check',
+                                has_deposited_50_usdc=has_deposited_50
                             )
-                            logger.info(f"Published startup balance event for {user.user_id}: {balance} USDC")
+                            logger.info(f"Published startup balance event for {user.user_id}: {balance} USDC (50+ deposited: {has_deposited_50})")
                     except Exception as e:
                         logger.error(f"Error publishing balance event for {user.user_id}: {e}")
                 

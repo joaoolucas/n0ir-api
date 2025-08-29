@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import List, TYPE_CHECKING
-from sqlalchemy import Column, String, DateTime, Numeric, Index, Integer
+from sqlalchemy import Column, String, DateTime, Numeric, Index, Integer, Boolean
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship, Mapped
 from app.database.base import Base
@@ -30,6 +30,9 @@ class User(Base):
     total_deposits_usdc = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
     total_withdrawals_usdc = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
     last_scanned_block = Column(Integer, nullable=True)
+    
+    # Agent startup requirement tracking
+    has_deposited_50_usdc = Column(Boolean, default=False, nullable=False)
     
     # PnL tracking fields
     unrealized_pnl_usd = Column(Numeric(precision=20, scale=2), default=0, nullable=False)

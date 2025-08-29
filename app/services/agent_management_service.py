@@ -386,7 +386,8 @@ class AgentManagementService:
         self, 
         user_id: str, 
         balance: float,
-        event_type: str = 'balance_changed'
+        event_type: str = 'balance_changed',
+        has_deposited_50_usdc: bool = False
     ) -> bool:
         """Publish a balance change event to trigger agent lifecycle management.
         
@@ -394,6 +395,7 @@ class AgentManagementService:
             user_id: User's wallet address
             balance: New balance amount
             event_type: Type of event ('deposit', 'withdrawal', or 'balance_changed')
+            has_deposited_50_usdc: Whether user has ever deposited 50+ USDC
         
         Returns:
             True if event was published successfully
@@ -407,13 +409,14 @@ class AgentManagementService:
             'user_id': user_id,
             'balance': str(balance),
             'event_type': event_type,
+            'has_deposited_50_usdc': has_deposited_50_usdc,
             'timestamp': datetime.utcnow().isoformat()
         }
         
         try:
             # Publish to balance change channel
             await self.async_redis_client.publish('user:balance:changed', json.dumps(event_data))
-            logger.info(f"Published balance event for {user_id}: {event_type} -> {balance} USDC")
+            logger.info(f"Published balance event for {user_id}: {event_type} -> {balance} USDC (50+ deposited: {has_deposited_50_usdc})")
             return True
         except Exception as e:
             logger.error(f"Error publishing balance event: {e}")

@@ -294,7 +294,7 @@ async def create_user(
             logger.warning(f"Failed to create CDP wallet for {request.user_id}: {wallet_result.get('error')}")
             # Continue with pending address
         
-        logger.info(f"User {request.user_id} created successfully. Agent will auto-start when balance > {10} USDC")
+        logger.info(f"User {request.user_id} created successfully. Agent will auto-start when balance >= 50 USDC")
         
         return UserResponse.model_validate(user)
         
