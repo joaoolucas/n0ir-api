@@ -415,7 +415,7 @@ class UserService:
                     user_id=user_id,
                     amount=float(amount),
                     to_address=to_address,
-                    positions_to_close=[p.nft_token_id for p in positions_to_close],  # Tell agent which positions to close on-chain
+                    positions_to_close=[int(p.nft_token_id) for p in positions_to_close if p.nft_token_id],  # Ensure NFT IDs are integers
                     withdraw_all=withdraw_all
                 )
                 
