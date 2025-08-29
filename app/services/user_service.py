@@ -199,28 +199,32 @@ class UserService:
         return transaction
     
     async def check_and_update_deposit_flag(self, user_id: str) -> bool:
-        """Check if user has deposited 50 USDC and update flag if needed.
+        """Check if user has net deposits of 50 USDC and update flag if needed.
         
         Returns:
-            True if user has deposited 50 USDC (ever), False otherwise
+            True if user has net deposits >= 50 USDC, False otherwise
         """
         user = await self.get_user(user_id)
         if not user:
             return False
         
-        # If already marked, just return True
-        if user.has_deposited_50_usdc:
-            return True
-        
-        # Check total deposits
+        # Calculate net deposits (deposits minus withdrawals)
         total_deposits = Decimal(str(user.total_deposits_usdc or 0))
-        if total_deposits >= Decimal('50'):
-            user.has_deposited_50_usdc = True
-            await self.db.commit()
-            logger.info(f"User {user_id} marked as having deposited 50+ USDC (total: {total_deposits})")
-            return True
+        total_withdrawals = Decimal(str(user.total_withdrawals_usdc or 0))
+        net_deposits = total_deposits - total_withdrawals
         
-        return False
+        # Update flag based on net deposits
+        should_have_flag = net_deposits >= Decimal('50')
+        
+        if should_have_flag != user.has_deposited_50_usdc:
+            user.has_deposited_50_usdc = should_have_flag
+            await self.db.commit()
+            logger.info(
+                f"User {user_id} 50+ USDC flag {'granted' if should_have_flag else 'revoked'}: "
+                f"net deposits = {net_deposits} USDC (deposits: {total_deposits}, withdrawals: {total_withdrawals})"
+            )
+        
+        return should_have_flag
     
     async def get_user_balance(self, user_id: str) -> Decimal:
         """Calculate user's current USDC balance from transactions."""
@@ -491,6 +495,9 @@ class UserService:
             },
             created_at=datetime.now(timezone.utc)
         )
+        
+        # Check and update deposit flag after withdrawal
+        await self.check_and_update_deposit_flag(user_id)
         
         logger.info(f"Withdrawal request processed for {amount} USDC from user {user_id} - watcher will create transaction record")
         return transaction
