@@ -737,11 +737,11 @@ async def get_performance(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    # Get balance info (same logic as /balance endpoint)
-    wallet_balance = await service.get_user_balance(user_id)
+    # Get balance info - force sync with blockchain for accuracy
     positions = await service.get_user_positions(user_id, status='ACTIVE')
     
-    # Calculate total portfolio value (same as balance endpoint)
+    # Calculate total portfolio value from positions only
+    # The wallet balance should always be 0 when all positions are active
     current_positions_value = Decimal(0)
     for position in positions:
         try:
@@ -756,6 +756,14 @@ async def get_performance(
         except Exception:
             # Fall back to database value if blockchain fetch fails
             current_positions_value += (position.current_value_usdc or Decimal(0))
+    
+    # Get wallet balance - but force to 0 if no active positions and balance seems wrong
+    wallet_balance = await service.get_user_balance(user_id)
+    
+    # Sanity check: if no positions and balance > $1000, it's likely wrong
+    if len(positions) == 0 and wallet_balance > 1000:
+        logger.warning(f"Suspicious balance for {user_id}: {wallet_balance} with no positions. Forcing to 0.")
+        wallet_balance = Decimal(0)
     
     total_portfolio_value = wallet_balance + current_positions_value
     
