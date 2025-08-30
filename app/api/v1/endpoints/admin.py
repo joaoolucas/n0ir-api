@@ -138,3 +138,135 @@ async def fix_all_balances(
         "fixed": fixed_count,
         "errors": errors
     }
+
+@router.post("/fix-position-tokens")
+async def fix_position_tokens(
+    db: AsyncSession = Depends(get_db)
+):
+    """Fix positions with missing token addresses by fetching from blockchain."""
+    from app.core.positions_service import positions_service
+    from app.database.models import Position
+    
+    # Get all positions with missing token addresses
+    result = await db.execute(text("""
+        SELECT nft_token_id, user_id, pool_address
+        FROM positions
+        WHERE (token0_address IS NULL OR token0_address = '' 
+               OR token1_address IS NULL OR token1_address = '')
+        AND status = 'ACTIVE'
+    """))
+    
+    positions = result.fetchall()
+    fixed_count = 0
+    errors = []
+    
+    logger.info(f"Found {len(positions)} positions with missing token addresses")
+    
+    for position in positions:
+        token_id = position.nft_token_id
+        try:
+            # Fetch position details from blockchain
+            position_info = await positions_service.get_position_by_id(token_id)
+            
+            # Update the position with token addresses
+            if position_info.token0 and position_info.token1:
+                await db.execute(text("""
+                    UPDATE positions
+                    SET token0_address = :token0,
+                        token1_address = :token1,
+                        tick_spacing = :tick_spacing
+                    WHERE nft_token_id = :token_id
+                """), {
+                    "token0": position_info.token0.lower(),
+                    "token1": position_info.token1.lower(),
+                    "tick_spacing": position_info.tick_spacing or 100,
+                    "token_id": token_id
+                })
+                fixed_count += 1
+                logger.info(f"Fixed position {token_id} with tokens {position_info.token0[:10]}.../{position_info.token1[:10]}...")
+            else:
+                errors.append({
+                    "token_id": token_id,
+                    "error": "No token addresses returned from blockchain"
+                })
+        except Exception as e:
+            errors.append({
+                "token_id": token_id,
+                "error": str(e)
+            })
+            logger.error(f"Failed to fix position {token_id}: {e}")
+    
+    await db.commit()
+    
+    return {
+        "total_positions": len(positions),
+        "fixed": fixed_count,
+        "errors": errors
+    }
+
+@router.post("/fix-position/{token_id}")
+async def fix_single_position(
+    token_id: int,
+    db: AsyncSession = Depends(get_db)
+):
+    """Fix a single position's token addresses by fetching from blockchain."""
+    from app.core.positions_service import positions_service
+    from app.database.models import Position
+    
+    # Check if position exists
+    result = await db.execute(select(Position).where(Position.nft_token_id == token_id))
+    position = result.scalar_one_or_none()
+    
+    if not position:
+        raise HTTPException(status_code=404, detail="Position not found")
+    
+    try:
+        # Fetch position details from blockchain
+        position_info = await positions_service.get_position_by_id(token_id)
+        
+        old_token0 = position.token0_address
+        old_token1 = position.token1_address
+        
+        # Update the position with all available data
+        if position_info.token0 and position_info.token1:
+            position.token0_address = position_info.token0.lower()
+            position.token1_address = position_info.token1.lower()
+            position.tick_spacing = position_info.tick_spacing or 100
+            position.tick_lower = position_info.tick_lower
+            position.tick_upper = position_info.tick_upper
+            position.staked = position_info.staked
+            position.gauge_address = position_info.gauge_address or ''
+            
+            # Update position data JSON
+            if not position.position_data:
+                position.position_data = {}
+            
+            position.position_data['in_range'] = position_info.in_range
+            position.position_data['current_tick'] = position_info.current_tick
+            
+            await db.commit()
+            
+            logger.info(f"Fixed position {token_id}: tokens {old_token0} -> {position_info.token0}, {old_token1} -> {position_info.token1}")
+            
+            return {
+                "token_id": token_id,
+                "old_token0": old_token0,
+                "old_token1": old_token1,
+                "new_token0": position_info.token0,
+                "new_token1": position_info.token1,
+                "tick_spacing": position_info.tick_spacing,
+                "staked": position_info.staked,
+                "in_range": position_info.in_range
+            }
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=f"No token addresses returned from blockchain for position {token_id}"
+            )
+            
+    except Exception as e:
+        logger.error(f"Failed to fix position {token_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fix position: {str(e)}"
+        )
