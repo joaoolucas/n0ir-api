@@ -765,9 +765,11 @@ async def get_performance(
             position_info = await positions_service.get_position_by_id(position.nft_token_id)
             current_value_usd = Decimal(str(position_info.current_value_usd or 0))
             unclaimed_fees_usd = Decimal(str(position_info.unclaimed_fees_usd or 0))
+            # current_value_usd already includes the position's liquidity value
+            # unclaimed_fees_usd already includes AERO rewards converted to USD
             position_total = current_value_usd + unclaimed_fees_usd
-            position_total += (position.rewards_earned_usdc or Decimal(0))
-            position_total += (position.fees_earned_usdc or Decimal(0))
+            # Don't add fees_earned_usdc and rewards_earned_usdc as they're historical totals
+            # and would double-count with current values
             current_positions_value += position_total
         except Exception:
             # Fall back to database value if blockchain fetch fails
