@@ -149,7 +149,7 @@ async def fix_position_tokens(
     
     # Get all positions with missing token addresses
     result = await db.execute(text("""
-        SELECT nft_token_id, user_id, pool_address
+        SELECT token_id, user_id, pool_address
         FROM positions
         WHERE (token0_address IS NULL OR token0_address = '' 
                OR token1_address IS NULL OR token1_address = '')
@@ -163,7 +163,7 @@ async def fix_position_tokens(
     logger.info(f"Found {len(positions)} positions with missing token addresses")
     
     for position in positions:
-        token_id = position.nft_token_id
+        token_id = position.token_id
         try:
             # Fetch position details from blockchain
             position_info = await positions_service.get_position_by_id(token_id)
@@ -175,7 +175,7 @@ async def fix_position_tokens(
                     SET token0_address = :token0,
                         token1_address = :token1,
                         tick_spacing = :tick_spacing
-                    WHERE nft_token_id = :token_id
+                    WHERE token_id = :token_id
                 """), {
                     "token0": position_info.token0.lower(),
                     "token1": position_info.token1.lower(),
@@ -214,7 +214,7 @@ async def fix_single_position(
     from app.database.models import Position
     
     # Check if position exists
-    result = await db.execute(select(Position).where(Position.nft_token_id == token_id))
+    result = await db.execute(select(Position).where(Position.token_id == token_id))
     position = result.scalar_one_or_none()
     
     if not position:
