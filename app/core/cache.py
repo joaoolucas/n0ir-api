@@ -95,9 +95,18 @@ class CacheManager:
         key = f"price:{address.lower()}"
         return await self.cache.get(key)
     
+    async def get_token_price_fallback(self, address: str) -> Optional[float]:
+        """Get the last valid price for a token (fallback cache)."""
+        key = f"price_fallback:{address.lower()}"
+        return await self.cache.get(key)
+    
     async def set_token_price(self, address: str, price: float) -> None:
         key = f"price:{address.lower()}"
         await self.cache.set(key, price, settings.cache_ttl_token_prices)
+        # Also store as last valid price with much longer TTL (7 days)
+        if price > 0:
+            fallback_key = f"price_fallback:{address.lower()}"
+            await self.cache.set(fallback_key, price, 7 * 24 * 3600)
     
     async def get_token_prices(self, addresses: list[str]) -> Dict[str, Optional[float]]:
         prices = {}
