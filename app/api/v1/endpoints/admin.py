@@ -1,10 +1,9 @@
 """Admin endpoints for system maintenance."""
 
 from decimal import Decimal
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
-from typing import Optional
 
 from app.database.session import get_db
 from app.core.config import settings
@@ -12,25 +11,10 @@ from loguru import logger
 
 router = APIRouter()
 
-async def verify_admin_token(authorization: Optional[str] = Header(None)) -> bool:
-    """Verify admin authorization."""
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Authorization required")
-    
-    # Check for Bearer token
-    if authorization.startswith("Bearer "):
-        token = authorization[7:]
-        # Use the API_BEARER_TOKEN for admin access
-        if token == settings.API_BEARER_TOKEN:
-            return True
-    
-    raise HTTPException(status_code=403, detail="Invalid authorization")
-
 @router.post("/fix-balance/{user_id}")
 async def fix_user_balance(
     user_id: str,
-    db: AsyncSession = Depends(get_db),
-    _: bool = Depends(verify_admin_token)
+    db: AsyncSession = Depends(get_db)
 ):
     """Recalculate user balance from transaction history."""
     
@@ -127,8 +111,7 @@ async def fix_user_balance(
 
 @router.post("/fix-all-balances")
 async def fix_all_balances(
-    db: AsyncSession = Depends(get_db),
-    _: bool = Depends(verify_admin_token)
+    db: AsyncSession = Depends(get_db)
 ):
     """Fix balances for all users."""
     
@@ -145,7 +128,7 @@ async def fix_all_balances(
         user_id = user.user_id
         try:
             # Fix each user's balance
-            await fix_user_balance(user_id, db, True)
+            await fix_user_balance(user_id, db)
             fixed_count += 1
         except Exception as e:
             errors.append({"user_id": user_id, "error": str(e)})

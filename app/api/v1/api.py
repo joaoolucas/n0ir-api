@@ -54,9 +54,9 @@ api_router.include_router(
     dependencies=[Depends(verify_bearer_token)]
 )
 
-# Admin endpoints (has its own auth)
 api_router.include_router(
     admin.router,
     prefix="/admin",
-    tags=["Admin"]
+    tags=["Admin"],
+    dependencies=[Depends(verify_bearer_token)]
 )
