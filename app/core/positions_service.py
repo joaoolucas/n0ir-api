@@ -304,7 +304,7 @@ class PositionsService:
         return self._sugar
     
     async def _get_token_price_usd(self, token_address: str) -> float:
-        """Get token price in USD using pools_service."""
+        """Get token price in USD using pools_service with fallback to last valid price."""
         from app.core.pools_service import pools_service
         
         # Use pools_service to get the price (it has DexScreener integration)
@@ -312,7 +312,13 @@ class PositionsService:
         price = prices.get(token_address.lower(), 0.0)
         
         if price == 0.0:
-            logger.warning(f"Could not determine price for token {token_address}")
+            # Try to get the last valid price from fallback cache
+            fallback_price = await cache_manager.get_token_price_fallback(token_address)
+            if fallback_price and fallback_price > 0:
+                logger.warning(f"Could not determine current price for token {token_address}, using last valid price: ${fallback_price}")
+                return fallback_price
+            else:
+                logger.warning(f"Could not determine price for token {token_address} and no fallback available")
         else:
             logger.info(f"Got price for {token_address}: ${price}")
         
