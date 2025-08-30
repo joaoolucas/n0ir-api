@@ -475,12 +475,22 @@ class UserService:
         # Get active positions
         active_positions = await self.get_user_positions(user_id, status='ACTIVE')
         
-        # Calculate total positions value
+        # Calculate total positions value and AERO rewards
         positions_value = Decimal(0)
+        total_aero_rewards = Decimal(0)
         if active_positions:
             for position in active_positions:
                 # Use current_value_usdc from database as estimate
                 positions_value += position.current_value_usdc or position.entry_amount_usdc
+                # Add unclaimed AERO rewards if any
+                if position.position_data and 'unclaimed_rewards_aero' in position.position_data:
+                    # Convert AERO rewards to USDC estimate (rough conversion)
+                    aero_value_usdc = Decimal(str(position.position_data['unclaimed_rewards_aero'])) * Decimal("10")  # Rough AERO price
+                    total_aero_rewards += aero_value_usdc
+        
+        # Calculate n0ir protocol fee on AERO rewards (2%)
+        noir_protocol_fee = total_aero_rewards * Decimal("0.02") if total_aero_rewards > 0 else Decimal(0)
+        net_aero_rewards = total_aero_rewards - noir_protocol_fee
         
         # Determine if positions need to be closed
         requires_closing = wallet_balance < amount
@@ -494,7 +504,7 @@ class UserService:
         
         # Calculate estimated available after closing
         if requires_closing:
-            estimated_available = wallet_balance + positions_value - estimated_gas - estimated_slippage
+            estimated_available = wallet_balance + positions_value + net_aero_rewards - estimated_gas - estimated_slippage
         else:
             estimated_available = wallet_balance
         
@@ -504,10 +514,11 @@ class UserService:
         # Generate warning message
         warning_message = None
         if requires_closing:
+            fee_msg = f" A 2% protocol fee ({noir_protocol_fee:.4f} USDC) applies to AERO rewards." if noir_protocol_fee > 0 else ""
             if estimated_slippage > 0:
-                warning_message = f"This withdrawal requires closing {positions_to_close} position(s). Estimated slippage: {estimated_slippage:.4f} USDC"
+                warning_message = f"This withdrawal requires closing {positions_to_close} position(s). Estimated slippage: {estimated_slippage:.4f} USDC.{fee_msg}"
             else:
-                warning_message = f"This withdrawal requires closing {positions_to_close} position(s)"
+                warning_message = f"This withdrawal requires closing {positions_to_close} position(s).{fee_msg}"
         if not can_withdraw:
             warning_message = f"Insufficient funds. Available after closing: {estimated_available:.6f} USDC (includes {estimated_slippage:.4f} USDC slippage)"
         
@@ -516,6 +527,9 @@ class UserService:
             "wallet_balance": wallet_balance,
             "positions_to_close": positions_to_close,
             "positions_value": positions_value if requires_closing else Decimal(0),
+            "aero_rewards_gross": total_aero_rewards if requires_closing else Decimal(0),
+            "noir_protocol_fee": noir_protocol_fee if requires_closing else Decimal(0),
+            "aero_rewards_net": net_aero_rewards if requires_closing else Decimal(0),
             "estimated_gas_fees": estimated_gas,
             "estimated_slippage": estimated_slippage,
             "estimated_available": estimated_available,
