@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
 from typing import Optional
 
-from app.db.connection import get_db
+from app.db.database import get_db
 from app.core.config import settings
 from loguru import logger
 
