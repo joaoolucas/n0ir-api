@@ -63,8 +63,8 @@ async def fix_migration_version():
         print(f"Error fixing migration: {e}")
         return False
 
-async def fix_missing_column():
-    """Add the missing has_deposited_50_usdc column directly"""
+async def fix_missing_columns():
+    """Add all missing columns to users table"""
     
     # Get database URL from environment
     db_url = os.getenv("DATABASE_URL")
@@ -81,45 +81,56 @@ async def fix_missing_column():
         engine = create_async_engine(db_url)
         
         async with engine.begin() as conn:
-            # Check if column exists
-            result = await conn.execute(text("""
-                SELECT EXISTS (
-                    SELECT FROM information_schema.columns 
-                    WHERE table_name = 'users' 
-                    AND column_name = 'has_deposited_50_usdc'
-                )
-            """))
-            column_exists = result.scalar()
+            # List of columns to check and add if missing
+            columns_to_add = [
+                ("has_deposited_50_usdc", "BOOLEAN NOT NULL DEFAULT FALSE"),
+                ("agent_started_at", "TIMESTAMP WITH TIME ZONE"),
+                ("agent_stopped_at", "TIMESTAMP WITH TIME ZONE"),
+                ("last_balance_check", "TIMESTAMP WITH TIME ZONE"),
+                ("agent_metadata", "JSONB"),
+                ("created_at", "TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP"),
+                ("updated_at", "TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP")
+            ]
             
-            if column_exists:
-                print("✅ Column has_deposited_50_usdc already exists")
-                await engine.dispose()
-                return True
+            for column_name, column_type in columns_to_add:
+                # Check if column exists
+                result = await conn.execute(text(f"""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.columns 
+                        WHERE table_name = 'users' 
+                        AND column_name = '{column_name}'
+                    )
+                """))
+                column_exists = result.scalar()
+                
+                if column_exists:
+                    print(f"✅ Column {column_name} already exists")
+                else:
+                    print(f"Adding {column_name} column...")
+                    
+                    # Add the column
+                    await conn.execute(text(f"""
+                        ALTER TABLE users 
+                        ADD COLUMN {column_name} {column_type}
+                    """))
+                    
+                    print(f"✅ Successfully added {column_name} column")
             
-            print("Adding has_deposited_50_usdc column...")
-            
-            # Add the column
-            await conn.execute(text("""
-                ALTER TABLE users 
-                ADD COLUMN has_deposited_50_usdc BOOLEAN NOT NULL DEFAULT FALSE
-            """))
-            
-            print("Updating existing users based on net deposits...")
-            
-            # Update existing users based on their NET deposits
+            # Special handling for has_deposited_50_usdc - update based on net deposits
+            print("Updating has_deposited_50_usdc based on net deposits...")
             await conn.execute(text("""
                 UPDATE users 
                 SET has_deposited_50_usdc = TRUE 
                 WHERE (total_deposits_usdc - total_withdrawals_usdc) >= 50
             """))
             
-            print("✅ Successfully added has_deposited_50_usdc column")
+            print("✅ All missing columns have been added")
         
         await engine.dispose()
         return True
         
     except Exception as e:
-        print(f"❌ Error adding column: {e}")
+        print(f"❌ Error adding columns: {e}")
         return False
 
 async def main():
@@ -132,11 +143,11 @@ async def main():
         print("Failed to fix migration versions")
         sys.exit(1)
     
-    print("\n=== Fixing missing has_deposited_50_usdc column ===")
-    success = await fix_missing_column()
+    print("\n=== Fixing missing columns in users table ===")
+    success = await fix_missing_columns()
     
     if not success:
-        print("Failed to fix missing column")
+        print("Failed to fix missing columns")
         # Don't exit, continue with migrations
     
     print("\n=== Running Alembic migrations ===")
