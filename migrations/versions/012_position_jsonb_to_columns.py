@@ -200,8 +200,8 @@ def upgrade() -> None:
     # Fix status values to match enum (ACTIVE -> active, CLOSED -> closed, etc.)
     op.execute("""
         UPDATE positions
-        SET status = LOWER(status)
-        WHERE status IN ('ACTIVE', 'CLOSED', 'LIQUIDATED');
+        SET status = LOWER(status::text)::positionstatus
+        WHERE status::text IN ('ACTIVE', 'CLOSED', 'LIQUIDATED');
     """)
     
     print("Creating indexes for new columns...")
