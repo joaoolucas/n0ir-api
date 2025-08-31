@@ -525,7 +525,8 @@ async def get_balance(
     available_balance = wallet_balance - pending_withdrawals_amount
     
     # Calculate total portfolio value (wallet + positions)
-    total_portfolio_value = wallet_balance + current_positions_value
+    # Use Decimal consistently for precise financial math
+    total_portfolio_value = Decimal(str(wallet_balance)) + current_positions_value
     
     # Balance endpoint now only returns portfolio balances without PnL calculations
     # PnL calculations are available through the dedicated /pnl endpoint
@@ -738,9 +739,10 @@ async def get_performance(
 ):
     """Get simplified user performance metrics.
     
-    Returns key metrics aggregated from other endpoints:
-    - balance from /balance endpoint (total_portfolio_value_usdc)
-    - pnl from /pnl endpoint (unrealized values)
+    Returns key metrics:
+    - balance: wallet + current positions (real-time when possible)
+    - pnl_usdc: balance minus net deposits (deposits - withdrawals)
+    - pnl_pct: pnl_usdc / net deposits
     - apr and active positions count
     """
     service = UserService(db)
@@ -791,7 +793,8 @@ async def get_performance(
     else:
         wallet_balance = await service.get_user_balance(user_id)
     
-    total_portfolio_value = wallet_balance + current_positions_value
+    # Use Decimal consistently for precise financial math
+    total_portfolio_value = Decimal(str(wallet_balance)) + current_positions_value
     
     # Get PnL info (same logic as /pnl endpoint)
     await service.recalculate_user_pnl(user_id)
@@ -824,13 +827,17 @@ async def get_performance(
             # Fallback to 0 if strategy service fails
             apr = 0.0
     
+    # Calculate real (net) PnL relative to net deposits
+    net_deposits = Decimal(str(user.total_deposits_usdc or 0)) - Decimal(str(user.total_withdrawals_usdc or 0))
+    real_pnl_usdc = total_portfolio_value - net_deposits
+    real_pnl_pct = (real_pnl_usdc / net_deposits * Decimal(100)) if net_deposits > 0 else Decimal(0)
+
     return PerformanceResponse(
         apr=apr,
         balance=total_portfolio_value,
-        pnl_usdc=user.unrealized_pnl_usdc,
-        pnl_pct=user.unrealized_pnl_percentage,
+        pnl_usdc=real_pnl_usdc,
+        pnl_pct=real_pnl_pct,
         active_positions=len(positions)
     )
 
 # NOTE: Protocol fees endpoint removed - fees are included in other endpoints like /pnl
-
