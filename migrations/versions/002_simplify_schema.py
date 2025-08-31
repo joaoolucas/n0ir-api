@@ -89,10 +89,11 @@ def upgrade():
     op.execute("ALTER TYPE transactiontype_new RENAME TO transactiontype")
     
     # 7. Drop old indexes if they exist
-    try:
+    connection = op.get_bind()
+    inspector = sa.inspect(connection)
+    indexes = inspector.get_indexes('users')
+    if any(idx['name'] == 'idx_user_cdp_owner' for idx in indexes):
         op.drop_index('idx_user_cdp_owner', table_name='users')
-    except:
-        pass  # Index might not exist in clean DB
 
 
 def downgrade():
