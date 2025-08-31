@@ -47,7 +47,19 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
         position_created_tx = result.scalar_one_or_none()
         
         if position_created_tx and position_created_tx.event_data:
-            amount = Decimal(str(position_created_tx.event_data.get('amount_usdc', 0)))
+            # Prefer explicit amount_usdc if present, otherwise fall back to usdcIn
+            amt_field = position_created_tx.event_data.get('amount_usdc')
+            if amt_field is None:
+                # usdcIn may be raw base units, convert when needed
+                raw_in = position_created_tx.event_data.get('usdcIn', 0)
+                try:
+                    raw_in = Decimal(str(raw_in))
+                except Exception:
+                    raw_in = Decimal(0)
+                # Heuristic: if very large, divide by 1e6
+                amount = raw_in / Decimal(1_000_000) if raw_in > 1000 else raw_in
+            else:
+                amount = Decimal(str(amt_field))
             usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
             net_entry_amount = amount - usdc_returned
     
