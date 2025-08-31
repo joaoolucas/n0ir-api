@@ -70,6 +70,19 @@ def upgrade() -> None:
     op.execute("""
         DO $$
         BEGIN
+            -- Ensure token_id column exists as primary key
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                          WHERE table_name = 'positions' AND column_name = 'token_id') THEN
+                -- Check if position_id exists and rename it
+                IF EXISTS (SELECT 1 FROM information_schema.columns 
+                          WHERE table_name = 'positions' AND column_name = 'position_id') THEN
+                    ALTER TABLE positions RENAME COLUMN position_id TO token_id;
+                ELSE
+                    -- Add token_id if neither exists
+                    ALTER TABLE positions ADD COLUMN token_id INTEGER PRIMARY KEY;
+                END IF;
+            END IF;
+            
             -- Add standardized PnL columns if missing
             IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
                           WHERE table_name = 'positions' AND column_name = 'unrealized_pnl_usd') THEN
@@ -152,7 +165,14 @@ def upgrade() -> None:
             -- Add position_id if missing
             IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
                           WHERE table_name = 'transactions' AND column_name = 'position_id') THEN
-                ALTER TABLE transactions ADD COLUMN position_id INTEGER REFERENCES positions(token_id);
+                -- Only add with foreign key if token_id exists in positions
+                IF EXISTS (SELECT 1 FROM information_schema.columns 
+                          WHERE table_name = 'positions' AND column_name = 'token_id') THEN
+                    ALTER TABLE transactions ADD COLUMN position_id INTEGER REFERENCES positions(token_id);
+                ELSE
+                    -- Add without foreign key constraint if token_id doesn't exist yet
+                    ALTER TABLE transactions ADD COLUMN position_id INTEGER;
+                END IF;
             END IF;
         END $$;
     """)
