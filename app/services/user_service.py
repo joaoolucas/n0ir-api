@@ -35,8 +35,8 @@ class UserService:
             if existing_user:
                 raise ValueError(f"User with ID {user_id} already exists")
             
-            # Check if CDP wallet address is already registered (unless it's a pending placeholder)
-            if not cdp_wallet_address.startswith("pending_"):
+            # Check if CDP wallet address is already registered (unless it's None or a pending placeholder)
+            if cdp_wallet_address and not cdp_wallet_address.startswith("pending_"):
                 stmt = select(User).where(User.cdp_wallet_address == cdp_wallet_address)
                 result = await self.db.execute(stmt)
                 if result.scalar_one_or_none():
