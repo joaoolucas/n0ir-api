@@ -130,14 +130,14 @@ def upgrade() -> None:
     """)
     
     op.execute("""
-        -- Update total withdrawals from existing WITHDRAWAL transactions
+        -- Update total withdrawals from existing WITHDRAWAL/WITHDRAW transactions
         WITH withdrawal_totals AS (
             SELECT 
                 t.user_id,
                 SUM((t.event_data->>'amount_usdc')::NUMERIC) as total_withdrawals,
                 MAX(t.block_number) as last_withdrawal_block
             FROM transactions t
-            WHERE t.tx_type = 'WITHDRAWAL'
+            WHERE t.tx_type IN ('WITHDRAWAL', 'WITHDRAW')
             AND t.status = 'CONFIRMED'
             GROUP BY t.user_id
         )
