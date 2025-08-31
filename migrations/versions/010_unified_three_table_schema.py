@@ -70,7 +70,7 @@ def upgrade() -> None:
     op.execute("""
         DO $$
         BEGIN
-            -- Ensure token_id column exists as primary key
+            -- Ensure token_id column exists
             IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
                           WHERE table_name = 'positions' AND column_name = 'token_id') THEN
                 -- Check if position_id exists and rename it
@@ -78,8 +78,8 @@ def upgrade() -> None:
                           WHERE table_name = 'positions' AND column_name = 'position_id') THEN
                     ALTER TABLE positions RENAME COLUMN position_id TO token_id;
                 ELSE
-                    -- Add token_id if neither exists
-                    ALTER TABLE positions ADD COLUMN token_id INTEGER PRIMARY KEY;
+                    -- Add token_id column without primary key (table likely already has one)
+                    ALTER TABLE positions ADD COLUMN token_id INTEGER UNIQUE;
                 END IF;
             END IF;
             
