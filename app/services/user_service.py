@@ -109,11 +109,10 @@ class UserService:
             logger.warning(f"User {user_id} not found for wallet update")
             return None
         
-        # Only update if current wallet is a pending placeholder
-        if user.cdp_wallet_address.startswith("pending_"):
+        # Only update if current wallet is None or a pending placeholder
+        if user.cdp_wallet_address is None or (user.cdp_wallet_address and user.cdp_wallet_address.startswith("pending_")):
             logger.info(f"Updating wallet for user {user_id}: {user.cdp_wallet_address} -> {wallet_address}")
             user.cdp_wallet_address = wallet_address
-            user.wallet_created_at = datetime.utcnow()
             user.updated_at = datetime.utcnow()
             await self.db.commit()
             await self.db.refresh(user)
