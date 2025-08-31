@@ -20,19 +20,25 @@ def upgrade() -> None:
     """Convert tx_type to VARCHAR to handle all transaction types flexibly."""
     
     # First, alter the column to VARCHAR to avoid enum constraints
-    op.execute("""
-        -- Convert tx_type column to VARCHAR
+    # Convert tx_type column to VARCHAR (split into separate statements for asyncpg)
+    op.execute(
+        """
         ALTER TABLE transactions 
         ALTER COLUMN tx_type TYPE VARCHAR(50) 
-        USING tx_type::text;
-        
-        -- Drop the old enum type if it exists
-        DROP TYPE IF EXISTS transactiontype CASCADE;
-        
-        -- Create index for performance
+        USING tx_type::text
+        """
+    )
+    
+    # Drop the old enum type if it exists
+    op.execute("DROP TYPE IF EXISTS transactiontype CASCADE;")
+    
+    # Create index for performance
+    op.execute(
+        """
         CREATE INDEX IF NOT EXISTS idx_transactions_tx_type_varchar 
-        ON transactions(tx_type);
-    """)
+        ON transactions(tx_type)
+        """
+    )
     
     print("✅ Converted tx_type to VARCHAR(50) for flexibility")
 
