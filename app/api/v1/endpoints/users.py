@@ -125,12 +125,9 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
         # Debug logging
         logger.info(f"Position {position.nft_token_id} enrichment: current_value_usd={current_value_usd}, unclaimed_fees_usd={unclaimed_fees_usd}")
         
-        # Calculate current_total_value: position value + unclaimed fees + database rewards/fees
+        # Calculate current_total_value: position value + unclaimed fees from blockchain
+        # Note: We don't add database fees/rewards here as they are already reflected in the blockchain values
         current_total_value = current_value_usd + unclaimed_fees_usd
-        
-        # Add any accumulated rewards/fees tracked in database (if different from blockchain)
-        current_total_value += (position.rewards_earned_usdc or Decimal(0))
-        current_total_value += (position.fees_earned_usdc or Decimal(0))
         
         position_dict['current_total_value'] = current_total_value
         
@@ -271,7 +268,7 @@ async def create_user(
         # user_id IS the owner's wallet address
         user = await user_service.create_user(
             user_id=request.user_id,  # This is the user's EOA address
-            cdp_wallet_address=f"pending_{request.user_id}",  # Unique placeholder for CDP smart wallet
+            cdp_wallet_address=None,  # Will be set when CDP wallet is created
             cdp_wallet_name=f"n0ir-agent-{request.user_id[:8]}"  # Shortened for readability
         )
         
@@ -491,10 +488,9 @@ async def get_balance(
             current_value_usd = Decimal(str(position_info.current_value_usd or 0))
             unclaimed_fees_usd = Decimal(str(position_info.unclaimed_fees_usd or 0))
             
-            # Calculate total position value: blockchain value + unclaimed fees + database rewards/fees
+            # Calculate total position value: blockchain value + unclaimed fees
+            # Note: We don't add database fees/rewards here as they are already reflected in the blockchain values
             position_total = current_value_usd + unclaimed_fees_usd
-            position_total += (position.rewards_earned_usdc or Decimal(0))
-            position_total += (position.fees_earned_usdc or Decimal(0))
             
             current_positions_value += position_total
             
@@ -529,7 +525,8 @@ async def get_balance(
     available_balance = wallet_balance - pending_withdrawals_amount
     
     # Calculate total portfolio value (wallet + positions)
-    total_portfolio_value = wallet_balance + current_positions_value
+    # Use Decimal consistently for precise financial math
+    total_portfolio_value = Decimal(str(wallet_balance)) + current_positions_value
     
     # Balance endpoint now only returns portfolio balances without PnL calculations
     # PnL calculations are available through the dedicated /pnl endpoint
@@ -742,9 +739,10 @@ async def get_performance(
 ):
     """Get simplified user performance metrics.
     
-    Returns key metrics aggregated from other endpoints:
-    - balance from /balance endpoint (total_portfolio_value_usdc)
-    - pnl from /pnl endpoint (unrealized values)
+    Returns key metrics:
+    - balance: wallet + current positions (real-time when possible)
+    - pnl_usdc: balance minus net deposits (deposits - withdrawals)
+    - pnl_pct: pnl_usdc / net deposits
     - apr and active positions count
     """
     service = UserService(db)
@@ -795,7 +793,8 @@ async def get_performance(
     else:
         wallet_balance = await service.get_user_balance(user_id)
     
-    total_portfolio_value = wallet_balance + current_positions_value
+    # Use Decimal consistently for precise financial math
+    total_portfolio_value = Decimal(str(wallet_balance)) + current_positions_value
     
     # Get PnL info (same logic as /pnl endpoint)
     await service.recalculate_user_pnl(user_id)
@@ -828,13 +827,26 @@ async def get_performance(
             # Fallback to 0 if strategy service fails
             apr = 0.0
     
+    # Calculate real (net) PnL relative to net deposits
+    # Derive deposits/withdrawals from confirmed transactions for accuracy
+    deposits_sum, withdrawals_sum = await service.get_deposit_withdrawal_totals(user_id)
+    net_deposits = deposits_sum - withdrawals_sum
+
+    # If there is no portfolio value (no wallet balance and no positions), show 0 PnL
+    # to reflect "unrealized" performance of the empty portfolio
+    if total_portfolio_value <= Decimal('0.000001'):
+        real_pnl_usdc = Decimal(0)
+        real_pnl_pct = Decimal(0)
+    else:
+        real_pnl_usdc = total_portfolio_value - net_deposits
+        real_pnl_pct = (real_pnl_usdc / net_deposits * Decimal(100)) if net_deposits > 0 else Decimal(0)
+
     return PerformanceResponse(
         apr=apr,
         balance=total_portfolio_value,
-        pnl_usdc=user.unrealized_pnl_usdc,
-        pnl_pct=user.unrealized_pnl_percentage,
+        pnl_usdc=real_pnl_usdc,
+        pnl_pct=real_pnl_pct,
         active_positions=len(positions)
     )
 
 # NOTE: Protocol fees endpoint removed - fees are included in other endpoints like /pnl
-

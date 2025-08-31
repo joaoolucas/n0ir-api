@@ -103,11 +103,11 @@ class AgentManagementService:
                         user_id = data.get('user_id')
                         logger.info(f"Message for user_id: {user_id}, channel: {message['channel']}")
                         
-                        # Handle wallet_ready event to update database
-                        if message['channel'] == 'wallet_ready':
+                        # Handle wallet_ready or wallet_created events to update database
+                        if message['channel'] in ['wallet_ready', 'wallet_created']:
                             wallet_address = data.get('wallet_address')
                             if user_id and wallet_address:
-                                logger.info(f"Received wallet_ready for user {user_id}: {wallet_address}")
+                                logger.info(f"Received {message['channel']} for user {user_id}: {wallet_address}")
                                 # Update the user's wallet address in the database
                                 try:
                                     from app.services.user_service import UserService
@@ -116,6 +116,7 @@ class AgentManagementService:
                                         user_service = UserService(db)
                                         await user_service.update_user_wallet(user_id, wallet_address)
                                         break
+                                    logger.info(f"Successfully updated wallet address in database for user {user_id}")
                                 except Exception as e:
                                     logger.error(f"Failed to update wallet address for user {user_id}: {e}")
                         

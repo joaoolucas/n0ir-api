@@ -29,10 +29,11 @@ async def health_check(request: Request):
     # Return a simple health status for now
     # We'll check pools_service later once we confirm basic connectivity
     from datetime import datetime
+    import time
     return {
         "status": "healthy",
         "network": "base",
         "block_number": 0,  # Will be updated when pools_service is working
-        "sugar_address": "0x27fc745390d1f4BaF8D184FBd97748340f786634",
-        "last_update": datetime.utcnow().isoformat()
+        "sugar_contract": "0x27fc745390d1f4BaF8D184FBd97748340f786634",
+        "last_update": int(time.time())
     }
