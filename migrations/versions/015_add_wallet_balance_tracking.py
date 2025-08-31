@@ -106,55 +106,8 @@ def upgrade() -> None:
     
     print("✅ Created balance query indexes")
     
-    # Initialize balance fields from existing transaction data if available
-    print("Initializing balance fields from existing transaction data...")
-    
-    op.execute("""
-        -- Update total deposits from existing DEPOSIT transactions
-        WITH deposit_totals AS (
-            SELECT 
-                t.user_id,
-                SUM((t.event_data->>'amount_usdc')::NUMERIC) as total_deposits,
-                MAX(t.block_number) as last_deposit_block
-            FROM transactions t
-            WHERE t.tx_type = 'DEPOSIT'
-            AND t.status = 'CONFIRMED'
-            GROUP BY t.user_id
-        )
-        UPDATE users u
-        SET 
-            total_deposits_usdc = COALESCE(dt.total_deposits, 0),
-            last_deposit_block = dt.last_deposit_block
-        FROM deposit_totals dt
-        WHERE u.user_id = dt.user_id;
-    """)
-    
-    op.execute("""
-        -- Update total withdrawals from existing WITHDRAWAL/WITHDRAW transactions
-        WITH withdrawal_totals AS (
-            SELECT 
-                t.user_id,
-                SUM((t.event_data->>'amount_usdc')::NUMERIC) as total_withdrawals,
-                MAX(t.block_number) as last_withdrawal_block
-            FROM transactions t
-            WHERE t.tx_type IN ('WITHDRAWAL', 'WITHDRAW')
-            AND t.status = 'CONFIRMED'
-            GROUP BY t.user_id
-        )
-        UPDATE users u
-        SET 
-            total_withdrawals_usdc = COALESCE(wt.total_withdrawals, 0),
-            last_withdrawal_block = wt.last_withdrawal_block
-        FROM withdrawal_totals wt
-        WHERE u.user_id = wt.user_id;
-    """)
-    
-    op.execute("""
-        -- Calculate current balance as deposits minus withdrawals
-        UPDATE users
-        SET usdc_balance = GREATEST(0, total_deposits_usdc - total_withdrawals_usdc)
-        WHERE cdp_wallet_address IS NOT NULL;
-    """)
+    # Skip initializing from transactions - database is clean
+    print("Skipping transaction-based initialization (clean database)...")
     
     print("✅ Initialized balance fields from transaction history")
     
