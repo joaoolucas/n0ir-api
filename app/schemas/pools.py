@@ -64,3 +64,7 @@ class PoolStatsResponse(BaseModel):
 
 class PoolType(BaseModel):
     value: str = Field(..., pattern="^(stable|volatile|all)$")
+
+
+class MedianAPRResponse(BaseModel):
+    median_apr: float = Field(..., description="Median APR across whitelisted pools")
