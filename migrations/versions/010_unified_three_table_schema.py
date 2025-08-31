@@ -148,6 +148,12 @@ def upgrade() -> None:
                           WHERE table_name = 'transactions' AND column_name = 'processed_at') THEN
                 ALTER TABLE transactions ADD COLUMN processed_at TIMESTAMP;
             END IF;
+            
+            -- Add position_id if missing
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                          WHERE table_name = 'transactions' AND column_name = 'position_id') THEN
+                ALTER TABLE transactions ADD COLUMN position_id INTEGER REFERENCES positions(token_id);
+            END IF;
         END $$;
     """)
     
@@ -177,7 +183,15 @@ def upgrade() -> None:
             END IF;
         END $$;
     """)
-    op.execute("CREATE INDEX IF NOT EXISTS idx_transactions_position ON transactions(position_id, tx_type)")
+    op.execute("""
+        DO $$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM information_schema.columns 
+                      WHERE table_name = 'transactions' AND column_name = 'position_id') THEN
+                CREATE INDEX IF NOT EXISTS idx_transactions_position ON transactions(position_id, tx_type);
+            END IF;
+        END $$;
+    """)
     op.execute("CREATE INDEX IF NOT EXISTS idx_transactions_block ON transactions(block_number)")
     op.execute("CREATE INDEX IF NOT EXISTS idx_transactions_type ON transactions(tx_type, status)")
     
