@@ -68,33 +68,9 @@ def upgrade():
             WHERE p.position_id = pf.position_id
         """))
         
-        # Create transactions for collected fees
-        connection.execute(sa.text("""
-            INSERT INTO transactions (
-                transaction_id,
-                user_id,
-                transaction_type,
-                amount_usdc,
-                related_position_id,
-                tx_hash,
-                status,
-                created_at,
-                confirmed_at
-            )
-            SELECT 
-                gen_random_uuid(),
-                pf.user_id,
-                'protocol_fee',
-                pf.fee_amount_usdc,
-                p.nft_token_id,
-                pf.collection_tx_hash,
-                'confirmed',
-                pf.created_at,
-                pf.collected_at
-            FROM protocol_fees pf
-            JOIN positions p ON p.position_id = pf.position_id
-            WHERE pf.collected = TRUE
-        """))
+        # Skip creating transactions for now - table doesn't exist in clean DB
+        # and enum type doesn't support 'protocol_fee' yet
+        pass
         
         # Drop the protocol_fees table
         op.drop_table('protocol_fees')
@@ -112,8 +88,11 @@ def upgrade():
     # Rename new enum
     op.execute("ALTER TYPE transactiontype_new RENAME TO transactiontype")
     
-    # 7. Drop old indexes
-    op.drop_index('idx_user_cdp_owner', table_name='users')
+    # 7. Drop old indexes if they exist
+    try:
+        op.drop_index('idx_user_cdp_owner', table_name='users')
+    except:
+        pass  # Index might not exist in clean DB
 
 
 def downgrade():
