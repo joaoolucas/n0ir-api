@@ -125,12 +125,9 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
         # Debug logging
         logger.info(f"Position {position.nft_token_id} enrichment: current_value_usd={current_value_usd}, unclaimed_fees_usd={unclaimed_fees_usd}")
         
-        # Calculate current_total_value: position value + unclaimed fees + database rewards/fees
+        # Calculate current_total_value: position value + unclaimed fees from blockchain
+        # Note: We don't add database fees/rewards here as they are already reflected in the blockchain values
         current_total_value = current_value_usd + unclaimed_fees_usd
-        
-        # Add any accumulated rewards/fees tracked in database (if different from blockchain)
-        current_total_value += (position.rewards_earned_usdc or Decimal(0))
-        current_total_value += (position.fees_earned_usdc or Decimal(0))
         
         position_dict['current_total_value'] = current_total_value
         
@@ -491,10 +488,9 @@ async def get_balance(
             current_value_usd = Decimal(str(position_info.current_value_usd or 0))
             unclaimed_fees_usd = Decimal(str(position_info.unclaimed_fees_usd or 0))
             
-            # Calculate total position value: blockchain value + unclaimed fees + database rewards/fees
+            # Calculate total position value: blockchain value + unclaimed fees
+            # Note: We don't add database fees/rewards here as they are already reflected in the blockchain values
             position_total = current_value_usd + unclaimed_fees_usd
-            position_total += (position.rewards_earned_usdc or Decimal(0))
-            position_total += (position.fees_earned_usdc or Decimal(0))
             
             current_positions_value += position_total
             
