@@ -831,8 +831,15 @@ async def get_performance(
     # Derive deposits/withdrawals from confirmed transactions for accuracy
     deposits_sum, withdrawals_sum = await service.get_deposit_withdrawal_totals(user_id)
     net_deposits = deposits_sum - withdrawals_sum
-    real_pnl_usdc = total_portfolio_value - net_deposits
-    real_pnl_pct = (real_pnl_usdc / net_deposits * Decimal(100)) if net_deposits > 0 else Decimal(0)
+
+    # If there is no portfolio value (no wallet balance and no positions), show 0 PnL
+    # to reflect "unrealized" performance of the empty portfolio
+    if total_portfolio_value <= Decimal('0.000001'):
+        real_pnl_usdc = Decimal(0)
+        real_pnl_pct = Decimal(0)
+    else:
+        real_pnl_usdc = total_portfolio_value - net_deposits
+        real_pnl_pct = (real_pnl_usdc / net_deposits * Decimal(100)) if net_deposits > 0 else Decimal(0)
 
     return PerformanceResponse(
         apr=apr,
