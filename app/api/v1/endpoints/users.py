@@ -271,7 +271,7 @@ async def create_user(
         # user_id IS the owner's wallet address
         user = await user_service.create_user(
             user_id=request.user_id,  # This is the user's EOA address
-            cdp_wallet_address=f"pending_{request.user_id}",  # Unique placeholder for CDP smart wallet
+            cdp_wallet_address=None,  # Will be set when CDP wallet is created
             cdp_wallet_name=f"n0ir-agent-{request.user_id[:8]}"  # Shortened for readability
         )
         
