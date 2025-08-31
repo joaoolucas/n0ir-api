@@ -767,23 +767,52 @@ async def get_performance(
     # Get positions first
     positions = await service.get_user_positions(user_id, status='ACTIVE')
     
-    # Calculate total portfolio value from positions
+    # Calculate total portfolio value and the net invested capital for active positions
     current_positions_value = Decimal(0)
+    net_invested_positions = Decimal(0)
     for position in positions:
+        # 1) Current value (real-time when possible)
         try:
-            # Try to get real-time value from blockchain
             position_info = await positions_service.get_position_by_id(position.nft_token_id)
             current_value_usd = Decimal(str(position_info.current_value_usd or 0))
             unclaimed_fees_usd = Decimal(str(position_info.unclaimed_fees_usd or 0))
-            # current_value_usd already includes the position's liquidity value
-            # unclaimed_fees_usd already includes AERO rewards converted to USD
             position_total = current_value_usd + unclaimed_fees_usd
-            # Don't add fees_earned_usdc and rewards_earned_usdc as they're historical totals
-            # and would double-count with current values
             current_positions_value += position_total
         except Exception:
-            # Fall back to database value if blockchain fetch fails
             current_positions_value += (position.current_value_usdc or Decimal(0))
+
+        # 2) Net entry amount (what was actually invested in this position)
+        try:
+            from sqlalchemy import select, and_
+            from app.database.models import Transaction
+            stmt = select(Transaction).where(
+                and_(
+                    Transaction.user_id == position.user_id,
+                    Transaction.tx_type == 'POSITION_CREATED',
+                    Transaction.event_data['tokenId'].astext == str(position.nft_token_id)
+                )
+            ).limit(1)
+            result = await db.execute(stmt)
+            position_created_tx = result.scalar_one_or_none()
+            if position_created_tx and position_created_tx.event_data:
+                amt_field = position_created_tx.event_data.get('amount_usdc')
+                if amt_field is None:
+                    raw_in = position_created_tx.event_data.get('usdcIn', 0)
+                    try:
+                        raw_in = Decimal(str(raw_in))
+                    except Exception:
+                        raw_in = Decimal(0)
+                    amount = raw_in / Decimal(1_000_000) if raw_in > 1000 else raw_in
+                else:
+                    amount = Decimal(str(amt_field))
+                usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
+                net_entry_amount = amount - usdc_returned
+            else:
+                net_entry_amount = Decimal(str(position.entry_amount_usdc or 0))
+        except Exception:
+            net_entry_amount = Decimal(str(position.entry_amount_usdc or 0))
+
+        net_invested_positions += net_entry_amount
     
     # Get wallet balance - prefer blockchain query for accuracy
     from app.services.blockchain_service import blockchain_service
@@ -808,9 +837,8 @@ async def get_performance(
     # Use Decimal consistently for precise financial math
     total_portfolio_value = Decimal(str(wallet_balance)) + current_positions_value
     
-    # Get PnL info (same logic as /pnl endpoint)
-    await service.recalculate_user_pnl(user_id)
-    await db.refresh(user)
+    # We want PnL relative to currently active positions only (not historical net cash flows)
+    # PnL = (wallet + current active positions value) - sum(net entry amounts of active positions)
     
     # Calculate APR - simple average of active positions
     apr = 0.0
@@ -839,19 +867,13 @@ async def get_performance(
             # Fallback to 0 if strategy service fails
             apr = 0.0
     
-    # Calculate real (net) PnL relative to net deposits
-    # Derive deposits/withdrawals from confirmed transactions for accuracy
-    deposits_sum, withdrawals_sum = await service.get_deposit_withdrawal_totals(user_id)
-    net_deposits = deposits_sum - withdrawals_sum
-
     # If there is no portfolio value (no wallet balance and no positions), show 0 PnL
-    # to reflect "unrealized" performance of the empty portfolio
-    if total_portfolio_value <= Decimal('0.000001'):
+    if total_portfolio_value <= Decimal('0.000001') or net_invested_positions <= Decimal('0.000001'):
         real_pnl_usdc = Decimal(0)
         real_pnl_pct = Decimal(0)
     else:
-        real_pnl_usdc = total_portfolio_value - net_deposits
-        real_pnl_pct = (real_pnl_usdc / net_deposits * Decimal(100)) if net_deposits > 0 else Decimal(0)
+        real_pnl_usdc = total_portfolio_value - net_invested_positions
+        real_pnl_pct = (real_pnl_usdc / net_invested_positions * Decimal(100))
 
     return PerformanceResponse(
         apr=apr,
