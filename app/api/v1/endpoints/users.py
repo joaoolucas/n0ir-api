@@ -828,7 +828,9 @@ async def get_performance(
             apr = 0.0
     
     # Calculate real (net) PnL relative to net deposits
-    net_deposits = Decimal(str(user.total_deposits_usdc or 0)) - Decimal(str(user.total_withdrawals_usdc or 0))
+    # Derive deposits/withdrawals from confirmed transactions for accuracy
+    deposits_sum, withdrawals_sum = await service.get_deposit_withdrawal_totals(user_id)
+    net_deposits = deposits_sum - withdrawals_sum
     real_pnl_usdc = total_portfolio_value - net_deposits
     real_pnl_pct = (real_pnl_usdc / net_deposits * Decimal(100)) if net_deposits > 0 else Decimal(0)
 

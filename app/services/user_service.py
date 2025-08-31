@@ -68,6 +68,32 @@ class UserService:
         stmt = select(User).where(User.user_id == user_id)
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def get_deposit_withdrawal_totals(self, user_id: str) -> tuple[Decimal, Decimal]:
+        """Compute total deposits and withdrawals from confirmed transactions.
+
+        Sums DEPOSIT and WITHDRAW/WITHDRAWAL amounts using event_data amounts
+        to avoid relying on watcher-maintained aggregates.
+        Returns (total_deposits, total_withdrawals) as Decimals.
+        """
+        stmt = select(Transaction).where(
+            Transaction.user_id == user_id,
+            Transaction.status == 'CONFIRMED',
+            Transaction.tx_type.in_(['DEPOSIT', 'WITHDRAWAL', 'WITHDRAW'])
+        )
+        result = await self.db.execute(stmt)
+        txs = result.scalars().all()
+
+        deposits = Decimal(0)
+        withdrawals = Decimal(0)
+        for tx in txs:
+            amt = Decimal(str(tx.amount_usdc or 0))
+            if tx.tx_type == 'DEPOSIT':
+                deposits += amt
+            elif tx.tx_type in ['WITHDRAWAL', 'WITHDRAW']:
+                withdrawals += amt
+
+        return deposits, withdrawals
     
     async def list_all_users(self) -> List[User]:
         """List all users."""
@@ -1015,9 +1041,11 @@ class UserService:
                 unrealized_pnl += position_unrealized_pnl
         
         # Update only unrealized PnL fields
-        total_deposits = Decimal(str(user.total_deposits_usdc or 0))
-        if total_deposits > 0:
-            unrealized_pnl_percentage = (unrealized_pnl / total_deposits) * Decimal(100)
+        # Use net deposits (deposits - withdrawals) derived from transactions
+        deposits_sum, withdrawals_sum = await self.get_deposit_withdrawal_totals(user_id)
+        net_deposits = deposits_sum - withdrawals_sum
+        if net_deposits > 0:
+            unrealized_pnl_percentage = (unrealized_pnl / net_deposits) * Decimal(100)
         else:
             unrealized_pnl_percentage = Decimal(0)
         
@@ -1052,9 +1080,8 @@ class UserService:
             logger.error(f"User {user_id} not found for PnL calculation")
             return
         
-        # Use the totals maintained by the watcher
-        total_deposits = Decimal(str(user.total_deposits_usdc or 0))
-        total_withdrawals = Decimal(str(user.total_withdrawals_usdc or 0))
+        # Use totals derived from confirmed transactions (not watcher aggregates)
+        total_deposits, total_withdrawals = await self.get_deposit_withdrawal_totals(user_id)
         
         # Calculate realized PNL as net cash flow from all transactions
         # This represents the actual profit/loss from completed trading activities
