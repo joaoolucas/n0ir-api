@@ -271,25 +271,15 @@ async def create_user(
     # Smart wallets use ERC-6492 signatures which are much longer than EOA signatures
     # So we don't validate length here - let the signature service handle it
     
-    # TEMPORARY: Skip signature verification for debugging
-    logger.warning("TEMPORARY: Signature verification bypassed for debugging")
-    # if not signature_service.verify_signature(request.message, request.signature, request.user_id):
-    #     raise HTTPException(status_code=401, detail="Invalid signature - wallet ownership verification failed")
+    if not signature_service.verify_signature(request.message, request.signature, request.user_id):
+        raise HTTPException(status_code=401, detail="Invalid signature - wallet ownership verification failed")
     
     user_service = UserService(db)
     
     # Check if user already exists
     existing_user = await user_service.get_user(request.user_id)
     if existing_user:
-        logger.info(f"User {request.user_id} already exists - returning existing user")
-        # For mobile miniapp, return existing user instead of error
-        return UserResponse(
-            user_id=existing_user.user_id,
-            cdp_wallet_address=existing_user.cdp_wallet_address,
-            cdp_wallet_name=existing_user.cdp_wallet_name,
-            created_at=existing_user.created_at,
-            message="User already exists - logged in successfully"
-        )
+        raise HTTPException(status_code=400, detail="User already exists")
     
     try:
         # Create user with wallet address as ID
@@ -370,10 +360,8 @@ async def withdraw(
         logger.info(f"Verifying withdrawal signature for {user_id}")
         logger.info(f"Signature length: {len(request.signature)} (EOA=132, Smart Wallet=1000+)")
         
-        # TEMPORARY: Skip signature verification for debugging
-        logger.warning("TEMPORARY: Withdrawal signature verification bypassed for debugging")
-        # if not signature_service.verify_signature(request.message, request.signature, user_id):
-        #     raise HTTPException(status_code=401, detail="Invalid signature - withdrawal authorization failed")
+        if not signature_service.verify_signature(request.message, request.signature, user_id):
+            raise HTTPException(status_code=401, detail="Invalid signature - withdrawal authorization failed")
         
         service = UserService(db)
         transaction = await service.withdraw_usdc(
