@@ -773,11 +773,10 @@ async def get_performance(
     # Get positions first
     positions = await service.get_user_positions(user_id, status='ACTIVE')
     
-    # Calculate total portfolio value and the net invested capital for active positions
+    # Calculate total portfolio value from current positions
     current_positions_value = Decimal(0)
-    net_invested_positions = Decimal(0)
     for position in positions:
-        # 1) Current value (real-time when possible)
+        # Current value (real-time when possible)
         try:
             position_info = await positions_service.get_position_by_id(position.nft_token_id)
             current_value_usd = Decimal(str(position_info.current_value_usd or 0))
@@ -786,39 +785,10 @@ async def get_performance(
             current_positions_value += position_total
         except Exception:
             current_positions_value += (position.current_value_usdc or Decimal(0))
-
-        # 2) Net entry amount (what was actually invested in this position)
-        try:
-            from sqlalchemy import select, and_
-            from app.database.models import Transaction
-            stmt = select(Transaction).where(
-                and_(
-                    Transaction.user_id == position.user_id,
-                    Transaction.tx_type == 'POSITION_CREATED',
-                    Transaction.event_data['tokenId'].astext == str(position.nft_token_id)
-                )
-            ).limit(1)
-            result = await db.execute(stmt)
-            position_created_tx = result.scalar_one_or_none()
-            if position_created_tx and position_created_tx.event_data:
-                amt_field = position_created_tx.event_data.get('amount_usdc')
-                if amt_field is None:
-                    raw_in = position_created_tx.event_data.get('usdcIn', 0)
-                    try:
-                        raw_in = Decimal(str(raw_in))
-                    except Exception:
-                        raw_in = Decimal(0)
-                    amount = raw_in / Decimal(1_000_000) if raw_in > 1000 else raw_in
-                else:
-                    amount = Decimal(str(amt_field))
-                usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
-                net_entry_amount = amount - usdc_returned
-            else:
-                net_entry_amount = Decimal(str(position.entry_amount_usdc or 0))
-        except Exception:
-            net_entry_amount = Decimal(str(position.entry_amount_usdc or 0))
-
-        net_invested_positions += net_entry_amount
+    
+    # Get user's net deposits (deposits - withdrawals) for accurate PnL calculation
+    total_deposits, total_withdrawals = await service.get_deposit_withdrawal_totals(user_id)
+    net_deposits = total_deposits - total_withdrawals
     
     # Get wallet balance - prefer blockchain query for accuracy
     from app.services.blockchain_service import blockchain_service
@@ -843,8 +813,8 @@ async def get_performance(
     # Use Decimal consistently for precise financial math
     total_portfolio_value = Decimal(str(wallet_balance)) + current_positions_value
     
-    # We want PnL relative to currently active positions only (not historical net cash flows)
-    # PnL = (wallet + current active positions value) - sum(net entry amounts of active positions)
+    # Calculate PnL relative to net deposits (deposits - withdrawals)
+    # PnL = (wallet + current positions value) - net deposits
     
     # Calculate APR - simple average of active positions
     apr = 0.0
@@ -873,13 +843,13 @@ async def get_performance(
             # Fallback to 0 if strategy service fails
             apr = 0.0
     
-    # If there is no portfolio value (no wallet balance and no positions), show 0 PnL
-    if total_portfolio_value <= Decimal('0.000001') or net_invested_positions <= Decimal('0.000001'):
+    # If there is no portfolio value or no net deposits, show 0 PnL
+    if total_portfolio_value <= Decimal('0.000001') or net_deposits <= Decimal('0.000001'):
         real_pnl_usdc = Decimal(0)
         real_pnl_pct = Decimal(0)
     else:
-        real_pnl_usdc = total_portfolio_value - net_invested_positions
-        real_pnl_pct = (real_pnl_usdc / net_invested_positions * Decimal(100))
+        real_pnl_usdc = total_portfolio_value - net_deposits
+        real_pnl_pct = (real_pnl_usdc / net_deposits * Decimal(100))
 
     return PerformanceResponse(
         apr=apr,
