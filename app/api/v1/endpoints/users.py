@@ -70,14 +70,17 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
     if position.status == DBPositionStatus.CLOSED:
         # For closed positions, use database values and calculate final PNL
         try:
-            # Get token info for pool name
-            token0_info = await pools_service.get_token_info(position.token0_address)
-            token1_info = await pools_service.get_token_info(position.token1_address)
-            
-            # Create pool name from token symbols  
-            token0_symbol = token0_info.get('symbol', '???')
-            token1_symbol = token1_info.get('symbol', '???')
-            position_dict['pool_name'] = f"{token0_symbol}/{token1_symbol}"
+            # Get token info for pool name, only if addresses are available
+            if position.token0_address and position.token1_address:
+                token0_info = await pools_service.get_token_info(position.token0_address)
+                token1_info = await pools_service.get_token_info(position.token1_address)
+                
+                # Create pool name from token symbols  
+                token0_symbol = token0_info.get('symbol', '???')
+                token1_symbol = token1_info.get('symbol', '???')
+                position_dict['pool_name'] = f"{token0_symbol}/{token1_symbol}"
+            else:
+                position_dict['pool_name'] = position.pool_name or "Unknown/Unknown"
         except:
             position_dict['pool_name'] = "Unknown/Unknown"
         
@@ -121,14 +124,17 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
             else:
                 raise  # Re-raise if it's a different error
         
-        # Get token info for pool name
-        token0_info = await pools_service.get_token_info(position.token0_address)
-        token1_info = await pools_service.get_token_info(position.token1_address)
-        
-        # Create pool name from token symbols  
-        token0_symbol = token0_info.get('symbol', '???')
-        token1_symbol = token1_info.get('symbol', '???')
-        position_dict['pool_name'] = f"{token0_symbol}/{token1_symbol}"
+        # Get token info for pool name, only if addresses are available
+        if position.token0_address and position.token1_address:
+            token0_info = await pools_service.get_token_info(position.token0_address)
+            token1_info = await pools_service.get_token_info(position.token1_address)
+            
+            # Create pool name from token symbols  
+            token0_symbol = token0_info.get('symbol', '???')
+            token1_symbol = token1_info.get('symbol', '???')
+            position_dict['pool_name'] = f"{token0_symbol}/{token1_symbol}"
+        else:
+            position_dict['pool_name'] = position.pool_name or "Unknown/Unknown"
         
         # Use correct values from the positions service
         current_value_usd = Decimal(str(position_info.current_value_usd or 0))
