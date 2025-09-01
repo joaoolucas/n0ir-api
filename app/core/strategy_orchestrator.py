@@ -327,7 +327,7 @@ class StrategyOrchestrator:
         """Analyze exit opportunity for a single position."""
         try:
             # Check if position is out of range or underperforming
-            exit_reason = "performance"  # Default reason
+            exit_reason = "rebalance"  # Default reason for performance-based exits
             
             if hasattr(position, 'in_range') and not position.in_range:
                 exit_reason = "range_break"
