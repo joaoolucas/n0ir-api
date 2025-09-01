@@ -771,8 +771,8 @@ async def get_performance(
     
     Returns key metrics:
     - balance: wallet + current positions (real-time when possible)
-    - pnl_usdc: balance minus net deposits (deposits - withdrawals)
-    - pnl_pct: pnl_usdc / net deposits
+    - pnl_usdc: unrealized PnL from active positions
+    - pnl_pct: unrealized PnL percentage
     - apr and active positions count
     """
     service = UserService(db)
@@ -782,10 +782,16 @@ async def get_performance(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    # Get positions first
+    # Recalculate PnL with real-time position values from blockchain (same as /pnl endpoint)
+    await service.recalculate_user_pnl(user_id)
+    
+    # Refresh user to get updated values
+    await db.refresh(user)
+    
+    # Get positions for APR calculation
     positions = await service.get_user_positions(user_id, status='ACTIVE')
     
-    # Calculate total portfolio value from current positions
+    # Calculate total portfolio value (wallet + positions)
     current_positions_value = Decimal(0)
     for position in positions:
         # Current value (real-time when possible)
@@ -797,10 +803,6 @@ async def get_performance(
             current_positions_value += position_total
         except Exception:
             current_positions_value += (position.current_value_usdc or Decimal(0))
-    
-    # Get user's net deposits (deposits - withdrawals) for accurate PnL calculation
-    total_deposits, total_withdrawals = await service.get_deposit_withdrawal_totals(user_id)
-    net_deposits = total_deposits - total_withdrawals
     
     # Get wallet balance - prefer blockchain query for accuracy
     from app.services.blockchain_service import blockchain_service
@@ -824,9 +826,6 @@ async def get_performance(
     
     # Use Decimal consistently for precise financial math
     total_portfolio_value = Decimal(str(wallet_balance)) + current_positions_value
-    
-    # Calculate PnL relative to net deposits (deposits - withdrawals)
-    # PnL = (wallet + current positions value) - net deposits
     
     # Calculate APR - simple average of active positions
     apr = 0.0
@@ -855,19 +854,13 @@ async def get_performance(
             # Fallback to 0 if strategy service fails
             apr = 0.0
     
-    # If there is no portfolio value or no net deposits, show 0 PnL
-    if total_portfolio_value <= Decimal('0.000001') or net_deposits <= Decimal('0.000001'):
-        real_pnl_usdc = Decimal(0)
-        real_pnl_pct = Decimal(0)
-    else:
-        real_pnl_usdc = total_portfolio_value - net_deposits
-        real_pnl_pct = (real_pnl_usdc / net_deposits * Decimal(100))
-
+    # Use unrealized PnL values from the recalculated user object (same as /pnl endpoint)
+    # This ensures consistency between /performance and /pnl endpoints
     return PerformanceResponse(
         apr=apr,
         balance=total_portfolio_value,
-        pnl_usdc=real_pnl_usdc,
-        pnl_pct=real_pnl_pct,
+        pnl_usdc=user.unrealized_pnl_usdc,  # Use unrealized PnL from user object
+        pnl_pct=user.unrealized_pnl_percentage,  # Use unrealized PnL percentage from user object
         active_positions=len(positions)
     )
 
