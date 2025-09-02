@@ -19,6 +19,7 @@ class TransactionType(str, enum.Enum):
     POSITION_CREATED = "POSITION_CREATED"
     POSITION_CLOSED = "POSITION_CLOSED"
     AERO_SWAP = "AERO_SWAP"
+    FEE_COLLECTION = "FEE_COLLECTION"  # Protocol fee collection transactions from historical data
 
 
 class TransactionStatus(str, enum.Enum):
@@ -173,7 +174,11 @@ class TransactionResponse(BaseModel):
                     'position_closed': 'POSITION_CLOSED',
                     'POSITION_CLOSED': 'POSITION_CLOSED',
                     'aero_swap': 'AERO_SWAP',
-                    'AERO_SWAP': 'AERO_SWAP'
+                    'AERO_SWAP': 'AERO_SWAP',
+                    'fee_collection': 'FEE_COLLECTION',
+                    'FEE_COLLECTION': 'FEE_COLLECTION',
+                    'PROTOCOL_FEE': 'FEE_COLLECTION',  # Map PROTOCOL_FEE to FEE_COLLECTION
+                    'protocol_fee': 'FEE_COLLECTION'
                 }
                 normalized = type_mapping.get(tx_type, tx_type)
                 values['tx_type'] = normalized
