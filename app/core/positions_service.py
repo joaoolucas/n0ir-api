@@ -559,21 +559,23 @@ class PositionsService:
         except Exception as e:
             raise Exception(f"Failed to fetch position {token_id}: {e!r}")
     
-    async def get_positions_by_owner(self, owner_address: str) -> List[PositionInfo]:
+    async def get_positions_by_owner(self, owner_address: str, skip_cache: bool = False) -> List[PositionInfo]:
         """
         Get all positions owned by an address (both unstaked and staked).
         
         Args:
             owner_address: Owner's wallet address
+            skip_cache: If True, bypass cache and fetch directly from blockchain
             
         Returns:
             List of PositionInfo objects
         """
-        # Check cache first
+        # Check cache first (unless skipping)
         cache_key = f"positions:owner:{owner_address.lower()}"
-        cached_positions = await cache_manager.get_custom(cache_key, ttl=60)
-        if cached_positions:
-            return [PositionInfo(**p) for p in cached_positions]
+        if not skip_cache:
+            cached_positions = await cache_manager.get_custom(cache_key, ttl=60)
+            if cached_positions:
+                return [PositionInfo(**p) for p in cached_positions]
         
         try:
             position_manager = await self._get_position_manager()

@@ -103,23 +103,28 @@ class StrategyService:
             return OpportunitiesResponse(**cached)
         
         # Fetch executor's current positions to exclude already invested pools
-        # Check both the executor address and their CDP wallet (if they have one)
+        # Use database positions for consistency with the rest of the API
         exclude_addresses = []
         total_position_value = 0
         all_positions = []
         
         try:
-            # Get positions from executor address
-            executor_positions = await positions_service.get_positions_by_owner(request.executor_address)
-            all_positions.extend(executor_positions)
-            
-            # Also check if user has a CDP wallet and get those positions
             from app.database.session import get_db
-            from app.database.models import User
-            from sqlalchemy import select
+            from app.database.models import User, Position
+            from app.services.user_service import UserService
+            from sqlalchemy import select, or_
             
             async for session in get_db():
-                # Try both the exact address and lowercase version
+                # Get the user service instance
+                user_service = UserService(session)
+                
+                # Get positions from database for the executor address
+                db_positions = await user_service.get_user_positions(
+                    request.executor_address, 
+                    status='ACTIVE'  # Only active positions
+                )
+                
+                # Also check if user has a CDP wallet and get those positions
                 result = await session.execute(
                     select(User).where(
                         (User.user_id == request.executor_address) | 
@@ -129,25 +134,30 @@ class StrategyService:
                 user = result.scalar_one_or_none()
                 
                 if user and user.cdp_wallet_address:
-                    logger.info(f"Checking CDP wallet {user.cdp_wallet_address} for positions")
-                    cdp_positions = await positions_service.get_positions_by_owner(user.cdp_wallet_address)
-                    all_positions.extend(cdp_positions)
+                    logger.info(f"Checking CDP wallet {user.cdp_wallet_address} for positions in database")
+                    # Get CDP wallet positions from database
+                    cdp_positions = await user_service.get_user_positions(
+                        user.cdp_wallet_address,
+                        status='ACTIVE'
+                    )
+                    db_positions.extend(cdp_positions)
+                
+                # Convert database positions to exclude addresses
+                for pos in db_positions:
+                    if pos.pool_address:
+                        exclude_addresses.append(pos.pool_address)
+                        if pos.current_value_usdc and pos.current_value_usdc > 0:
+                            total_position_value += float(pos.current_value_usdc)
                 
                 break  # Exit after first iteration
             
-            # Get unique pool addresses from all positions
-            exclude_addresses = list(set([pos.pool_address for pos in all_positions if pos.pool_address]))
+            # Make exclude_addresses unique
+            exclude_addresses = list(set(exclude_addresses))
             
-            # Calculate total value of current positions
-            for pos in all_positions:
-                current_val = pos.current_value_usd
-                if current_val is not None and current_val > 0:
-                    total_position_value += current_val
-            
-            logger.info(f"Executor has {len(all_positions)} positions (including CDP wallet) in {len(exclude_addresses)} unique pools, total value: ${total_position_value}")
+            logger.info(f"Executor has {len(db_positions)} positions (including CDP wallet) in {len(exclude_addresses)} unique pools, total value: ${total_position_value}")
         except Exception as e:
             logger.warning(f"Could not fetch executor positions: {e}")
-            all_positions = []
+            exclude_addresses = []
         
         # Calculate max_capital as available_capital + total position value
         max_capital = request.available_capital + total_position_value
