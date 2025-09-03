@@ -1161,7 +1161,26 @@ class UserService:
                 
                 logger.debug(f"Position {token_id}: invested={net_invested:.6f}, received={total_received:.6f}, PnL={position_pnl:.6f}")
         
-        logger.info(f"Calculated realized PnL from {len(closed_transactions)} closed positions: {realized_pnl:.6f} USDC")
+        # Subtract all FEE_COLLECTION transactions from realized PnL
+        # (Protocol fees reduce actual trading profits)
+        stmt_all_fees = select(Transaction).where(
+            Transaction.user_id == user_id,
+            Transaction.tx_type == 'FEE_COLLECTION',
+            Transaction.status == 'CONFIRMED'
+        )
+        result_all_fees = await self.db.execute(stmt_all_fees)
+        all_fee_transactions = result_all_fees.scalars().all()
+        
+        total_fees_collected = Decimal(0)
+        for fee_tx in all_fee_transactions:
+            if fee_tx.event_data and 'amount_usdc' in fee_tx.event_data:
+                fee_amount = Decimal(str(fee_tx.event_data['amount_usdc']))
+                total_fees_collected += fee_amount
+        
+        # Adjust realized PnL by subtracting protocol fees
+        realized_pnl -= total_fees_collected
+        
+        logger.info(f"Calculated realized PnL from {len(closed_transactions)} closed positions: {realized_pnl + total_fees_collected:.6f} - {total_fees_collected:.6f} fees = {realized_pnl:.6f} USDC")
         
         # =================================================================
         # UNREALIZED PNL: Active positions PnL + Closed positions PnL not yet withdrawn
@@ -1253,10 +1272,38 @@ class UserService:
         # Commit any position value updates
         await self.db.commit()
         
-        # Total unrealized PnL = active positions + unwithrawn closed positions
-        total_unrealized_pnl = unrealized_from_active + unrealized_from_closed
+        # Subtract FEE_COLLECTION transactions that haven't been withdrawn
+        fees_collected_unwithrawn = Decimal(0)
         
-        logger.info(f"Calculated unrealized PnL: active={unrealized_from_active:.6f}, unwithrawn_closed={unrealized_from_closed:.6f}, total={total_unrealized_pnl:.6f} USDC")
+        if last_withdrawal_time:
+            # Get FEE_COLLECTION transactions after last withdrawal
+            stmt_fees = select(Transaction).where(
+                Transaction.user_id == user_id,
+                Transaction.tx_type == 'FEE_COLLECTION',
+                Transaction.status == 'CONFIRMED',
+                Transaction.created_at > last_withdrawal_time
+            )
+        else:
+            # No withdrawals yet, get all FEE_COLLECTION transactions
+            stmt_fees = select(Transaction).where(
+                Transaction.user_id == user_id,
+                Transaction.tx_type == 'FEE_COLLECTION',
+                Transaction.status == 'CONFIRMED'
+            )
+        
+        result_fees = await self.db.execute(stmt_fees)
+        fee_transactions = result_fees.scalars().all()
+        
+        for fee_tx in fee_transactions:
+            if fee_tx.event_data and 'amount_usdc' in fee_tx.event_data:
+                fee_amount = Decimal(str(fee_tx.event_data['amount_usdc']))
+                fees_collected_unwithrawn += fee_amount
+                logger.debug(f"FEE_COLLECTION: {fee_amount:.6f} USDC")
+        
+        # Total unrealized PnL = active positions + unwithrawn closed positions - unwithrawn fees collected
+        total_unrealized_pnl = unrealized_from_active + unrealized_from_closed - fees_collected_unwithrawn
+        
+        logger.info(f"Calculated unrealized PnL: active={unrealized_from_active:.6f}, unwithrawn_closed={unrealized_from_closed:.6f}, fees_collected={fees_collected_unwithrawn:.6f}, total={total_unrealized_pnl:.6f} USDC")
         
         # Calculate percentage returns
         # For realized: based on all closed position investments
