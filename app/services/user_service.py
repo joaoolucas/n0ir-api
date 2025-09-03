@@ -1279,7 +1279,9 @@ class UserService:
             realized_pnl_percentage=realized_pnl_percentage
         )
         
-        logger.info(f"Updated PNL for user {user_id}: realized={realized_pnl:.2f} ({realized_pnl_percentage:.2f}%), unrealized={total_unrealized_pnl:.2f} ({unrealized_pnl_percentage:.2f}%)")    async def calculate_user_performance(self, user_id: str) -> Dict[str, Any]:
+        logger.info(f"Updated PNL for user {user_id}: realized={realized_pnl:.2f} ({realized_pnl_percentage:.2f}%), unrealized={total_unrealized_pnl:.2f} ({unrealized_pnl_percentage:.2f}%)")
+    
+    async def calculate_user_performance(self, user_id: str) -> Dict[str, Any]:
         """Calculate comprehensive performance metrics for a user."""
         # Get all positions
         positions = await self.get_user_positions(user_id)
