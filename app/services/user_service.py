@@ -1182,6 +1182,12 @@ class UserService:
         all_positions = await self.get_user_positions(user_id)
         active_positions = [p for p in all_positions if p.status == 'ACTIVE']
         
+        # Get current wallet balance
+        wallet_balance = await self.get_user_balance(user_id)
+        
+        # Calculate total portfolio value (wallet + active positions)
+        total_portfolio_value = wallet_balance
+        
         # Calculate unrealized PNL from active positions
         unrealized_pnl = Decimal(0)
         total_active_investment = Decimal(0)  # Track total investment for active positions
@@ -1197,6 +1203,9 @@ class UserService:
                     
                     # Calculate total current value
                     position_current_value = current_value_usd + unclaimed_fees_usd
+                    
+                    # Add to total portfolio value
+                    total_portfolio_value += position_current_value
                     
                     # Update position's current value in DB for caching
                     position.current_value_usdc = position_current_value
@@ -1231,6 +1240,9 @@ class UserService:
                 else:
                     # If blockchain fetch fails, use database value
                     cached_value = position.current_value_usdc or position.entry_amount_usdc or Decimal(0)
+                    
+                    # Add to total portfolio value
+                    total_portfolio_value += cached_value
                     
                     # Get net entry amount from POSITION_CREATED transaction
                     # ALWAYS fetch from transactions since position.entry_amount_usdc might be 0 or wrong
@@ -1292,6 +1304,9 @@ class UserService:
                     # Use database value as fallback for unrealized PNL
                     cached_value = position.current_value_usdc or position.entry_amount_usdc or Decimal(0)
                     
+                    # Add to total portfolio value
+                    total_portfolio_value += cached_value
+                    
                     # Get net entry amount
                     net_entry_amount = position.entry_amount_usdc or Decimal(0)
                     try:
@@ -1316,6 +1331,11 @@ class UserService:
         # Commit any position value updates
         await self.db.commit()
         
+        # Calculate ACTUAL unrealized PnL as: Total Portfolio Value - Net Deposits
+        # This is the correct way to calculate unrealized PnL for the entire portfolio
+        net_deposits = total_deposits - total_withdrawals
+        unrealized_pnl = total_portfolio_value - net_deposits
+        
         # Calculate percentages based on actual invested amounts for each PnL type
         # Realized PnL % = realized PnL / total investment in closed positions
         if total_closed_investment > 0:
@@ -1323,9 +1343,9 @@ class UserService:
         else:
             realized_pnl_percentage = Decimal(0)
         
-        # Unrealized PnL % = unrealized PnL / total investment in active positions
-        if total_active_investment > 0:
-            unrealized_pnl_percentage = (unrealized_pnl / total_active_investment) * Decimal(100)
+        # Unrealized PnL % = unrealized PnL / net deposits (what's still invested)
+        if net_deposits > 0:
+            unrealized_pnl_percentage = (unrealized_pnl / net_deposits) * Decimal(100)
         else:
             unrealized_pnl_percentage = Decimal(0)
         
@@ -1338,7 +1358,7 @@ class UserService:
             realized_pnl_percentage=realized_pnl_percentage
         )
         
-        logger.info(f"Updated PNL for user {user_id}: deposits={total_deposits}, withdrawals={total_withdrawals}, realized={realized_pnl} ({realized_pnl_percentage:.2f}%), unrealized={unrealized_pnl} ({unrealized_pnl_percentage:.2f}%)")
+        logger.info(f"Updated PNL for user {user_id}: deposits={total_deposits}, withdrawals={total_withdrawals}, net_deposits={net_deposits}, portfolio_value={total_portfolio_value}, realized={realized_pnl} ({realized_pnl_percentage:.2f}%), unrealized={unrealized_pnl} ({unrealized_pnl_percentage:.2f}%)")
     
     async def calculate_user_performance(self, user_id: str) -> Dict[str, Any]:
         """Calculate comprehensive performance metrics for a user."""
