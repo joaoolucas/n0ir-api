@@ -836,7 +836,10 @@ class UserService:
         position.status = 'CLOSED'
         position.exit_tx_hash = exit_tx_hash
         position.exit_date = datetime.now(timezone.utc)
-        position.realized_pnl_usd = realized_pnl_usdc
+        # Calculate actual PnL: final value minus entry amount
+        # The realized_pnl_usdc parameter might contain the final value, not the PnL
+        actual_pnl = final_value_usdc - position.entry_amount_usdc
+        position.realized_pnl_usd = actual_pnl
         position.current_value_usdc = final_value_usdc
         position.unrealized_pnl_usd = Decimal(0)
         
@@ -1060,8 +1063,12 @@ class UserService:
         """Recalculate and update user's PnL values.
         
         PNL is calculated as:
-        - Realized PNL: total_withdrawals - total_deposits (simple cash-on-cash return)
-        - Unrealized PNL: Sum of (current_value - entry_amount) from active positions
+        - Realized PNL: Sum of all PnL from closed positions during user's active period
+        - Unrealized PNL: PnL from active positions + PnL from closed positions not yet withdrawn
+        
+        This gives users a clear view:
+        - Realized PNL shows total trading performance
+        - Unrealized PNL shows profits still in the system (not withdrawn)
         
         This should be called after:
         - Position is closed
@@ -1080,50 +1087,22 @@ class UserService:
             logger.error(f"User {user_id} not found for PnL calculation")
             return
         
-        # Use totals derived from confirmed transactions (not watcher aggregates)
+        # Get deposits and withdrawals to track unwithrawn periods
         total_deposits, total_withdrawals = await self.get_deposit_withdrawal_totals(user_id)
         
-        # Calculate realized PNL as net cash flow from all transactions
-        # This represents the actual profit/loss from completed trading activities
-        # Realized PNL = Net cash flow + Trading PnL from closed positions
-        
-        # Get net cash flow from transactions
-        stmt_tx = select(Transaction).where(
+        # Get the last withdrawal timestamp to determine unwithrawn period
+        stmt_last_withdrawal = select(Transaction).where(
             Transaction.user_id == user_id,
+            Transaction.tx_type.in_(['WITHDRAWAL', 'WITHDRAW']),
             Transaction.status == 'CONFIRMED'
-        )
-        result_tx = await self.db.execute(stmt_tx)
-        transactions = result_tx.scalars().all()
+        ).order_by(Transaction.created_at.desc()).limit(1)
+        result_last_withdrawal = await self.db.execute(stmt_last_withdrawal)
+        last_withdrawal = result_last_withdrawal.scalar_one_or_none()
+        last_withdrawal_time = last_withdrawal.created_at if last_withdrawal else None
         
-        net_cash_flow = Decimal(0)
-        for tx in transactions:
-            amount = Decimal(0)
-            if tx.event_data and 'amount_usdc' in tx.event_data:
-                try:
-                    amount = Decimal(str(tx.event_data['amount_usdc']))
-                except:
-                    amount = Decimal(0)
-            
-            if tx.tx_type == 'DEPOSIT':
-                net_cash_flow += amount
-            elif tx.tx_type in ['WITHDRAWAL', 'WITHDRAW']:
-                net_cash_flow -= amount
-            elif tx.tx_type == 'POSITION_CREATED':
-                # Subtract net amount spent (amount - usdc_returned)
-                usdc_returned = Decimal(0)
-                if tx.event_data and 'usdc_returned' in tx.event_data:
-                    try:
-                        usdc_returned = Decimal(str(tx.event_data['usdc_returned']))
-                    except:
-                        usdc_returned = Decimal(0)
-                net_cash_flow -= (amount - usdc_returned)
-            elif tx.tx_type == 'POSITION_CLOSED':
-                net_cash_flow += amount
-            elif tx.tx_type == 'AERO_SWAP':
-                net_cash_flow += amount
-        
-        # Calculate realized PnL as actual trading performance from closed positions
-        # For each closed position: (amount_received - amount_invested)
+        # =================================================================
+        # REALIZED PNL: Sum of all PnL from closed positions (total trading performance)
+        # =================================================================
         
         # Get all closed positions and calculate their individual PnL
         stmt_closed = select(Transaction).where(
@@ -1135,7 +1114,10 @@ class UserService:
         closed_transactions = result_closed.scalars().all()
         
         realized_pnl = Decimal(0)
-        total_closed_investment = Decimal(0)  # Track total investment for closed positions
+        total_closed_investment = Decimal(0)
+        
+        # Track closed positions for unrealized calculation
+        closed_position_pnls = {}  # token_id -> (pnl, close_time)
         
         for close_tx in closed_transactions:
             if not close_tx.event_data:
@@ -1174,9 +1156,30 @@ class UserService:
                 position_pnl = total_received - net_invested
                 realized_pnl += position_pnl
                 
+                # Store for unrealized calculation
+                closed_position_pnls[token_id] = (position_pnl, close_tx.created_at)
+                
                 logger.debug(f"Position {token_id}: invested={net_invested:.6f}, received={total_received:.6f}, PnL={position_pnl:.6f}")
         
         logger.info(f"Calculated realized PnL from {len(closed_transactions)} closed positions: {realized_pnl:.6f} USDC")
+        
+        # =================================================================
+        # UNREALIZED PNL: Active positions PnL + Closed positions PnL not yet withdrawn
+        # =================================================================
+        
+        # First, calculate PnL from closed positions that haven't been withdrawn
+        unrealized_from_closed = Decimal(0)
+        
+        if last_withdrawal_time:
+            # Count PnL from positions closed after last withdrawal
+            for token_id, (pnl, close_time) in closed_position_pnls.items():
+                if close_time > last_withdrawal_time:
+                    unrealized_from_closed += pnl
+                    logger.debug(f"Position {token_id} closed after last withdrawal: PnL={pnl:.6f}")
+        else:
+            # No withdrawals yet, all closed position PnL is unrealized
+            unrealized_from_closed = realized_pnl
+            logger.info("No withdrawals yet, all closed PnL is unrealized")
         
         # Get all active positions for unrealized PNL
         all_positions = await self.get_user_positions(user_id)
@@ -1189,8 +1192,8 @@ class UserService:
         total_portfolio_value = wallet_balance
         
         # Calculate unrealized PNL from active positions
-        unrealized_pnl = Decimal(0)
-        total_active_investment = Decimal(0)  # Track total investment for active positions
+        unrealized_from_active = Decimal(0)
+        total_active_investment = Decimal(0)
         
         for position in active_positions:
             try:
@@ -1211,7 +1214,6 @@ class UserService:
                     position.current_value_usdc = position_current_value
                     
                     # Get net entry amount from POSITION_CREATED transaction
-                    # ALWAYS fetch from transactions since position.entry_amount_usdc might be 0 or wrong
                     net_entry_amount = Decimal(0)
                     stmt_tx = select(Transaction).where(
                         Transaction.user_id == user_id,
@@ -1225,142 +1227,59 @@ class UserService:
                         amount = Decimal(str(position_created_tx.event_data.get('amount_usdc', 0)))
                         usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
                         net_entry_amount = amount - usdc_returned
-                        logger.debug(f"Position {position.nft_token_id}: amount={amount}, returned={usdc_returned}, net={net_entry_amount}")
                     else:
-                        # Fallback: if no transaction found, use position entry or assume current value
                         net_entry_amount = position.entry_amount_usdc or position_current_value
-                        logger.warning(f"No POSITION_CREATED tx found for position {position.nft_token_id}, using fallback: {net_entry_amount}")
                     
                     # Track total active investment
                     total_active_investment += net_entry_amount
                     
                     # Calculate unrealized PNL for this position
                     position_unrealized_pnl = position_current_value - net_entry_amount
-                    unrealized_pnl += position_unrealized_pnl
-                else:
-                    # If blockchain fetch fails, use database value
-                    cached_value = position.current_value_usdc or position.entry_amount_usdc or Decimal(0)
-                    
-                    # Add to total portfolio value
-                    total_portfolio_value += cached_value
-                    
-                    # Get net entry amount from POSITION_CREATED transaction
-                    # ALWAYS fetch from transactions since position.entry_amount_usdc might be 0 or wrong
-                    net_entry_amount = Decimal(0)
-                    stmt_tx = select(Transaction).where(
-                        Transaction.user_id == user_id,
-                        Transaction.tx_type == 'POSITION_CREATED',
-                        Transaction.event_data['tokenId'].astext == str(position.nft_token_id)
-                    ).limit(1)
-                    result_tx = await self.db.execute(stmt_tx)
-                    position_created_tx = result_tx.scalar_one_or_none()
-                    
-                    if position_created_tx and position_created_tx.event_data:
-                        amount = Decimal(str(position_created_tx.event_data.get('amount_usdc', 0)))
-                        usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
-                        net_entry_amount = amount - usdc_returned
-                        logger.debug(f"Position {position.nft_token_id}: amount={amount}, returned={usdc_returned}, net={net_entry_amount}")
-                    else:
-                        # Fallback: if no transaction found, use position entry or assume current value
-                        net_entry_amount = position.entry_amount_usdc or position_current_value
-                        logger.warning(f"No POSITION_CREATED tx found for position {position.nft_token_id}, using fallback: {net_entry_amount}")
-                    
-                    # Track total active investment
-                    total_active_investment += net_entry_amount
-                    
-                    position_unrealized_pnl = cached_value - net_entry_amount
-                    unrealized_pnl += position_unrealized_pnl
+                    unrealized_from_active += position_unrealized_pnl
                     
             except Exception as e:
-                # Check if position was closed externally
-                if "execution reverted: ID" in str(e) or "ContractLogicError" in str(e):
-                    logger.warning(f"Position {position.nft_token_id} not found on-chain, may be closed externally")
-                    # Mark position as closed if it doesn't exist on-chain
-                    position.status = 'CLOSED'
-                    
-                    # Get net entry amount for realized PnL calculation
-                    net_entry_amount = position.entry_amount_usdc or Decimal(0)
-                    try:
-                        stmt_tx = select(Transaction).where(
-                            Transaction.user_id == user_id,
-                            Transaction.tx_type == 'POSITION_CREATED',
-                            Transaction.event_data['tokenId'].astext == str(position.nft_token_id)
-                        ).limit(1)
-                        result_tx = await self.db.execute(stmt_tx)
-                        position_created_tx = result_tx.scalar_one_or_none()
-                        
-                        if position_created_tx and position_created_tx.event_data:
-                            amount = Decimal(str(position_created_tx.event_data.get('amount_usdc', 0)))
-                            usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
-                            net_entry_amount = amount - usdc_returned
-                    except:
-                        pass
-                    
-                    position.realized_pnl_usd = position.current_value_usdc - net_entry_amount
-                    # Move its PNL to realized
-                    realized_pnl += position.realized_pnl_usdc or Decimal(0)
-                else:
-                    logger.error(f"Error fetching position {position.nft_token_id}: {e}")
-                    # Use database value as fallback for unrealized PNL
-                    cached_value = position.current_value_usdc or position.entry_amount_usdc or Decimal(0)
-                    
-                    # Add to total portfolio value
-                    total_portfolio_value += cached_value
-                    
-                    # Get net entry amount
-                    net_entry_amount = position.entry_amount_usdc or Decimal(0)
-                    try:
-                        stmt_tx = select(Transaction).where(
-                            Transaction.user_id == user_id,
-                            Transaction.tx_type == 'POSITION_CREATED',
-                            Transaction.event_data['tokenId'].astext == str(position.nft_token_id)
-                        ).limit(1)
-                        result_tx = await self.db.execute(stmt_tx)
-                        position_created_tx = result_tx.scalar_one_or_none()
-                        
-                        if position_created_tx and position_created_tx.event_data:
-                            amount = Decimal(str(position_created_tx.event_data.get('amount_usdc', 0)))
-                            usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
-                            net_entry_amount = amount - usdc_returned
-                    except:
-                        pass
-                    
-                    position_unrealized_pnl = cached_value - net_entry_amount
-                    unrealized_pnl += position_unrealized_pnl
+                logger.error(f"Error fetching position {position.nft_token_id}: {e}")
+                # Use database values as fallback
+                cached_value = position.current_value_usdc or position.entry_amount_usdc or Decimal(0)
+                total_portfolio_value += cached_value
+                
+                # Try to get net entry amount
+                net_entry_amount = position.entry_amount_usdc or cached_value
+                total_active_investment += net_entry_amount
+                
+                position_unrealized_pnl = cached_value - net_entry_amount
+                unrealized_from_active += position_unrealized_pnl
         
         # Commit any position value updates
         await self.db.commit()
         
-        # Calculate ACTUAL unrealized PnL as: Total Portfolio Value - Net Deposits
-        # This is the correct way to calculate unrealized PnL for the entire portfolio
-        net_deposits = total_deposits - total_withdrawals
-        unrealized_pnl = total_portfolio_value - net_deposits
+        # Total unrealized PnL = active positions + unwithrawn closed positions
+        total_unrealized_pnl = unrealized_from_active + unrealized_from_closed
         
-        # Calculate percentages based on actual invested amounts for each PnL type
-        # Realized PnL % = realized PnL / total investment in closed positions
+        logger.info(f"Calculated unrealized PnL: active={unrealized_from_active:.6f}, unwithrawn_closed={unrealized_from_closed:.6f}, total={total_unrealized_pnl:.6f} USDC")
+        
+        # Calculate percentage returns
+        # For realized: based on all closed position investments
+        realized_pnl_percentage = Decimal(0)
         if total_closed_investment > 0:
-            realized_pnl_percentage = (realized_pnl / total_closed_investment) * Decimal(100)
-        else:
-            realized_pnl_percentage = Decimal(0)
+            realized_pnl_percentage = (realized_pnl / total_closed_investment) * 100
         
-        # Unrealized PnL % = unrealized PnL / net deposits (what's still invested)
-        if net_deposits > 0:
-            unrealized_pnl_percentage = (unrealized_pnl / net_deposits) * Decimal(100)
-        else:
-            unrealized_pnl_percentage = Decimal(0)
+        # For unrealized: based on net invested capital (deposits - withdrawals)
+        net_invested = total_deposits - total_withdrawals
+        unrealized_pnl_percentage = Decimal(0)
+        if net_invested > 0:
+            unrealized_pnl_percentage = (total_unrealized_pnl / net_invested) * 100
         
         # Update user PnL values
         await self.update_user_pnl(
             user_id=user_id,
-            unrealized_pnl=unrealized_pnl,
+            unrealized_pnl=total_unrealized_pnl,
             realized_pnl=realized_pnl,
             unrealized_pnl_percentage=unrealized_pnl_percentage,
             realized_pnl_percentage=realized_pnl_percentage
         )
         
-        logger.info(f"Updated PNL for user {user_id}: deposits={total_deposits}, withdrawals={total_withdrawals}, net_deposits={net_deposits}, portfolio_value={total_portfolio_value}, realized={realized_pnl} ({realized_pnl_percentage:.2f}%), unrealized={unrealized_pnl} ({unrealized_pnl_percentage:.2f}%)")
-    
-    async def calculate_user_performance(self, user_id: str) -> Dict[str, Any]:
+        logger.info(f"Updated PNL for user {user_id}: realized={realized_pnl:.2f} ({realized_pnl_percentage:.2f}%), unrealized={total_unrealized_pnl:.2f} ({unrealized_pnl_percentage:.2f}%)")    async def calculate_user_performance(self, user_id: str) -> Dict[str, Any]:
         """Calculate comprehensive performance metrics for a user."""
         # Get all positions
         positions = await self.get_user_positions(user_id)
