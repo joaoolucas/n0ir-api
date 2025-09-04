@@ -22,20 +22,31 @@ from app.schemas.pools import EffectiveAPRInfo
 
 class PoolsService:
     def __init__(self):
-        # Initialize Web3 and Sugar contract directly
-        self.w3 = Web3(Web3.HTTPProvider(settings.rpc_url))
-        if not self.w3.is_connected():
-            logger.error(f"Failed to connect to RPC endpoint: {settings.rpc_url}")
-            raise Exception(f"Failed to connect to RPC endpoint")
-        
-        # Initialize Sugar contract
-        self.sugar = self.w3.eth.contract(
-            address=Web3.to_checksum_address(settings.sugar_contract_address),
-            abi=SUGAR_ABI
-        )
-        
+        # Lazy initialization of Web3 and Sugar contract
+        self._w3 = None
+        self._sugar = None
         self.effective_apr_calc = EffectiveAPRCalculator()
-        logger.debug("PoolsService initialized with direct Web3 connection")
+        logger.debug("PoolsService initialized with lazy Web3 connection")
+    
+    @property
+    def w3(self):
+        """Lazy Web3 initialization"""
+        if self._w3 is None:
+            self._w3 = Web3(Web3.HTTPProvider(settings.rpc_url))
+            if not self._w3.is_connected():
+                logger.error(f"Failed to connect to RPC endpoint: {settings.rpc_url}")
+                raise Exception(f"Failed to connect to RPC endpoint")
+        return self._w3
+    
+    @property
+    def sugar(self):
+        """Lazy Sugar contract initialization"""
+        if self._sugar is None:
+            self._sugar = self.w3.eth.contract(
+                address=Web3.to_checksum_address(settings.sugar_contract_address),
+                abi=SUGAR_ABI
+            )
+        return self._sugar
     
     def _get_filters_hash(self, filters: PoolFilters) -> str:
         """Generate a hash for the filters to use as cache key"""
