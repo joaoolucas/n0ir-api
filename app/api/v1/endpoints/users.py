@@ -87,6 +87,7 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
         # Use stored values for closed positions
         position_dict['current_value_usdc'] = position.current_value_usdc or Decimal(0)
         position_dict['current_total_value'] = position.current_value_usdc or Decimal(0)
+        position_dict['unrealized_pnl_usdc'] = Decimal(0)  # Closed positions have no unrealized PnL
         position_dict['total_pnl_usdc'] = position.realized_pnl_usdc + position.fees_earned_usdc + position.rewards_earned_usdc
         
         if net_entry_amount and net_entry_amount > 0:
@@ -151,6 +152,10 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
         
         # Update current_value_usdc with the real-time value for consistency
         position_dict['current_value_usdc'] = current_value_usd
+        
+        # Calculate unrealized PNL (current value - entry amount)
+        unrealized_pnl = current_total_value - net_entry_amount
+        position_dict['unrealized_pnl_usdc'] = unrealized_pnl
         
         # Calculate PNL
         if net_entry_amount > 0:
