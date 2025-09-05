@@ -1161,11 +1161,11 @@ class UserService:
         # Calculate net deposits (deposits - withdrawals)
         net_deposits = total_deposits - total_withdrawals
         
-        # Unrealized PnL = Current portfolio value - net deposits
-        # This is simple and clear: if portfolio is worth more than net invested, there's unrealized profit
-        total_unrealized_pnl = total_portfolio_value - net_deposits
+        # Unrealized PnL = Current portfolio value - net deposits - realized PnL
+        # We subtract realized PnL to avoid double-counting profits that have already been withdrawn
+        total_unrealized_pnl = total_portfolio_value - net_deposits - realized_pnl
         
-        logger.info(f"Unrealized PnL for {user_id}: portfolio={total_portfolio_value:.2f}, net_deposits={net_deposits:.2f}, unrealized={total_unrealized_pnl:.2f}")
+        logger.info(f"Unrealized PnL for {user_id}: portfolio={total_portfolio_value:.2f}, net_deposits={net_deposits:.2f}, realized={realized_pnl:.2f}, unrealized={total_unrealized_pnl:.2f}")
         
         # Calculate percentage returns
         # For realized: based on total deposits
