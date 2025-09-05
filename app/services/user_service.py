@@ -72,8 +72,9 @@ class UserService:
     async def get_deposit_withdrawal_totals(self, user_id: str) -> tuple[Decimal, Decimal]:
         """Compute total deposits and withdrawals from confirmed transactions.
 
-        Sums DEPOSIT and WITHDRAW/WITHDRAWAL amounts using event_data amounts
-        to avoid relying on watcher-maintained aggregates.
+        Only counts REAL user deposits/withdrawals:
+        - Deposits: from user wallet to CDP wallet
+        - Withdrawals: from CDP wallet to user wallet
         Returns (total_deposits, total_withdrawals) as Decimals.
         """
         stmt = select(Transaction).where(
@@ -84,14 +85,32 @@ class UserService:
         result = await self.db.execute(stmt)
         txs = result.scalars().all()
 
+        # Get user's CDP wallet address
+        user = await self.get_user(user_id)
+        if not user or not user.cdp_wallet_address:
+            return Decimal(0), Decimal(0)
+        
+        cdp_wallet = user.cdp_wallet_address.lower()
+        user_wallet = user_id.lower()
+
         deposits = Decimal(0)
         withdrawals = Decimal(0)
         for tx in txs:
+            if not tx.event_data:
+                continue
+                
             amt = Decimal(str(tx.amount_usdc or 0))
+            from_addr = tx.event_data.get('from_address', '').lower()
+            to_addr = tx.event_data.get('to_address', '').lower()
+            
             if tx.tx_type == 'DEPOSIT':
-                deposits += amt
+                # Only count if from user wallet to CDP wallet
+                if from_addr == user_wallet and to_addr == cdp_wallet:
+                    deposits += amt
             elif tx.tx_type in ['WITHDRAWAL', 'WITHDRAW']:
-                withdrawals += amt
+                # Only count if from CDP wallet to user wallet
+                if from_addr == cdp_wallet and to_addr == user_wallet:
+                    withdrawals += amt
 
         return deposits, withdrawals
     
