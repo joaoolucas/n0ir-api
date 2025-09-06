@@ -986,7 +986,7 @@ class UserService:
         await self.db.commit()
     
     async def _update_unrealized_pnl_only(self, user_id: str) -> None:
-        """Update only unrealized PnL using the same cost-basis vs MTM rule."""
+        """Update only unrealized PnL using MTM portfolio minus net deposits minus realized."""
         stmt = select(User).where(User.user_id == user_id)
         result = await self.db.execute(stmt)
         user = result.scalar_one_or_none()
@@ -1002,9 +1002,8 @@ class UserService:
         # Wallet balance
         wallet_balance = await self.get_user_balance(user_id)
 
-        # Build portfolio variants
+        # Build MTM portfolio
         total_portfolio_value_mtm = Decimal(str(wallet_balance))
-        total_portfolio_value_cost = Decimal(str(wallet_balance))
 
         from app.core.positions_service import positions_service
         for position in active_positions:
@@ -1023,7 +1022,7 @@ class UserService:
                 cached_value = position.current_value_usdc or position.entry_amount_usdc or Decimal(0)
                 total_portfolio_value_mtm += cached_value
 
-            total_portfolio_value_cost += position.entry_amount_usdc or Decimal(0)
+            # cost basis not used here
 
         await self.db.commit()
 
@@ -1031,58 +1030,8 @@ class UserService:
         deposits_sum, withdrawals_sum = await self.get_deposit_withdrawal_totals(user_id)
         net_deposits = deposits_sum - withdrawals_sum
 
-        # Determine cycle state using last deposit/withdrawal
-        from sqlalchemy import and_, select
-        from app.database.models import Transaction
-        last_deposit_tx = None
-        last_withdrawal_tx = None
-        try:
-            stmt_dep = (
-                select(Transaction)
-                .where(
-                    and_(
-                        Transaction.user_id == user_id,
-                        Transaction.status == 'CONFIRMED',
-                        Transaction.tx_type == 'DEPOSIT',
-                    )
-                )
-                .order_by(Transaction.created_at.desc())
-                .limit(1)
-            )
-            res_dep = await self.db.execute(stmt_dep)
-            last_deposit_tx = res_dep.scalar_one_or_none()
-
-            stmt_wd = (
-                select(Transaction)
-                .where(
-                    and_(
-                        Transaction.user_id == user_id,
-                        Transaction.status == 'CONFIRMED',
-                        Transaction.tx_type.in_(['WITHDRAWAL', 'WITHDRAW']),
-                    )
-                )
-                .order_by(Transaction.created_at.desc())
-                .limit(1)
-            )
-            res_wd = await self.db.execute(stmt_wd)
-            last_withdrawal_tx = res_wd.scalar_one_or_none()
-        except Exception as e:
-            logger.warning(f"Could not determine last deposit/withdrawal for {user_id}: {e}")
-
-        use_cost_basis = False
-        if last_deposit_tx and last_withdrawal_tx:
-            use_cost_basis = last_withdrawal_tx.created_at <= last_deposit_tx.created_at
-        elif last_deposit_tx and not last_withdrawal_tx:
-            use_cost_basis = True
-        else:
-            use_cost_basis = False
-
-        chosen_portfolio_value = (
-            total_portfolio_value_cost if use_cost_basis else total_portfolio_value_mtm
-        )
-
         realized_so_far = Decimal(str(user.realized_pnl_usd or 0))
-        unrealized_pnl = chosen_portfolio_value - net_deposits - realized_so_far
+        unrealized_pnl = total_portfolio_value_mtm - net_deposits - realized_so_far
 
         # Percentage based on net deposits
         if net_deposits > 0:
@@ -1096,22 +1045,15 @@ class UserService:
 
         await self.db.commit()
         logger.info(
-            f"Updated unrealized PnL for user {user_id}: ${unrealized_pnl} "
-            f"({'cost' if use_cost_basis else 'mtm'}) ({unrealized_pnl_percentage:.2f}%)"
+            f"Updated unrealized PnL for user {user_id}: ${unrealized_pnl} (mtm) ({unrealized_pnl_percentage:.2f}%)"
         )
     
     async def recalculate_user_pnl(self, user_id: str) -> None:
         """Recalculate and update user's PnL values.
         
         PNL is calculated as:
-        - Realized PNL: Only calculated when withdrawals > deposits (profit has been taken out)
-        - Unrealized PNL: By default uses a cost-basis during a deposit→(no withdrawal yet) cycle.
-          Specifically:
-            • If no withdrawal has occurred after the last deposit, use cost basis
-              (wallet balance + sum(entry_amount of ACTIVE positions)) to avoid
-              recognizing mark-to-market PnL prematurely.
-            • Once a withdrawal happens after the last deposit, switch to
-              mark-to-market (wallet + current position values + unclaimed fees).
+        - Realized PNL: (wallet balance + sum(entry_amount of ACTIVE positions)) - net_deposits
+        - Unrealized PNL: (wallet + sum(current position values + unclaimed fees)) - net_deposits - realized
         
         This should be called after:
         - Position is closed
@@ -1136,18 +1078,6 @@ class UserService:
         total_deposits, total_withdrawals = await self.get_deposit_withdrawal_totals(user_id)
         
         # =================================================================
-        # REALIZED PNL: Only when withdrawals > deposits (actual profit taken out)
-        # =================================================================
-        
-        # Realized PnL = withdrawals - deposits (only positive if user took out more than they put in)
-        if total_withdrawals > total_deposits:
-            realized_pnl = total_withdrawals - total_deposits
-        else:
-            realized_pnl = Decimal(0)
-        
-        logger.info(f"Realized PnL for {user_id}: deposits={total_deposits:.2f}, withdrawals={total_withdrawals:.2f}, realized={realized_pnl:.2f}")
-        
-        # =================================================================
         # UNREALIZED PNL: Current portfolio value - net deposits
         # =================================================================
         
@@ -1158,11 +1088,11 @@ class UserService:
         # Get current wallet balance
         wallet_balance = await self.get_user_balance(user_id)
         
-        # Calculate two portfolio variants we may use for unrealized PnL:
-        # 1) mark-to-market: wallet + current (on-chain) value of ACTIVE positions (+ unclaimed fees)
-        # 2) cost-basis: wallet + sum(entry_amount_usdc of ACTIVE positions)
+        # Build both totals we need for realized/unrealized split
+        # - MTM portfolio: wallet + current value of active positions (+ unclaimed fees)
+        # - Entry portfolio: wallet + entry_amount sum for active positions
         total_portfolio_value_mtm = Decimal(str(wallet_balance))
-        total_portfolio_value_cost = Decimal(str(wallet_balance))
+        total_entry_active = Decimal(str(wallet_balance))
         
         for position in active_positions:
             try:
@@ -1187,9 +1117,9 @@ class UserService:
                 # Use database values as fallback
                 cached_value = position.current_value_usdc or position.entry_amount_usdc or Decimal(0)
                 total_portfolio_value_mtm += cached_value
-            
-            # Always add entry cost for the cost-basis portfolio variant
-            total_portfolio_value_cost += position.entry_amount_usdc or Decimal(0)
+
+            # Sum entry amounts for active positions (cost basis part)
+            total_entry_active += position.entry_amount_usdc or Decimal(0)
         
         # Commit any position value updates
         await self.db.commit()
@@ -1197,72 +1127,17 @@ class UserService:
         # Calculate net deposits (deposits - withdrawals)
         net_deposits = total_deposits - total_withdrawals
 
-        # Decide which portfolio value to use for unrealized PnL based on
-        # whether a withdrawal has happened since the last deposit.
-        #
-        # Rule:
-        # - If last withdrawal is older than (or absent relative to) the last deposit
-        #   → user is in a fresh deposit cycle without a withdrawal yet → use cost-basis.
-        # - If the last withdrawal happened after the last deposit
-        #   → allow mark-to-market.
-        last_deposit_tx = None
-        last_withdrawal_tx = None
-        try:
-            stmt_dep = (
-                select(Transaction)
-                .where(
-                    and_(
-                        Transaction.user_id == user_id,
-                        Transaction.status == 'CONFIRMED',
-                        Transaction.tx_type == 'DEPOSIT',
-                    )
-                )
-                .order_by(Transaction.created_at.desc())
-                .limit(1)
-            )
-            res_dep = await self.db.execute(stmt_dep)
-            last_deposit_tx = res_dep.scalar_one_or_none()
+        # Realized per spec
+        realized_pnl = total_entry_active - net_deposits
 
-            stmt_wd = (
-                select(Transaction)
-                .where(
-                    and_(
-                        Transaction.user_id == user_id,
-                        Transaction.status == 'CONFIRMED',
-                        Transaction.tx_type.in_(['WITHDRAWAL', 'WITHDRAW']),
-                    )
-                )
-                .order_by(Transaction.created_at.desc())
-                .limit(1)
-            )
-            res_wd = await self.db.execute(stmt_wd)
-            last_withdrawal_tx = res_wd.scalar_one_or_none()
-        except Exception as e:
-            logger.warning(f"Could not determine last deposit/withdrawal for {user_id}: {e}")
-
-        use_cost_basis = False
-        if last_deposit_tx and last_withdrawal_tx:
-            use_cost_basis = last_withdrawal_tx.created_at <= last_deposit_tx.created_at
-        elif last_deposit_tx and not last_withdrawal_tx:
-            # Deposited, but no withdrawals ever → cost-basis
-            use_cost_basis = True
-        else:
-            # No deposits or unable to determine → default to mark-to-market
-            use_cost_basis = False
-
-        chosen_portfolio_value = (
-            total_portfolio_value_cost if use_cost_basis else total_portfolio_value_mtm
-        )
-
-        # Unrealized PnL = chosen portfolio value - net deposits - realized PnL
-        # We subtract realized PnL to avoid double-counting profits already withdrawn
-        total_unrealized_pnl = chosen_portfolio_value - net_deposits - realized_pnl
+        # Unrealized per spec
+        total_unrealized_pnl = total_portfolio_value_mtm - net_deposits - realized_pnl
 
         logger.info(
-            f"Unrealized PnL for {user_id}: "
-            f"portfolio={'cost' if use_cost_basis else 'mtm'}={chosen_portfolio_value:.2f}, "
-            f"net_deposits={net_deposits:.2f}, realized={realized_pnl:.2f}, "
-            f"unrealized={total_unrealized_pnl:.2f}"
+            f"PNL split for {user_id}: wallet={wallet_balance:.2f}, "
+            f"entry_active_sum={(total_entry_active - Decimal(str(wallet_balance))):.2f}, "
+            f"mtm_active_sum={(total_portfolio_value_mtm - Decimal(str(wallet_balance))):.2f}, "
+            f"net_deposits={net_deposits:.2f}, realized={realized_pnl:.2f}, unrealized={total_unrealized_pnl:.2f}"
         )
         
         # Calculate percentage returns
