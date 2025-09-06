@@ -1081,7 +1081,8 @@ class UserService:
             total_portfolio_value_cost if use_cost_basis else total_portfolio_value_mtm
         )
 
-        unrealized_pnl = chosen_portfolio_value - net_deposits  # realized excluded in this helper
+        realized_so_far = Decimal(str(user.realized_pnl_usd or 0))
+        unrealized_pnl = chosen_portfolio_value - net_deposits - realized_so_far
 
         # Percentage based on net deposits
         if net_deposits > 0:
