@@ -1127,10 +1127,15 @@ class UserService:
         # Calculate net deposits (deposits - withdrawals)
         net_deposits = total_deposits - total_withdrawals
 
-        # Realized per spec
-        realized_pnl = total_entry_active - net_deposits
+        # Realized PnL should only be recognized on withdrawals.
+        # If there are no withdrawals, realized PnL must be 0.
+        # When withdrawals exist, only the portion that exceeds total deposits is profit realized.
+        if total_withdrawals > 0:
+            realized_pnl = (total_withdrawals - total_deposits) if (total_withdrawals - total_deposits) > 0 else Decimal(0)
+        else:
+            realized_pnl = Decimal(0)
 
-        # Unrealized per spec
+        # Unrealized PnL is the remaining mark-to-market portfolio value minus net deposits and realized
         total_unrealized_pnl = total_portfolio_value_mtm - net_deposits - realized_pnl
 
         logger.info(
@@ -1141,9 +1146,9 @@ class UserService:
         )
         
         # Calculate percentage returns
-        # For realized: based on total deposits
+        # For realized: based on total deposits (only if realized > 0)
         realized_pnl_percentage = Decimal(0)
-        if total_deposits > 0:
+        if realized_pnl > 0 and total_deposits > 0:
             realized_pnl_percentage = (realized_pnl / total_deposits) * 100
         
         # For unrealized: based on net deposits (deposits - withdrawals)
