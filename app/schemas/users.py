@@ -245,9 +245,10 @@ class PositionResponse(BaseModel):
     status: PositionStatus
     entry_tx_hash: Optional[str]
     exit_tx_hash: Optional[str]
-    entry_date: datetime
-    exit_date: Optional[datetime]
-    last_updated: datetime
+    # Some legacy rows may lack these timestamps; make them optional
+    entry_date: Optional[datetime] = None
+    exit_date: Optional[datetime] = None
+    last_updated: Optional[datetime] = None
 
 
 class ProtocolFeeResponse(BaseModel):
