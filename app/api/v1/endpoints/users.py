@@ -600,9 +600,9 @@ async def get_transactions(
             if tx.tx_type == 'POSITION_CREATED' and 'pool' in tx.event_data:
                 pool_address = tx.event_data.get('pool')
             
-            # For POSITION_CLOSED, fetch pool address from Position table using tokenId
-            elif tx.tx_type == 'POSITION_CLOSED' and 'tokenId' in tx.event_data:
-                token_id = tx.event_data.get('tokenId')
+            # For POSITION_CLOSED, fetch pool address from Position table using tokenId or token_id
+            elif tx.tx_type == 'POSITION_CLOSED' and ('tokenId' in tx.event_data or 'token_id' in tx.event_data):
+                token_id = tx.event_data.get('tokenId') or tx.event_data.get('token_id')
                 if token_id:
                     # Fetch the position to get pool_address
                     stmt = select(Position).where(Position.token_id == int(token_id))
@@ -628,7 +628,7 @@ async def get_transactions(
         
         # For POSITION_CLOSED transactions, look up matching AERO_SWAP
         if hasattr(tx, 'tx_type') and tx.tx_type == 'POSITION_CLOSED' and hasattr(tx, 'event_data') and tx.event_data:
-            token_id = tx.event_data.get('tokenId')
+            token_id = tx.event_data.get('tokenId') or tx.event_data.get('token_id')
             if token_id:
                 # Look for AERO_SWAP with matching tokenId or position_token_id
                 stmt = select(Transaction).where(
