@@ -592,6 +592,12 @@ async def get_transactions(
     from app.database.models import Transaction, Position
     
     for tx in transactions:
+        # Debug log for POSITION_CREATED transactions
+        if tx.tx_type == 'POSITION_CREATED' and tx.tx_hash == "0x39f2fa2ede784c9e1be75df47f67742c7bac830ba0afeaa8662c839fd8801c14":
+            logger.info(f"DEBUG: Found target tx, event_data: {tx.event_data}")
+            if tx.event_data and 'usdc_returned' in tx.event_data:
+                logger.info(f"DEBUG: usdc_returned present: {tx.event_data['usdc_returned']}")
+        
         # Check if this is a position-related transaction
         if hasattr(tx, 'event_data') and tx.event_data:
             pool_address = None
