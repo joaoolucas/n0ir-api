@@ -593,8 +593,8 @@ async def get_transactions(
     
     for tx in transactions:
         # Debug log for POSITION_CREATED transactions
-        if tx.tx_type == 'POSITION_CREATED' and tx.tx_hash == "0x39f2fa2ede784c9e1be75df47f67742c7bac830ba0afeaa8662c839fd8801c14":
-            logger.info(f"DEBUG: Found target tx, event_data: {tx.event_data}")
+        if tx.tx_type == 'POSITION_CREATED':
+            logger.info(f"DEBUG TX {tx.tx_hash[:10]}: Original event_data keys: {list(tx.event_data.keys()) if tx.event_data else 'None'}")
             if tx.event_data and 'usdc_returned' in tx.event_data:
                 logger.info(f"DEBUG: usdc_returned present: {tx.event_data['usdc_returned']}")
         
