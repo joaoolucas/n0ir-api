@@ -26,9 +26,9 @@ class RebalancingThresholds(BaseModel):
     )
     
     min_allocation_size: float = Field(
-        default=10.0,
-        ge=10,
-        description="Minimum position size in USDC to avoid dust positions"
+        default=50.0,  # Increased to ensure proper-sized positions
+        ge=50,
+        description="Minimum position size in USDC for new positions when portfolio exists"
     )
     
     # Switch/Rebalancing Thresholds
@@ -122,18 +122,52 @@ class RebalancingStrategy:
         confidence: float,
         expected_apr: float,
         allocation: float,
-        available_capital: float
+        available_capital: float,
+        nav: float = 0,
+        has_existing_positions: bool = False
     ) -> tuple[bool, str]:
         """
         Determine if a new position should be entered.
-        Uses dynamic APR thresholds based on position size (quant-optimized).
+        Uses dynamic APR thresholds and NAV-based benefit requirements.
         
+        Args:
+            confidence: Confidence score (0-100)
+            expected_apr: Expected APR percentage
+            allocation: Proposed allocation amount
+            available_capital: Available capital for investment
+            nav: Net Asset Value (positions + available capital)
+            has_existing_positions: Whether user has existing positions
+            
         Returns:
             (should_enter, reason)
         """
         # Check confidence threshold
         if confidence < self.thresholds.min_confidence_for_entry:
             return False, f"Confidence {confidence:.1f}% below threshold {self.thresholds.min_confidence_for_entry}%"
+        
+        # If user has existing positions, apply stricter criteria
+        if has_existing_positions:
+            # Minimum position size for adding to existing portfolio
+            min_position_size = max(50.0, min(100.0, nav * 0.05))  # 5% of NAV, capped between $50-$100
+            
+            if allocation < min_position_size:
+                return False, f"Allocation ${allocation:.0f} below minimum ${min_position_size:.0f} for portfolio addition"
+            
+            # Calculate minimum benefit requirement: max($20, 10 bps of NAV)
+            min_benefit = max(20.0, nav * 0.001)  # 10 bps = 0.1% = 0.001
+            
+            # Estimate annual benefit from this position
+            # Annual benefit = allocation * (APR/100)
+            estimated_annual_benefit = allocation * (expected_apr / 100)
+            # Pro-rate to 30 days for near-term benefit
+            estimated_30d_benefit = estimated_annual_benefit * (30 / 365)
+            
+            if estimated_30d_benefit < min_benefit:
+                return False, f"Expected benefit ${estimated_30d_benefit:.2f} below minimum ${min_benefit:.2f} (10bps NAV or $20)"
+            
+            # APR uplift requirement (must beat 35% threshold)
+            if expected_apr < 35:
+                return False, f"APR {expected_apr:.1f}% below 35% uplift threshold for portfolio addition"
         
         # Dynamic APR threshold based on position size
         # For Base L2 with $0.50 gas costs
