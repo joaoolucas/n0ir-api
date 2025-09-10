@@ -1052,8 +1052,8 @@ class UserService:
         """Recalculate and update user's PnL values.
         
         PNL is calculated as:
-        - Realized PNL: (wallet balance + sum(entry_amount of ACTIVE positions)) - net_deposits
-        - Unrealized PNL: (wallet + sum(current position values + unclaimed fees)) - net_deposits - realized
+        - Realized PNL: Sum of PnL from all CLOSED positions
+        - Unrealized PNL: Sum of PnL from all ACTIVE positions
         
         This should be called after:
         - Position is closed
@@ -1074,25 +1074,30 @@ class UserService:
             logger.error(f"User {user_id} not found for PnL calculation")
             return
         
-        # Get deposits and withdrawals
+        # Get deposits and withdrawals for percentage calculations
         total_deposits, total_withdrawals = await self.get_deposit_withdrawal_totals(user_id)
         
-        # =================================================================
-        # UNREALIZED PNL: Current portfolio value - net deposits
-        # =================================================================
-        
-        # Get all active positions
+        # Get all positions
         all_positions = await self.get_user_positions(user_id)
         active_positions = [p for p in all_positions if p.status == 'ACTIVE']
+        closed_positions = [p for p in all_positions if p.status == 'CLOSED']
         
-        # Get current wallet balance
-        wallet_balance = await self.get_user_balance(user_id)
+        # =================================================================
+        # REALIZED PNL: Sum of PnL from all CLOSED positions
+        # =================================================================
+        realized_pnl = Decimal(0)
+        for position in closed_positions:
+            # For closed positions, calculate PnL as exit value - entry value
+            exit_value = position.current_value_usdc or Decimal(0)
+            entry_value = position.entry_amount_usdc or Decimal(0)
+            position_pnl = exit_value - entry_value
+            realized_pnl += position_pnl
+            logger.debug(f"Closed position {position.nft_token_id}: entry={entry_value}, exit={exit_value}, pnl={position_pnl}")
         
-        # Build both totals we need for realized/unrealized split
-        # - MTM portfolio: wallet + current value of active positions (+ unclaimed fees)
-        # - Entry portfolio: wallet + entry_amount sum for active positions
-        total_portfolio_value_mtm = Decimal(str(wallet_balance))
-        total_entry_active = Decimal(str(wallet_balance))
+        # =================================================================
+        # UNREALIZED PNL: Sum of PnL from all ACTIVE positions  
+        # =================================================================
+        total_unrealized_pnl = Decimal(0)
         
         for position in active_positions:
             try:
@@ -1106,52 +1111,49 @@ class UserService:
                     # Calculate total current value
                     position_current_value = current_value_usd + unclaimed_fees_usd
                     
-                    # Add to mark-to-market portfolio value
-                    total_portfolio_value_mtm += position_current_value
-                    
                     # Update position's current value in DB for caching
                     position.current_value_usdc = position_current_value
+                    
+                    # Calculate unrealized PnL for this position
+                    entry_value = position.entry_amount_usdc or Decimal(0)
+                    position_unrealized_pnl = position_current_value - entry_value
+                    total_unrealized_pnl += position_unrealized_pnl
+                    
+                    logger.debug(f"Active position {position.nft_token_id}: entry={entry_value}, current={position_current_value}, unrealized_pnl={position_unrealized_pnl}")
+                else:
+                    # Use cached values if blockchain fetch fails
+                    cached_value = position.current_value_usdc or position.entry_amount_usdc or Decimal(0)
+                    entry_value = position.entry_amount_usdc or Decimal(0)
+                    position_unrealized_pnl = cached_value - entry_value
+                    total_unrealized_pnl += position_unrealized_pnl
                     
             except Exception as e:
                 logger.error(f"Error fetching position {position.nft_token_id}: {e}")
                 # Use database values as fallback
                 cached_value = position.current_value_usdc or position.entry_amount_usdc or Decimal(0)
-                total_portfolio_value_mtm += cached_value
-
-            # Sum entry amounts for active positions (cost basis part)
-            total_entry_active += position.entry_amount_usdc or Decimal(0)
+                entry_value = position.entry_amount_usdc or Decimal(0)
+                position_unrealized_pnl = cached_value - entry_value
+                total_unrealized_pnl += position_unrealized_pnl
         
         # Commit any position value updates
         await self.db.commit()
         
-        # Calculate net deposits (deposits - withdrawals)
+        # Calculate net deposits (deposits - withdrawals) for percentage calculations
         net_deposits = total_deposits - total_withdrawals
 
-        # Realized PnL should only be recognized on withdrawals.
-        # If there are no withdrawals, realized PnL must be 0.
-        # When withdrawals exist, only the portion that exceeds total deposits is profit realized.
-        if total_withdrawals > 0:
-            realized_pnl = (total_withdrawals - total_deposits) if (total_withdrawals - total_deposits) > 0 else Decimal(0)
-        else:
-            realized_pnl = Decimal(0)
-
-        # Unrealized PnL is the remaining mark-to-market portfolio value minus net deposits and realized
-        total_unrealized_pnl = total_portfolio_value_mtm - net_deposits - realized_pnl
-
         logger.info(
-            f"PNL split for {user_id}: wallet={wallet_balance:.2f}, "
-            f"entry_active_sum={(total_entry_active - Decimal(str(wallet_balance))):.2f}, "
-            f"mtm_active_sum={(total_portfolio_value_mtm - Decimal(str(wallet_balance))):.2f}, "
-            f"net_deposits={net_deposits:.2f}, realized={realized_pnl:.2f}, unrealized={total_unrealized_pnl:.2f}"
+            f"PNL for {user_id}: "
+            f"realized={realized_pnl:.2f} (from {len(closed_positions)} closed positions), "
+            f"unrealized={total_unrealized_pnl:.2f} (from {len(active_positions)} active positions)"
         )
         
         # Calculate percentage returns
-        # For realized: based on total deposits (only if realized > 0)
+        # For realized: based on total deposits if we have deposits
         realized_pnl_percentage = Decimal(0)
-        if realized_pnl > 0 and total_deposits > 0:
+        if total_deposits > 0:
             realized_pnl_percentage = (realized_pnl / total_deposits) * 100
         
-        # For unrealized: based on net deposits (deposits - withdrawals)
+        # For unrealized: based on net deposits (deposits - withdrawals) if positive
         unrealized_pnl_percentage = Decimal(0)
         if net_deposits > 0:
             unrealized_pnl_percentage = (total_unrealized_pnl / net_deposits) * 100
