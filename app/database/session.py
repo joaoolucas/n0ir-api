@@ -18,7 +18,6 @@ def init_db():
     
     # Get database URL and ensure it uses asyncpg
     db_url = settings.get_database_url
-    logger.info(f"Using database URL: {db_url[:30]}... (private_url: {settings.database_private_url is not None}, database_url: {settings.database_url is not None})")
     
     # Convert postgresql:// or postgres:// to postgresql+asyncpg://
     if db_url.startswith("postgresql://"):

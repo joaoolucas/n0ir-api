@@ -5,8 +5,8 @@ import os
 import subprocess
 import sys
 
-# Set the production database URL
-os.environ['DATABASE_URL'] = "postgresql://postgres:iGipbjkDUDKforbKRzRUjDnXSIaXviyi@shuttle.proxy.rlwy.net:37929/railway"
+# Use the DATABASE_URL from environment (Railway sets this)
+# Don't override it here!
 
 print("🔧 Starting migration fix process...")
 
