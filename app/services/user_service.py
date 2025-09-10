@@ -1213,16 +1213,26 @@ class UserService:
         # Filter positions based on period
         if time_boundary:
             # For closed positions: include if closed within the period
-            closed_positions = [
-                p for p in all_positions 
-                if p.status == 'CLOSED' and p.closed_at and p.closed_at >= time_boundary
-            ]
+            closed_positions = []
+            for p in all_positions:
+                if p.status == 'CLOSED' and p.closed_at:
+                    # Ensure closed_at is timezone-aware
+                    closed_at = p.closed_at
+                    if closed_at.tzinfo is None:
+                        closed_at = closed_at.replace(tzinfo=timezone.utc)
+                    if closed_at >= time_boundary:
+                        closed_positions.append(p)
             
             # For active positions: include if created within the period
-            active_positions = [
-                p for p in all_positions 
-                if p.status == 'ACTIVE' and p.created_at and p.created_at >= time_boundary
-            ]
+            active_positions = []
+            for p in all_positions:
+                if p.status == 'ACTIVE' and p.created_at:
+                    # Ensure created_at is timezone-aware
+                    created_at = p.created_at
+                    if created_at.tzinfo is None:
+                        created_at = created_at.replace(tzinfo=timezone.utc)
+                    if created_at >= time_boundary:
+                        active_positions.append(p)
         else:
             # All time - include all positions
             closed_positions = [p for p in all_positions if p.status == 'CLOSED']
@@ -1233,31 +1243,49 @@ class UserService:
         total_withdrawals = Decimal(0)
         
         if time_boundary:
-            # Get deposits for the period
+            # Get all confirmed deposits and withdrawals
             deposit_stmt = select(Transaction).where(
                 and_(
                     Transaction.user_id == user_id,
                     Transaction.tx_type == 'DEPOSIT',
-                    Transaction.status == 'CONFIRMED',
-                    Transaction.created_at >= time_boundary
+                    Transaction.status == 'CONFIRMED'
                 )
             )
             deposit_result = await self.db.execute(deposit_stmt)
             deposits = deposit_result.scalars().all()
-            total_deposits = sum(Decimal(str(t.amount_usdc)) for t in deposits)
+            
+            # Filter deposits by period, handling timezone issues
+            filtered_deposits = []
+            for t in deposits:
+                if t.created_at:
+                    created_at = t.created_at
+                    if created_at.tzinfo is None:
+                        created_at = created_at.replace(tzinfo=timezone.utc)
+                    if created_at >= time_boundary:
+                        filtered_deposits.append(t)
+            total_deposits = sum(Decimal(str(t.amount_usdc)) for t in filtered_deposits)
             
             # Get withdrawals for the period
             withdrawal_stmt = select(Transaction).where(
                 and_(
                     Transaction.user_id == user_id,
                     or_(Transaction.tx_type == 'WITHDRAWAL', Transaction.tx_type == 'WITHDRAW'),
-                    Transaction.status == 'CONFIRMED',
-                    Transaction.created_at >= time_boundary
+                    Transaction.status == 'CONFIRMED'
                 )
             )
             withdrawal_result = await self.db.execute(withdrawal_stmt)
             withdrawals = withdrawal_result.scalars().all()
-            total_withdrawals = sum(Decimal(str(t.amount_usdc)) for t in withdrawals)
+            
+            # Filter withdrawals by period, handling timezone issues
+            filtered_withdrawals = []
+            for t in withdrawals:
+                if t.created_at:
+                    created_at = t.created_at
+                    if created_at.tzinfo is None:
+                        created_at = created_at.replace(tzinfo=timezone.utc)
+                    if created_at >= time_boundary:
+                        filtered_withdrawals.append(t)
+            total_withdrawals = sum(Decimal(str(t.amount_usdc)) for t in filtered_withdrawals)
         else:
             # All time - get all deposits and withdrawals
             total_deposits, total_withdrawals = await self.get_deposit_withdrawal_totals(user_id)
