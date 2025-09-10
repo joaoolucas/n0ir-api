@@ -104,6 +104,24 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
         # Get real-time position data from blockchain using the singleton service (only for ACTIVE positions)
         try:
             position_info = await positions_service.get_position_by_id(position.nft_token_id)
+            # Update the staked status and gauge address from blockchain
+            position_dict['staked'] = position_info.staked
+            if position_info.gauge_address:
+                position_dict['gauge_address'] = position_info.gauge_address
+            
+            # Update the database if staked status or gauge address has changed
+            if db:
+                update_needed = False
+                if position.staked != position_info.staked:
+                    position.staked = position_info.staked
+                    update_needed = True
+                if position_info.gauge_address and position.gauge_address != position_info.gauge_address:
+                    position.gauge_address = position_info.gauge_address
+                    update_needed = True
+                
+                if update_needed:
+                    await db.commit()
+                    logger.info(f"Updated position {position.nft_token_id}: staked={position_info.staked}, gauge={position_info.gauge_address}")
         except Exception as e:
             # If position doesn't exist on-chain, it was likely closed externally
             if "execution reverted: ID" in str(e) or "ContractLogicError" in str(e):
