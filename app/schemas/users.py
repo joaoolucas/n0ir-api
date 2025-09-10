@@ -35,6 +35,13 @@ class PositionStatus(str, enum.Enum):
     LIQUIDATED = "LIQUIDATED"
 
 
+class TimePeriod(str, enum.Enum):
+    DAY_1 = "24h"
+    DAY_7 = "7d"
+    DAY_30 = "30d"
+    ALL_TIME = "all"
+
+
 # Request Models
 class CreateUserRequest(BaseModel):
     user_id: str = Field(..., description="User's wallet address (EOA)")

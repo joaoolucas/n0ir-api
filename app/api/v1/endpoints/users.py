@@ -14,7 +14,7 @@ from app.schemas.users import (
     PositionResponse, PositionListResponse, CreatePositionRequest, ClosePositionRequest,
     BalanceResponse, PnLResponse, PerformanceResponse,
     ProtocolFeeListResponse, ProtocolFeeResponse,
-    UserStatus, TransactionType, TransactionStatus, PositionStatus
+    UserStatus, TransactionType, TransactionStatus, PositionStatus, TimePeriod
 )
 # Enums are already imported from schemas above
 DBTransactionType = TransactionType
@@ -704,12 +704,19 @@ async def get_positions(
 @router.get("/{user_id}/pnl", response_model=PnLResponse)
 async def get_pnl(
     user_id: str,
+    period: Optional[TimePeriod] = Query(None, description="Time period for PnL calculation (24h, 7d, 30d, all)"),
     db: AsyncSession = Depends(get_db)
 ):
     """Get user P&L summary with real-time position values.
     
     This endpoint recalculates PnL using current blockchain position values
     to ensure accurate unrealized PnL based on market conditions.
+    
+    Time periods:
+    - 24h: Last 24 hours
+    - 7d: Last 7 days  
+    - 30d: Last 30 days
+    - all: All time (default)
     """
     service = UserService(db)
     
@@ -718,43 +725,61 @@ async def get_pnl(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    # Recalculate PnL with real-time position values from blockchain
-    await service.recalculate_user_pnl(user_id)
-    
-    # Refresh user to get updated values
-    await db.refresh(user)
-    
-    # Get fees and rewards from positions for additional metrics
-    positions = await service.get_user_positions(user_id)
-    
-    # Calculate total fees and rewards from all positions
-    total_fees_earned = sum(p.fees_earned_usdc or Decimal(0) for p in positions)
-    total_rewards_earned = sum(p.rewards_earned_usdc or Decimal(0) for p in positions)
-    
-    # Get protocol fees pending
-    protocol_fees_pending = sum(
-        p.protocol_fee_amount for p in positions 
-        if p.protocol_fee_amount and not p.protocol_fee_collected
-    )
-    
-    # Calculate total PnL (realized + unrealized)
-    total_pnl = user.realized_pnl_usdc + user.unrealized_pnl_usdc
-    
-    # Net PnL after protocol fees
-    net_pnl = total_pnl - protocol_fees_pending
-    
-    return PnLResponse(
-        realized_pnl_usdc=user.realized_pnl_usdc,
-        unrealized_pnl_usdc=user.unrealized_pnl_usdc,
-        unrealized_pnl_percentage=user.unrealized_pnl_percentage,
-        unrealized_pnl_pct=user.unrealized_pnl_percentage,  # Same value with different name
-        realized_pnl_percentage=user.realized_pnl_percentage,
-        fees_earned_usdc=total_fees_earned,
-        rewards_earned_usdc=total_rewards_earned,
-        total_pnl_usdc=total_pnl,
-        protocol_fees_pending_usdc=protocol_fees_pending,
-        net_pnl_usdc=net_pnl
-    )
+    # Use period-specific calculation if period is provided
+    if period:
+        pnl_data = await service.recalculate_user_pnl_for_period(user_id, period)
+        
+        return PnLResponse(
+            realized_pnl_usdc=pnl_data.get("realized_pnl_usdc", Decimal(0)),
+            unrealized_pnl_usdc=pnl_data.get("unrealized_pnl_usdc", Decimal(0)),
+            unrealized_pnl_percentage=pnl_data.get("unrealized_pnl_percentage", Decimal(0)),
+            unrealized_pnl_pct=pnl_data.get("unrealized_pnl_pct", Decimal(0)),
+            realized_pnl_percentage=pnl_data.get("realized_pnl_percentage", Decimal(0)),
+            fees_earned_usdc=pnl_data.get("fees_earned_usdc", Decimal(0)),
+            rewards_earned_usdc=pnl_data.get("rewards_earned_usdc", Decimal(0)),
+            total_pnl_usdc=pnl_data.get("total_pnl_usdc", Decimal(0)),
+            protocol_fees_pending_usdc=pnl_data.get("protocol_fees_pending_usdc", Decimal(0)),
+            net_pnl_usdc=pnl_data.get("net_pnl_usdc", Decimal(0))
+        )
+    else:
+        # Default to all-time (existing behavior)
+        # Recalculate PnL with real-time position values from blockchain
+        await service.recalculate_user_pnl(user_id)
+        
+        # Refresh user to get updated values
+        await db.refresh(user)
+        
+        # Get fees and rewards from positions for additional metrics
+        positions = await service.get_user_positions(user_id)
+        
+        # Calculate total fees and rewards from all positions
+        total_fees_earned = sum(p.fees_earned_usdc or Decimal(0) for p in positions)
+        total_rewards_earned = sum(p.rewards_earned_usdc or Decimal(0) for p in positions)
+        
+        # Get protocol fees pending
+        protocol_fees_pending = sum(
+            p.protocol_fee_amount for p in positions 
+            if p.protocol_fee_amount and not p.protocol_fee_collected
+        )
+        
+        # Calculate total PnL (realized + unrealized)
+        total_pnl = user.realized_pnl_usdc + user.unrealized_pnl_usdc
+        
+        # Net PnL after protocol fees
+        net_pnl = total_pnl - protocol_fees_pending
+        
+        return PnLResponse(
+            realized_pnl_usdc=user.realized_pnl_usdc,
+            unrealized_pnl_usdc=user.unrealized_pnl_usdc,
+            unrealized_pnl_percentage=user.unrealized_pnl_percentage,
+            unrealized_pnl_pct=user.unrealized_pnl_percentage,  # Same value with different name
+            realized_pnl_percentage=user.realized_pnl_percentage,
+            fees_earned_usdc=total_fees_earned,
+            rewards_earned_usdc=total_rewards_earned,
+            total_pnl_usdc=total_pnl,
+            protocol_fees_pending_usdc=protocol_fees_pending,
+            net_pnl_usdc=net_pnl
+        )
 
 
 # NOTE: pnl-details endpoint removed - use /pnl endpoint instead which provides all the same data plus more
@@ -764,6 +789,7 @@ async def get_pnl(
 @router.get("/{user_id}/performance", response_model=PerformanceResponse)
 async def get_performance(
     user_id: str,
+    period: Optional[TimePeriod] = Query(None, description="Time period for performance calculation (24h, 7d, 30d, all)"),
     db: AsyncSession = Depends(get_db)
 ):
     """Get simplified user performance metrics.
@@ -773,6 +799,12 @@ async def get_performance(
     - pnl_usdc: unrealized PnL from active positions
     - pnl_pct: unrealized PnL percentage
     - apr and active positions count
+    
+    Time periods:
+    - 24h: Last 24 hours
+    - 7d: Last 7 days
+    - 30d: Last 30 days
+    - all: All time (default)
     """
     service = UserService(db)
     
@@ -781,11 +813,23 @@ async def get_performance(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    # Recalculate PnL with real-time position values from blockchain (same as /pnl endpoint)
-    await service.recalculate_user_pnl(user_id)
-    
-    # Refresh user to get updated values
-    await db.refresh(user)
+    # Get PnL data based on period
+    if period:
+        pnl_data = await service.recalculate_user_pnl_for_period(user_id, period)
+        unrealized_pnl = pnl_data.get("unrealized_pnl_usdc", Decimal(0))
+        unrealized_pnl_pct = pnl_data.get("unrealized_pnl_percentage", Decimal(0))
+        active_positions_count = pnl_data.get("active_positions_count", 0)
+    else:
+        # Default to all-time (existing behavior)
+        # Recalculate PnL with real-time position values from blockchain (same as /pnl endpoint)
+        await service.recalculate_user_pnl(user_id)
+        
+        # Refresh user to get updated values
+        await db.refresh(user)
+        
+        unrealized_pnl = user.unrealized_pnl_usdc
+        unrealized_pnl_pct = user.unrealized_pnl_percentage
+        active_positions_count = None  # Will be calculated later
     
     # Get positions for APR calculation
     positions = await service.get_user_positions(user_id, status='ACTIVE')
@@ -858,9 +902,9 @@ async def get_performance(
     return PerformanceResponse(
         apr=apr,
         balance=total_portfolio_value,
-        pnl_usdc=user.unrealized_pnl_usdc,  # Use unrealized PnL from user object
-        pnl_pct=user.unrealized_pnl_percentage,  # Use unrealized PnL percentage from user object
-        active_positions=len(positions)
+        pnl_usdc=unrealized_pnl,  # Use period-aware or all-time unrealized PnL
+        pnl_pct=unrealized_pnl_pct,  # Use period-aware or all-time unrealized PnL percentage
+        active_positions=active_positions_count if active_positions_count is not None else len(positions)
     )
 
 # NOTE: Protocol fees endpoint removed - fees are included in other endpoints like /pnl

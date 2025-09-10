@@ -1,5 +1,5 @@
 from typing import Optional, List, Dict, Any
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 import uuid
 import json
@@ -9,7 +9,7 @@ from sqlalchemy import select, update, and_, or_, func, case, Numeric
 from sqlalchemy.orm import selectinload
 
 from app.database.models import User, Transaction, Position
-from app.schemas.users import TransactionType, TransactionStatus, PositionStatus
+from app.schemas.users import TransactionType, TransactionStatus, PositionStatus, TimePeriod
 from app.core.logger import logger
 from app.core.positions_service import positions_service
 from app.services.agent_management_service import get_agent_service
@@ -1168,6 +1168,200 @@ class UserService:
         )
         
         logger.info(f"Updated PNL for user {user_id}: realized={realized_pnl:.2f} ({realized_pnl_percentage:.2f}%), unrealized={total_unrealized_pnl:.2f} ({unrealized_pnl_percentage:.2f}%)")
+    
+    async def recalculate_user_pnl_for_period(self, user_id: str, period: TimePeriod = TimePeriod.ALL_TIME) -> Dict[str, Decimal]:
+        """Recalculate and return user's PnL values for a specific time period.
+        
+        PNL is calculated as:
+        - Realized PNL: Sum of PnL from positions CLOSED within the period
+        - Unrealized PNL: Sum of PnL from positions CREATED within the period and still ACTIVE
+        
+        Args:
+            user_id: User identifier
+            period: Time period to calculate PnL for (24h, 7d, 30d, all)
+        
+        Returns:
+            Dictionary with PnL values for the period
+        """
+        from app.core.positions_service import positions_service
+        from sqlalchemy import select, and_, or_
+        from app.database.models import Transaction
+        
+        # Get user
+        stmt = select(User).where(User.user_id == user_id)
+        result = await self.db.execute(stmt)
+        user = result.scalar_one_or_none()
+        
+        if not user:
+            logger.error(f"User {user_id} not found for PnL calculation")
+            return {}
+        
+        # Calculate time boundary based on period
+        now = datetime.now(timezone.utc)
+        if period == TimePeriod.DAY_1:
+            time_boundary = now - timedelta(days=1)
+        elif period == TimePeriod.DAY_7:
+            time_boundary = now - timedelta(days=7)
+        elif period == TimePeriod.DAY_30:
+            time_boundary = now - timedelta(days=30)
+        else:  # ALL_TIME
+            time_boundary = None
+        
+        # Get all positions
+        all_positions = await self.get_user_positions(user_id)
+        
+        # Filter positions based on period
+        if time_boundary:
+            # For closed positions: include if closed within the period
+            closed_positions = [
+                p for p in all_positions 
+                if p.status == 'CLOSED' and p.closed_at and p.closed_at >= time_boundary
+            ]
+            
+            # For active positions: include if created within the period
+            active_positions = [
+                p for p in all_positions 
+                if p.status == 'ACTIVE' and p.created_at and p.created_at >= time_boundary
+            ]
+        else:
+            # All time - include all positions
+            closed_positions = [p for p in all_positions if p.status == 'CLOSED']
+            active_positions = [p for p in all_positions if p.status == 'ACTIVE']
+        
+        # Get deposits and withdrawals for the period for percentage calculations
+        total_deposits = Decimal(0)
+        total_withdrawals = Decimal(0)
+        
+        if time_boundary:
+            # Get deposits for the period
+            deposit_stmt = select(Transaction).where(
+                and_(
+                    Transaction.user_id == user_id,
+                    Transaction.tx_type == 'DEPOSIT',
+                    Transaction.status == 'CONFIRMED',
+                    Transaction.created_at >= time_boundary
+                )
+            )
+            deposit_result = await self.db.execute(deposit_stmt)
+            deposits = deposit_result.scalars().all()
+            total_deposits = sum(Decimal(str(t.amount_usdc)) for t in deposits)
+            
+            # Get withdrawals for the period
+            withdrawal_stmt = select(Transaction).where(
+                and_(
+                    Transaction.user_id == user_id,
+                    or_(Transaction.tx_type == 'WITHDRAWAL', Transaction.tx_type == 'WITHDRAW'),
+                    Transaction.status == 'CONFIRMED',
+                    Transaction.created_at >= time_boundary
+                )
+            )
+            withdrawal_result = await self.db.execute(withdrawal_stmt)
+            withdrawals = withdrawal_result.scalars().all()
+            total_withdrawals = sum(Decimal(str(t.amount_usdc)) for t in withdrawals)
+        else:
+            # All time - get all deposits and withdrawals
+            total_deposits, total_withdrawals = await self.get_deposit_withdrawal_totals(user_id)
+        
+        # =================================================================
+        # REALIZED PNL: Sum of PnL from positions CLOSED within the period
+        # =================================================================
+        realized_pnl = Decimal(0)
+        for position in closed_positions:
+            # For closed positions, calculate PnL as exit value - entry value
+            exit_value = position.current_value_usdc or Decimal(0)
+            entry_value = position.entry_amount_usdc or Decimal(0)
+            position_pnl = exit_value - entry_value
+            realized_pnl += position_pnl
+            logger.debug(f"Closed position {position.nft_token_id} (period {period}): entry={entry_value}, exit={exit_value}, pnl={position_pnl}")
+        
+        # =================================================================
+        # UNREALIZED PNL: Sum of PnL from positions CREATED within period and still ACTIVE
+        # =================================================================
+        total_unrealized_pnl = Decimal(0)
+        
+        for position in active_positions:
+            try:
+                # Fetch real-time value from blockchain
+                position_info = await positions_service.get_position_by_id(position.nft_token_id)
+                
+                if position_info:
+                    current_value_usd = Decimal(str(position_info.current_value_usd or 0))
+                    unclaimed_fees_usd = Decimal(str(position_info.unclaimed_fees_usd or 0))
+                    
+                    # Calculate total current value
+                    position_current_value = current_value_usd + unclaimed_fees_usd
+                    
+                    # Calculate unrealized PnL for this position
+                    entry_value = position.entry_amount_usdc or Decimal(0)
+                    position_unrealized_pnl = position_current_value - entry_value
+                    total_unrealized_pnl += position_unrealized_pnl
+                    
+                    logger.debug(f"Active position {position.nft_token_id} (period {period}): entry={entry_value}, current={position_current_value}, unrealized_pnl={position_unrealized_pnl}")
+                else:
+                    # Use cached values if blockchain fetch fails
+                    cached_value = position.current_value_usdc or position.entry_amount_usdc or Decimal(0)
+                    entry_value = position.entry_amount_usdc or Decimal(0)
+                    position_unrealized_pnl = cached_value - entry_value
+                    total_unrealized_pnl += position_unrealized_pnl
+                    
+            except Exception as e:
+                logger.error(f"Error fetching position {position.nft_token_id}: {e}")
+                # Use database values as fallback
+                cached_value = position.current_value_usdc or position.entry_amount_usdc or Decimal(0)
+                entry_value = position.entry_amount_usdc or Decimal(0)
+                position_unrealized_pnl = cached_value - entry_value
+                total_unrealized_pnl += position_unrealized_pnl
+        
+        # Calculate net deposits for percentage calculations
+        net_deposits = total_deposits - total_withdrawals
+        
+        # Calculate percentage returns
+        realized_pnl_percentage = Decimal(0)
+        if total_deposits > 0:
+            realized_pnl_percentage = (realized_pnl / total_deposits) * 100
+        
+        unrealized_pnl_percentage = Decimal(0)
+        if net_deposits > 0:
+            unrealized_pnl_percentage = (total_unrealized_pnl / net_deposits) * 100
+        
+        # Calculate total fees and rewards from filtered positions
+        all_filtered_positions = closed_positions + active_positions
+        total_fees_earned = sum(p.fees_earned_usdc or Decimal(0) for p in all_filtered_positions)
+        total_rewards_earned = sum(p.rewards_earned_usdc or Decimal(0) for p in all_filtered_positions)
+        
+        # Get protocol fees pending from filtered positions
+        protocol_fees_pending = sum(
+            p.protocol_fee_amount for p in all_filtered_positions 
+            if p.protocol_fee_amount and not p.protocol_fee_collected
+        )
+        
+        # Calculate total PnL (realized + unrealized)
+        total_pnl = realized_pnl + total_unrealized_pnl
+        
+        # Net PnL after protocol fees
+        net_pnl = total_pnl - protocol_fees_pending
+        
+        logger.info(
+            f"PNL for {user_id} (period {period}): "
+            f"realized={realized_pnl:.2f} ({realized_pnl_percentage:.2f}%), "
+            f"unrealized={total_unrealized_pnl:.2f} ({unrealized_pnl_percentage:.2f}%)"
+        )
+        
+        return {
+            "realized_pnl_usdc": realized_pnl,
+            "unrealized_pnl_usdc": total_unrealized_pnl,
+            "unrealized_pnl_percentage": unrealized_pnl_percentage,
+            "unrealized_pnl_pct": unrealized_pnl_percentage,  # Alias
+            "realized_pnl_percentage": realized_pnl_percentage,
+            "fees_earned_usdc": total_fees_earned,
+            "rewards_earned_usdc": total_rewards_earned,
+            "total_pnl_usdc": total_pnl,
+            "protocol_fees_pending_usdc": protocol_fees_pending,
+            "net_pnl_usdc": net_pnl,
+            "period": period,
+            "active_positions_count": len(active_positions),
+            "closed_positions_count": len(closed_positions)
+        }
     
     async def calculate_user_performance(self, user_id: str) -> Dict[str, Any]:
         """Calculate comprehensive performance metrics for a user."""
