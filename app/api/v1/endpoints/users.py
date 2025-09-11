@@ -748,11 +748,83 @@ async def get_pnl(
         pnl_data = await service.recalculate_user_pnl_for_period(user_id, period)
         
         # Calculate pnl_full (realized + unrealized)
-        pnl_full = pnl_data.get("realized_pnl_usdc", Decimal(0)) + pnl_data.get("unrealized_pnl_usdc", Decimal(0))
+        realized_pnl = pnl_data.get("realized_pnl_usdc", Decimal(0))
+        unrealized_pnl = pnl_data.get("unrealized_pnl_usdc", Decimal(0))
+        pnl_full = realized_pnl + unrealized_pnl
+        
+        # Calculate pnl_full_pct based on deposits for the period
+        # Get deposits/withdrawals for the period from the service calculation
+        from datetime import datetime, timedelta, timezone
+        time_boundary = datetime.now(timezone.utc)
+        if period == TimePeriod.DAY:
+            time_boundary = datetime.now(timezone.utc) - timedelta(days=1)
+        elif period == TimePeriod.WEEK:
+            time_boundary = datetime.now(timezone.utc) - timedelta(days=7)
+        elif period == TimePeriod.MONTH:
+            time_boundary = datetime.now(timezone.utc) - timedelta(days=30)
+        
+        # Get deposit/withdrawal totals for period
+        from app.database.models import Transaction
+        from sqlalchemy import select, and_, or_
+        
+        if period != TimePeriod.ALL_TIME:
+            # Get deposits for the period
+            deposit_stmt = select(Transaction).where(
+                and_(
+                    Transaction.user_id == user_id,
+                    Transaction.tx_type == 'DEPOSIT',
+                    Transaction.status == 'CONFIRMED'
+                )
+            )
+            deposit_result = await db.execute(deposit_stmt)
+            deposits = deposit_result.scalars().all()
+            
+            # Filter deposits by period
+            filtered_deposits = []
+            for t in deposits:
+                if t.created_at:
+                    created_at = t.created_at
+                    if created_at.tzinfo is None:
+                        created_at = created_at.replace(tzinfo=timezone.utc)
+                    if created_at >= time_boundary:
+                        filtered_deposits.append(t)
+            total_deposits = sum(Decimal(str(t.amount_usdc)) for t in filtered_deposits)
+            
+            # Get withdrawals for the period
+            withdrawal_stmt = select(Transaction).where(
+                and_(
+                    Transaction.user_id == user_id,
+                    or_(Transaction.tx_type == 'WITHDRAWAL', Transaction.tx_type == 'WITHDRAW'),
+                    Transaction.status == 'CONFIRMED'
+                )
+            )
+            withdrawal_result = await db.execute(withdrawal_stmt)
+            withdrawals = withdrawal_result.scalars().all()
+            
+            # Filter withdrawals by period
+            filtered_withdrawals = []
+            for t in withdrawals:
+                if t.created_at:
+                    created_at = t.created_at
+                    if created_at.tzinfo is None:
+                        created_at = created_at.replace(tzinfo=timezone.utc)
+                    if created_at >= time_boundary:
+                        filtered_withdrawals.append(t)
+            total_withdrawals = sum(Decimal(str(t.amount_usdc)) for t in filtered_withdrawals)
+        else:
+            # All time - get all deposits and withdrawals
+            total_deposits, total_withdrawals = await service.get_deposit_withdrawal_totals(user_id)
+        
+        net_deposits = total_deposits - total_withdrawals
+        
+        # Calculate pnl_full_pct
+        pnl_full_pct = Decimal(0)
+        if net_deposits > 0:
+            pnl_full_pct = (pnl_full / net_deposits) * 100
         
         return PnLResponse(
-            realized_pnl_usdc=pnl_data.get("realized_pnl_usdc", Decimal(0)),
-            unrealized_pnl_usdc=pnl_data.get("unrealized_pnl_usdc", Decimal(0)),
+            realized_pnl_usdc=realized_pnl,
+            unrealized_pnl_usdc=unrealized_pnl,
             unrealized_pnl_percentage=pnl_data.get("unrealized_pnl_percentage", Decimal(0)),
             unrealized_pnl_pct=pnl_data.get("unrealized_pnl_pct", Decimal(0)),
             realized_pnl_percentage=pnl_data.get("realized_pnl_percentage", Decimal(0)),
@@ -761,7 +833,8 @@ async def get_pnl(
             total_pnl_usdc=pnl_data.get("total_pnl_usdc", Decimal(0)),
             protocol_fees_pending_usdc=pnl_data.get("protocol_fees_pending_usdc", Decimal(0)),
             net_pnl_usdc=pnl_data.get("net_pnl_usdc", Decimal(0)),
-            pnl_full=pnl_full
+            pnl_full=pnl_full,
+            pnl_full_pct=pnl_full_pct
         )
     else:
         # Default to all-time (existing behavior)
@@ -793,6 +866,15 @@ async def get_pnl(
         # Calculate pnl_full (realized + unrealized)
         pnl_full = user.realized_pnl_usdc + user.unrealized_pnl_usdc
         
+        # Get total deposits and withdrawals for all-time percentage calculation
+        total_deposits, total_withdrawals = await service.get_deposit_withdrawal_totals(user_id)
+        net_deposits = total_deposits - total_withdrawals
+        
+        # Calculate pnl_full_pct
+        pnl_full_pct = Decimal(0)
+        if net_deposits > 0:
+            pnl_full_pct = (pnl_full / net_deposits) * 100
+        
         return PnLResponse(
             realized_pnl_usdc=user.realized_pnl_usdc,
             unrealized_pnl_usdc=user.unrealized_pnl_usdc,
@@ -804,7 +886,8 @@ async def get_pnl(
             total_pnl_usdc=total_pnl,
             protocol_fees_pending_usdc=protocol_fees_pending,
             net_pnl_usdc=net_pnl,
-            pnl_full=pnl_full
+            pnl_full=pnl_full,
+            pnl_full_pct=pnl_full_pct
         )
 
 
@@ -846,7 +929,71 @@ async def get_performance(
         realized_pnl = pnl_data.get("realized_pnl_usdc", Decimal(0))
         unrealized_pnl = pnl_data.get("unrealized_pnl_usdc", Decimal(0))
         pnl_full = realized_pnl + unrealized_pnl
-        unrealized_pnl_pct = pnl_data.get("unrealized_pnl_percentage", Decimal(0))
+        
+        # Calculate pnl_full_pct for the period (same logic as PnL endpoint)
+        from datetime import datetime, timedelta, timezone
+        from app.database.models import Transaction
+        from sqlalchemy import select, and_, or_
+        
+        time_boundary = datetime.now(timezone.utc)
+        if period == TimePeriod.DAY:
+            time_boundary = datetime.now(timezone.utc) - timedelta(days=1)
+        elif period == TimePeriod.WEEK:
+            time_boundary = datetime.now(timezone.utc) - timedelta(days=7)
+        elif period == TimePeriod.MONTH:
+            time_boundary = datetime.now(timezone.utc) - timedelta(days=30)
+        
+        # Get deposits for the period
+        deposit_stmt = select(Transaction).where(
+            and_(
+                Transaction.user_id == user_id,
+                Transaction.tx_type == 'DEPOSIT',
+                Transaction.status == 'CONFIRMED'
+            )
+        )
+        deposit_result = await db.execute(deposit_stmt)
+        deposits = deposit_result.scalars().all()
+        
+        # Filter deposits by period
+        filtered_deposits = []
+        for t in deposits:
+            if t.created_at:
+                created_at = t.created_at
+                if created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=timezone.utc)
+                if created_at >= time_boundary:
+                    filtered_deposits.append(t)
+        total_deposits = sum(Decimal(str(t.amount_usdc)) for t in filtered_deposits)
+        
+        # Get withdrawals for the period
+        withdrawal_stmt = select(Transaction).where(
+            and_(
+                Transaction.user_id == user_id,
+                or_(Transaction.tx_type == 'WITHDRAWAL', Transaction.tx_type == 'WITHDRAW'),
+                Transaction.status == 'CONFIRMED'
+            )
+        )
+        withdrawal_result = await db.execute(withdrawal_stmt)
+        withdrawals = withdrawal_result.scalars().all()
+        
+        # Filter withdrawals by period
+        filtered_withdrawals = []
+        for t in withdrawals:
+            if t.created_at:
+                created_at = t.created_at
+                if created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=timezone.utc)
+                if created_at >= time_boundary:
+                    filtered_withdrawals.append(t)
+        total_withdrawals = sum(Decimal(str(t.amount_usdc)) for t in filtered_withdrawals)
+        
+        net_deposits = total_deposits - total_withdrawals
+        
+        # Calculate pnl_full_pct
+        pnl_full_pct = Decimal(0)
+        if net_deposits > 0:
+            pnl_full_pct = (pnl_full / net_deposits) * 100
+        
         active_positions_count = pnl_data.get("active_positions_count", 0)
     else:
         # Default to all-time (existing behavior)
@@ -859,7 +1006,16 @@ async def get_performance(
         # Calculate pnl_full (realized + unrealized) for all-time
         pnl_full = user.realized_pnl_usdc + user.unrealized_pnl_usdc
         unrealized_pnl = user.unrealized_pnl_usdc
-        unrealized_pnl_pct = user.unrealized_pnl_percentage
+        
+        # Get total deposits and withdrawals for all-time percentage calculation
+        total_deposits, total_withdrawals = await service.get_deposit_withdrawal_totals(user_id)
+        net_deposits = total_deposits - total_withdrawals
+        
+        # Calculate pnl_full_pct
+        pnl_full_pct = Decimal(0)
+        if net_deposits > 0:
+            pnl_full_pct = (pnl_full / net_deposits) * 100
+        
         active_positions_count = None  # Will be calculated later
     
     # Get positions for APR calculation
@@ -934,7 +1090,7 @@ async def get_performance(
         apr=apr,
         balance=total_portfolio_value,
         pnl_usdc=pnl_full,  # Use pnl_full (realized + unrealized) matching /pnl endpoint
-        pnl_pct=unrealized_pnl_pct,  # Keep unrealized PnL percentage
+        pnl_pct=pnl_full_pct,  # Use pnl_full_pct matching /pnl endpoint
         active_positions=active_positions_count if active_positions_count is not None else len(positions)
     )
 
