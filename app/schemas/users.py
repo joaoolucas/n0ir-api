@@ -278,6 +278,7 @@ class PnLResponse(BaseModel):
     total_pnl_usdc: Decimal
     protocol_fees_pending_usdc: Decimal
     net_pnl_usdc: Decimal
+    pnl_full: Decimal  # Total PnL (realized + unrealized)
 
 
 class PerformanceResponse(BaseModel):

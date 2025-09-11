@@ -747,6 +747,9 @@ async def get_pnl(
     if period:
         pnl_data = await service.recalculate_user_pnl_for_period(user_id, period)
         
+        # Calculate pnl_full (realized + unrealized)
+        pnl_full = pnl_data.get("realized_pnl_usdc", Decimal(0)) + pnl_data.get("unrealized_pnl_usdc", Decimal(0))
+        
         return PnLResponse(
             realized_pnl_usdc=pnl_data.get("realized_pnl_usdc", Decimal(0)),
             unrealized_pnl_usdc=pnl_data.get("unrealized_pnl_usdc", Decimal(0)),
@@ -757,7 +760,8 @@ async def get_pnl(
             rewards_earned_usdc=pnl_data.get("rewards_earned_usdc", Decimal(0)),
             total_pnl_usdc=pnl_data.get("total_pnl_usdc", Decimal(0)),
             protocol_fees_pending_usdc=pnl_data.get("protocol_fees_pending_usdc", Decimal(0)),
-            net_pnl_usdc=pnl_data.get("net_pnl_usdc", Decimal(0))
+            net_pnl_usdc=pnl_data.get("net_pnl_usdc", Decimal(0)),
+            pnl_full=pnl_full
         )
     else:
         # Default to all-time (existing behavior)
@@ -786,6 +790,9 @@ async def get_pnl(
         # Net PnL after protocol fees
         net_pnl = total_pnl - protocol_fees_pending
         
+        # Calculate pnl_full (realized + unrealized)
+        pnl_full = user.realized_pnl_usdc + user.unrealized_pnl_usdc
+        
         return PnLResponse(
             realized_pnl_usdc=user.realized_pnl_usdc,
             unrealized_pnl_usdc=user.unrealized_pnl_usdc,
@@ -796,7 +803,8 @@ async def get_pnl(
             rewards_earned_usdc=total_rewards_earned,
             total_pnl_usdc=total_pnl,
             protocol_fees_pending_usdc=protocol_fees_pending,
-            net_pnl_usdc=net_pnl
+            net_pnl_usdc=net_pnl,
+            pnl_full=pnl_full
         )
 
 
@@ -834,7 +842,10 @@ async def get_performance(
     # Get PnL data based on period
     if period:
         pnl_data = await service.recalculate_user_pnl_for_period(user_id, period)
+        # Calculate pnl_full (realized + unrealized) for period
+        realized_pnl = pnl_data.get("realized_pnl_usdc", Decimal(0))
         unrealized_pnl = pnl_data.get("unrealized_pnl_usdc", Decimal(0))
+        pnl_full = realized_pnl + unrealized_pnl
         unrealized_pnl_pct = pnl_data.get("unrealized_pnl_percentage", Decimal(0))
         active_positions_count = pnl_data.get("active_positions_count", 0)
     else:
@@ -845,6 +856,8 @@ async def get_performance(
         # Refresh user to get updated values
         await db.refresh(user)
         
+        # Calculate pnl_full (realized + unrealized) for all-time
+        pnl_full = user.realized_pnl_usdc + user.unrealized_pnl_usdc
         unrealized_pnl = user.unrealized_pnl_usdc
         unrealized_pnl_pct = user.unrealized_pnl_percentage
         active_positions_count = None  # Will be calculated later
@@ -915,13 +928,13 @@ async def get_performance(
             # Fallback to 0 if strategy service fails
             apr = 0.0
     
-    # Use unrealized PnL values from the recalculated user object (same as /pnl endpoint)
+    # Use pnl_full (realized + unrealized) to match /pnl endpoint's pnl_full field
     # This ensures consistency between /performance and /pnl endpoints
     return PerformanceResponse(
         apr=apr,
         balance=total_portfolio_value,
-        pnl_usdc=unrealized_pnl,  # Use period-aware or all-time unrealized PnL
-        pnl_pct=unrealized_pnl_pct,  # Use period-aware or all-time unrealized PnL percentage
+        pnl_usdc=pnl_full,  # Use pnl_full (realized + unrealized) matching /pnl endpoint
+        pnl_pct=unrealized_pnl_pct,  # Keep unrealized PnL percentage
         active_positions=active_positions_count if active_positions_count is not None else len(positions)
     )
 
