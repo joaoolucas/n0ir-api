@@ -35,6 +35,13 @@ class PositionStatus(str, enum.Enum):
     LIQUIDATED = "LIQUIDATED"
 
 
+class TimePeriod(str, enum.Enum):
+    DAY_1 = "24h"
+    DAY_7 = "7d"
+    DAY_30 = "30d"
+    ALL_TIME = "all"
+
+
 # Request Models
 class CreateUserRequest(BaseModel):
     user_id: str = Field(..., description="User's wallet address (EOA)")
@@ -245,9 +252,10 @@ class PositionResponse(BaseModel):
     status: PositionStatus
     entry_tx_hash: Optional[str]
     exit_tx_hash: Optional[str]
-    entry_date: datetime
-    exit_date: Optional[datetime]
-    last_updated: datetime
+    # Some legacy rows may lack these timestamps; make them optional
+    entry_date: Optional[datetime] = None
+    exit_date: Optional[datetime] = None
+    last_updated: Optional[datetime] = None
 
 
 class ProtocolFeeResponse(BaseModel):
@@ -270,6 +278,7 @@ class PnLResponse(BaseModel):
     total_pnl_usdc: Decimal
     protocol_fees_pending_usdc: Decimal
     net_pnl_usdc: Decimal
+    pnl_full: Decimal  # Total PnL (realized + unrealized)
 
 
 class PerformanceResponse(BaseModel):

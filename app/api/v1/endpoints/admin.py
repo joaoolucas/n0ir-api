@@ -11,6 +11,45 @@ from loguru import logger
 
 router = APIRouter()
 
+@router.post("/update-usdc-returned")
+async def update_usdc_returned(
+    db: AsyncSession = Depends(get_db)
+):
+    """Update POSITION_CREATED transactions with usdc_returned field."""
+    from app.database.models import Transaction
+    from sqlalchemy import select, update
+    from decimal import Decimal
+    
+    # Find the specific transaction
+    tx_hash = "0x39f2fa2ede784c9e1be75df47f67742c7bac830ba0afeaa8662c839fd8801c14"
+    
+    result = await db.execute(
+        select(Transaction).where(Transaction.tx_hash == tx_hash)
+    )
+    tx = result.scalar_one_or_none()
+    
+    if tx:
+        # Update the event_data to include usdc_returned
+        if not tx.event_data:
+            tx.event_data = {}
+        
+        # Add the usdc_returned field
+        tx.event_data['usdc_returned'] = "0.010091"
+        
+        # Also ensure amount_usdc is present
+        if 'amount_usdc' not in tx.event_data:
+            tx.event_data['amount_usdc'] = tx.event_data.get('usdc_in', '49.99')
+        
+        # Mark the field as modified to ensure SQLAlchemy updates it
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(tx, "event_data")
+        
+        await db.commit()
+        
+        return {"status": "success", "message": f"Updated transaction {tx_hash[:10]}... with usdc_returned=0.010091", "event_data": tx.event_data}
+    else:
+        return {"status": "error", "message": f"Transaction {tx_hash} not found"}
+
 @router.post("/fix-balance/{user_id}")
 async def fix_user_balance(
     user_id: str,

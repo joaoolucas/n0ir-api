@@ -83,11 +83,12 @@ class StrategyOrchestrator:
                 available_capital
             )
             
-            # Build decision matrix
+            # Build decision matrix with NAV context
             decision_matrix = self._build_decision_matrix(
                 analyses,
                 available_capital,
-                len(user_context['positions'])
+                len(user_context['positions']),
+                positions_value=user_context['positions_value']
             )
             
             # Detect risk alerts
@@ -397,17 +398,22 @@ class StrategyOrchestrator:
         self,
         analyses: Dict[str, List],
         available_capital: float,
-        active_positions: int
+        active_positions: int,
+        positions_value: float = 0
     ) -> Dict:
         """Build decision matrix from analyses with smart rebalancing thresholds."""
         immediate_actions = []
         scheduled_actions = []
         
+        # Calculate NAV for decision making
+        nav = available_capital + positions_value
+        has_existing_positions = active_positions > 0
+        
         # REBALANCING THRESHOLDS - Prevent unnecessary churn
         MIN_CONFIDENCE_FOR_ENTRY = 75  # Only enter if confidence > 75%
         MIN_APR_IMPROVEMENT_FOR_SWITCH = 35  # Switch only if APR improves by 35%+ (updated from quant analysis)
         MIN_NET_BENEFIT_FOR_SWITCH = 500  # Switch only if net benefit > $500
-        MIN_ALLOCATION_SIZE = 10  # Minimum position size $10 for testing
+        MIN_ALLOCATION_SIZE = 50 if has_existing_positions else 10  # Higher minimum when adding to portfolio
         MAX_GAS_COST_RATIO = 0.05  # Gas can be up to 5% for small test positions
         
         # Priority 1: Urgent exits (always execute these)
@@ -420,8 +426,8 @@ class StrategyOrchestrator:
                     'reason': exit['reason']
                 })
         
-        # Priority 2: High confidence entries (using rebalancing strategy)
-        rejected_count = {'low_confidence': 0, 'low_apr': 0, 'gas_cost': 0, 'small_size': 0}
+        # Priority 2: High confidence entries (using rebalancing strategy with NAV)
+        rejected_count = {'low_confidence': 0, 'low_apr': 0, 'gas_cost': 0, 'small_size': 0, 'low_benefit': 0}
         
         for entry in sorted(analyses['entries'], 
                           key=lambda x: x['confidence_score'], 
@@ -432,7 +438,9 @@ class StrategyOrchestrator:
                 confidence=entry['confidence_score'],
                 expected_apr=entry['expected_apr'],
                 allocation=entry['optimal_allocation'],
-                available_capital=available_capital
+                available_capital=available_capital,
+                nav=nav,
+                has_existing_positions=has_existing_positions
             )
             
             if should_enter:
@@ -453,8 +461,10 @@ class StrategyOrchestrator:
                     rejected_count['low_apr'] += 1
                 elif 'Gas' in reason:
                     rejected_count['gas_cost'] += 1
-                elif 'Allocation' in reason:
+                elif 'Allocation' in reason or 'minimum' in reason:
                     rejected_count['small_size'] += 1
+                elif 'benefit' in reason:
+                    rejected_count['low_benefit'] += 1
                 logger.debug(f"Entry rejected: {reason}")
         
         # Priority 3: Beneficial switches (with strict thresholds)
