@@ -756,11 +756,11 @@ async def get_pnl(
         # Get deposits/withdrawals for the period from the service calculation
         from datetime import datetime, timedelta, timezone
         time_boundary = datetime.now(timezone.utc)
-        if period == TimePeriod.DAY:
+        if period == TimePeriod.DAY_1:
             time_boundary = datetime.now(timezone.utc) - timedelta(days=1)
-        elif period == TimePeriod.WEEK:
+        elif period == TimePeriod.DAY_7:
             time_boundary = datetime.now(timezone.utc) - timedelta(days=7)
-        elif period == TimePeriod.MONTH:
+        elif period == TimePeriod.DAY_30:
             time_boundary = datetime.now(timezone.utc) - timedelta(days=30)
         
         # Get deposit/withdrawal totals for period
@@ -936,11 +936,11 @@ async def get_performance(
         from sqlalchemy import select, and_, or_
         
         time_boundary = datetime.now(timezone.utc)
-        if period == TimePeriod.DAY:
+        if period == TimePeriod.DAY_1:
             time_boundary = datetime.now(timezone.utc) - timedelta(days=1)
-        elif period == TimePeriod.WEEK:
+        elif period == TimePeriod.DAY_7:
             time_boundary = datetime.now(timezone.utc) - timedelta(days=7)
-        elif period == TimePeriod.MONTH:
+        elif period == TimePeriod.DAY_30:
             time_boundary = datetime.now(timezone.utc) - timedelta(days=30)
         
         # Get deposits for the period
