@@ -34,7 +34,7 @@ class Position(Base):
     # Tick and liquidity information
     tick_lower = Column(Integer, nullable=True)
     tick_upper = Column(Integer, nullable=True)
-    tick_spacing = Column(Integer, nullable=True)
+    # tick_spacing removed in migration 027
     liquidity = Column(String(80), nullable=True)  # Stored as string due to uint256 size
     
     # USD amounts
