@@ -551,7 +551,7 @@ class UserService:
         warning_message = None
         if requires_closing:
             # Simple protocol fee message without specific AERO amounts
-            fee_msg = " A 2% protocol fee (0.0081 USDC) applies to AERO rewards."
+            fee_msg = " A 5% protocol fee applies to AERO rewards."
             if estimated_slippage > 0:
                 warning_message = f"This withdrawal requires closing {positions_to_close} position(s). Estimated slippage: {estimated_slippage:.4f} USDC.{fee_msg}"
             else:
