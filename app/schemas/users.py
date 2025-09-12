@@ -70,6 +70,17 @@ class WithdrawRequest(BaseModel):
     withdraw_all: bool = Field(False, description="Withdraw entire available balance after closing positions")
 
 
+class WithdrawResponse(BaseModel):
+    requested_amount: Decimal = Field(..., description="Amount requested to withdraw")
+    withdrawn_amount: Decimal = Field(..., description="Actual amount withdrawn (may be less than requested)")
+    remaining_balance: Decimal = Field(..., description="Remaining balance after withdrawal")
+    positions_closed: int = Field(0, description="Number of positions closed for withdrawal")
+    status: str = Field(..., description="Status: 'complete', 'partial', 'none', or 'error'")
+    tx_hash: Optional[str] = Field(None, description="Transaction hash if executed")
+    transaction_id: Optional[int] = Field(None, description="Transaction ID in database")
+    message: Optional[str] = Field(None, description="Additional message or error details")
+
+# Keep for backwards compatibility (deprecated)
 class WithdrawPreviewResponse(BaseModel):
     requested_amount: Decimal = Field(..., description="Amount requested to withdraw")
     wallet_balance: Decimal = Field(..., description="Current wallet balance")

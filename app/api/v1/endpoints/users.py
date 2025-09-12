@@ -9,7 +9,7 @@ from app.services.user_service import UserService
 from app.core.pools_service import pools_service
 from app.core.positions_service import positions_service
 from app.schemas.users import (
-    CreateUserRequest, UpdateUserRequest, DepositRequest, WithdrawRequest, WithdrawPreviewResponse,
+    CreateUserRequest, UpdateUserRequest, DepositRequest, WithdrawRequest, WithdrawResponse,
     UserResponse, TransactionResponse, TransactionListResponse,
     PositionResponse, PositionListResponse, CreatePositionRequest, ClosePositionRequest,
     BalanceResponse, PnLResponse, PerformanceResponse,
@@ -343,35 +343,23 @@ async def create_user(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{user_id}", response_model=UserResponse)
-async def get_user(
-    user_id: str,
-    db: AsyncSession = Depends(get_db)
-):
-    """Get user details."""
-    service = UserService(db)
-    user = await service.get_user(user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return UserResponse.model_validate(user)
-
-
-
 
 # Financial Operations
 # NOTE: Deposit and withdrawal endpoints removed - these are now tracked automatically by the watcher from blockchain events
 
-@router.post("/{user_id}/withdraw", response_model=TransactionResponse, status_code=201)
+@router.post("/{user_id}/withdraw", response_model=WithdrawResponse, status_code=201)
 async def withdraw(
     user_id: str,
     request: WithdrawRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    """Withdraw USDC from user account.
+    """Withdraw USDC from user account with smart/best-effort logic.
     
-    This endpoint will automatically close positions if needed to fulfill the withdrawal.
-    If tx_hash is provided, the withdrawal is recorded as already executed.
-    Otherwise, the withdrawal is executed through the agent manager service.
+    This endpoint will:
+    - Withdraw the requested amount if available
+    - Withdraw the maximum available if requested amount exceeds balance
+    - Automatically close positions if needed and allowed
+    - Always succeed (withdrawing 0 if nothing is available)
     
     Args:
         user_id: User's wallet address
@@ -387,60 +375,68 @@ async def withdraw(
             raise HTTPException(status_code=401, detail="Invalid signature - withdrawal authorization failed")
         
         service = UserService(db)
-        transaction = await service.withdraw_usdc(
-            user_id=user_id,
-            amount=request.amount_usdc,
-            tx_hash=request.tx_hash,
-            to_address=request.destination_address,
-            force_close_positions=request.force_close_positions,
-            max_slippage_percent=request.max_slippage_percent,
-            withdraw_all=request.withdraw_all
+        
+        # Get current wallet balance
+        wallet_balance = await service.get_user_balance(user_id)
+        
+        # Smart withdrawal: use min(requested, available)
+        actual_amount = min(request.amount_usdc, wallet_balance)
+        
+        # If balance insufficient and force_close_positions is true, check positions
+        positions_closed = 0
+        if actual_amount < request.amount_usdc and request.force_close_positions:
+            active_positions = await service.get_user_positions(user_id, status='ACTIVE')
+            if active_positions:
+                # Calculate potential balance after closing positions
+                potential_balance = wallet_balance
+                for position in active_positions:
+                    potential_balance += (position.current_value_usdc or position.entry_amount_usdc)
+                
+                # Update actual amount to min(requested, potential)
+                actual_amount = min(request.amount_usdc, potential_balance)
+                positions_closed = len(active_positions)
+        
+        # Execute withdrawal (will close positions if needed)
+        transaction = None
+        if actual_amount > 0:
+            transaction = await service.withdraw_usdc(
+                user_id=user_id,
+                amount=actual_amount,  # Use the smart amount
+                tx_hash=request.tx_hash,
+                to_address=request.destination_address,
+                force_close_positions=request.force_close_positions,
+                max_slippage_percent=request.max_slippage_percent,
+                withdraw_all=False  # We handle the logic here
+            )
+        
+        # Get updated balance
+        remaining_balance = await service.get_user_balance(user_id)
+        
+        # Create enhanced response
+        return WithdrawResponse(
+            requested_amount=request.amount_usdc,
+            withdrawn_amount=actual_amount,
+            remaining_balance=remaining_balance,
+            positions_closed=positions_closed,
+            status="complete" if actual_amount >= request.amount_usdc else "partial" if actual_amount > 0 else "none",
+            tx_hash=transaction.tx_hash if transaction else None,
+            transaction_id=transaction.id if transaction else None,
+            message=f"Withdrew {actual_amount} USDC" + (f" (requested {request.amount_usdc})" if actual_amount < request.amount_usdc else "")
         )
-        # Create response manually to avoid property setter issues
-        return TransactionResponse(
-            transaction_id=transaction.id,
-            user_id=transaction.user_id,
-            transaction_type=transaction.tx_type,
-            amount_usdc=transaction.amount_usdc,  # This reads from the property
-            tx_hash=transaction.tx_hash,
-            status=transaction.status,
-            event_data=transaction.event_data,
-            created_at=transaction.created_at,
-            tx_metadata=transaction.tx_metadata,
-            # Include optional fields with None defaults
-            block_number=getattr(transaction, 'block_number', None),
-            block_timestamp=getattr(transaction, 'block_timestamp', None),
-            gas_used=getattr(transaction, 'gas_used', None),
-            gas_price=getattr(transaction, 'gas_price', None),
-            confirmed_at=getattr(transaction, 'confirmed_at', None),
-            pool_name=None
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error processing withdrawal: {e}")
-        raise HTTPException(status_code=500, detail="Failed to process withdrawal")
+        # Even on error, return a valid response showing nothing was withdrawn
+        return WithdrawResponse(
+            requested_amount=request.amount_usdc,
+            withdrawn_amount=Decimal(0),
+            remaining_balance=await service.get_user_balance(user_id) if 'service' in locals() else Decimal(0),
+            positions_closed=0,
+            status="error",
+            tx_hash=None,
+            transaction_id=None,
+            message=str(e)
+        )
 
-
-@router.get("/{user_id}/withdraw/preview", response_model=WithdrawPreviewResponse)
-async def preview_withdrawal(
-    user_id: str,
-    amount: Decimal = Query(..., gt=0, description="Amount to withdraw in USDC"),
-    db: AsyncSession = Depends(get_db)
-):
-    """Preview a withdrawal to see what would happen.
-    
-    Shows whether positions need to be closed, estimated fees, and if withdrawal is possible.
-    """
-    try:
-        service = UserService(db)
-        preview = await service.preview_withdrawal(user_id, amount)
-        return WithdrawPreviewResponse(**preview)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error previewing withdrawal: {e}")
-        raise HTTPException(status_code=500, detail="Failed to preview withdrawal")
 
 
 @router.get("/{user_id}/balance", response_model=BalanceResponse)
