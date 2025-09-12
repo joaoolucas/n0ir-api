@@ -59,16 +59,15 @@ class Position(Base):
     # Position status
     status = Column(String(20), nullable=False, default="ACTIVE", index=True)
     
-    # PnL tracking fields - map to actual database columns
-    # Database has: pnl_usdc, pnl_pct, realized_pnl_usdc, realized_pnl_pct (after migration 027)
-    # But code is looking for: unrealized_pnl_usd, unrealized_pnl_pct, realized_pnl_usd, realized_pnl_pct
-    # Create aliases to match what the code expects
-    unrealized_pnl_usd = Column('pnl_usdc', Numeric(precision=20, scale=2), default=0, nullable=False)
-    unrealized_pnl_pct = Column('pnl_pct', Numeric(precision=10, scale=4), default=0, nullable=False)
-    realized_pnl_usd = Column('realized_pnl_usdc', Numeric(precision=20, scale=2), default=0, nullable=False)
+    # PnL tracking fields - Database actually has OLD column names since migration 027 failed
+    # Database has: unrealized_pnl_usd, unrealized_pnl_pct, realized_pnl_usd, realized_pnl_pct
+    # Use the actual database column names directly
+    unrealized_pnl_usd = Column(Numeric(precision=20, scale=2), default=0, nullable=False)
+    unrealized_pnl_pct = Column(Numeric(precision=10, scale=4), default=0, nullable=False)
+    realized_pnl_usd = Column(Numeric(precision=20, scale=2), default=0, nullable=False)
     realized_pnl_pct = Column(Numeric(precision=10, scale=4), default=0, nullable=False)
     
-    # Also keep the correct names as properties for compatibility
+    # Create aliases for the new names that code might use
     @property
     def pnl_usdc(self):
         return self.unrealized_pnl_usd
@@ -76,6 +75,10 @@ class Position(Base):
     @property
     def pnl_pct(self):
         return self.unrealized_pnl_pct
+    
+    @property
+    def realized_pnl_usdc(self):
+        return self.realized_pnl_usd
     
     # JSONB fields (exist in old schema)
     position_data = Column(JSONB, default={}, nullable=False)
