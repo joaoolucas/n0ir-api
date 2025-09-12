@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional, TYPE_CHECKING, List
+from typing import Optional, TYPE_CHECKING
 from sqlalchemy import Column, String, DateTime, ForeignKey, Index, Numeric, Integer, Boolean, BigInteger
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship, Mapped
@@ -10,7 +10,6 @@ from app.database.base import Base
 
 if TYPE_CHECKING:
     from app.database.models.position import Position
-    from app.database.models.hedge_event import HedgeEvent
 
 
 class HedgePosition(Base):
@@ -54,12 +53,6 @@ class HedgePosition(Base):
     
     # Relationships
     position: Mapped["Position"] = relationship("Position", back_populates="hedge_position")
-    hedge_events: Mapped[List["HedgeEvent"]] = relationship(
-        "HedgeEvent",
-        back_populates="hedge_position",
-        cascade="all, delete-orphan",
-        lazy="select"
-    )
     
     # Indexes
     __table_args__ = (

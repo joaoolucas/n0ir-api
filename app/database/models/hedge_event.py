@@ -42,14 +42,8 @@ class HedgeEvent(Base):
     # Timestamp
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     
-    # Relationship to hedge position (optional - events may persist after position is deleted)
-    hedge_position: Mapped[Optional["HedgePosition"]] = relationship(
-        "HedgePosition",
-        back_populates="hedge_events",
-        foreign_keys=[nft_token_id],
-        primaryjoin="HedgeEvent.nft_token_id == HedgePosition.nft_token_id",
-        viewonly=True
-    )
+    # No back-reference relationship to avoid circular dependency
+    # Events can be queried directly via nft_token_id when needed
     
     # Indexes
     __table_args__ = (
