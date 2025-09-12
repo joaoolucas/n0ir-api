@@ -59,10 +59,10 @@ class Position(Base):
     # Position status
     status = Column(String(20), nullable=False, default="ACTIVE", index=True)
     
-    # PnL tracking fields (exist in old schema)
-    unrealized_pnl_usd = Column(Numeric(precision=20, scale=2), default=0, nullable=False)
-    unrealized_pnl_pct = Column(Numeric(precision=10, scale=4), default=0, nullable=False)
-    realized_pnl_usd = Column(Numeric(precision=20, scale=2), default=0, nullable=False)
+    # PnL tracking fields (renamed in migration 027)
+    pnl_usdc = Column(Numeric(precision=20, scale=2), default=0, nullable=False)
+    pnl_pct = Column(Numeric(precision=10, scale=4), default=0, nullable=False)
+    realized_pnl_usdc = Column(Numeric(precision=20, scale=2), default=0, nullable=False)
     realized_pnl_pct = Column(Numeric(precision=10, scale=4), default=0, nullable=False)
     
     # JSONB fields (exist in old schema)
@@ -227,9 +227,19 @@ class Position(Base):
         return None
     
     @property
-    def realized_pnl_usdc(self) -> Decimal:
-        """Get realized P&L in USDC (map from USD)."""
-        return self.realized_pnl_usd
+    def unrealized_pnl_usd(self) -> Decimal:
+        """Backward compatibility: map old name to new column."""
+        return self.pnl_usdc
+    
+    @property
+    def unrealized_pnl_pct(self) -> Decimal:
+        """Backward compatibility: map old name to new column."""
+        return self.pnl_pct
+    
+    @property
+    def realized_pnl_usd(self) -> Decimal:
+        """Backward compatibility: map old name to new column."""
+        return self.realized_pnl_usdc
     
     @property
     def entry_date(self) -> Optional[datetime]:
