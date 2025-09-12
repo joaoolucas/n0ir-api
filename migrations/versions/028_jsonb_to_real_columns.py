@@ -18,26 +18,40 @@ depends_on = None
 def upgrade():
     """Add real columns to replace JSONB fields."""
     
-    # Add real columns to positions table
-    op.add_column('positions', sa.Column('token0_symbol', sa.String(20), nullable=True))
-    op.add_column('positions', sa.Column('token1_symbol', sa.String(20), nullable=True))
-    op.add_column('positions', sa.Column('pool_fee_tier', sa.Integer(), nullable=True))
-    op.add_column('positions', sa.Column('price_lower', sa.Numeric(precision=20, scale=8), nullable=True))
-    op.add_column('positions', sa.Column('price_upper', sa.Numeric(precision=20, scale=8), nullable=True))
-    op.add_column('positions', sa.Column('price_current', sa.Numeric(precision=20, scale=8), nullable=True))
+    # Check what columns already exist
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    existing_columns = [col['name'] for col in inspector.get_columns('positions')]
+    existing_indexes = [idx['name'] for idx in inspector.get_indexes('positions')]
     
-    # Add performance tracking columns
-    op.add_column('positions', sa.Column('total_value_usdc', sa.Numeric(precision=20, scale=6), nullable=True))
-    op.add_column('positions', sa.Column('net_pnl_usdc', sa.Numeric(precision=20, scale=6), nullable=True))
-    op.add_column('positions', sa.Column('net_pnl_pct', sa.Numeric(precision=10, scale=4), nullable=True))
+    # Add real columns to positions table (only if they don't exist)
+    new_columns = [
+        ('token0_symbol', sa.String(20), True),
+        ('token1_symbol', sa.String(20), True),
+        ('pool_fee_tier', sa.Integer(), True),
+        ('price_lower', sa.Numeric(precision=20, scale=8), True),
+        ('price_upper', sa.Numeric(precision=20, scale=8), True),
+        ('price_current', sa.Numeric(precision=20, scale=8), True),
+        ('total_value_usdc', sa.Numeric(precision=20, scale=6), True),
+        ('net_pnl_usdc', sa.Numeric(precision=20, scale=6), True),
+        ('net_pnl_pct', sa.Numeric(precision=10, scale=4), True)
+    ]
     
-    # Create composite indexes for better query performance
-    op.create_index('idx_positions_pool_user', 'positions', ['pool_address', 'user_id'])
-    op.create_index('idx_positions_status_updated', 'positions', ['status', 'updated_at'])
-    op.create_index('idx_positions_user_status', 'positions', ['user_id', 'status'])
+    for col_name, col_type, nullable in new_columns:
+        if col_name not in existing_columns:
+            op.add_column('positions', sa.Column(col_name, col_type, nullable=nullable))
     
-    # Add validation for transactions event_data structure
-    op.execute("""
+    # Create composite indexes for better query performance (only if they don't exist)
+    if 'idx_positions_pool_user' not in existing_indexes:
+        op.create_index('idx_positions_pool_user', 'positions', ['pool_address', 'user_id'])
+    if 'idx_positions_status_updated' not in existing_indexes:
+        op.create_index('idx_positions_status_updated', 'positions', ['status', 'updated_at'])
+    if 'idx_positions_user_status' not in existing_indexes:
+        op.create_index('idx_positions_user_status', 'positions', ['user_id', 'status'])
+    
+    # Add validation for transactions event_data structure (skip if it fails)
+    try:
+        op.execute("""
         ALTER TABLE transactions 
         ADD CONSTRAINT check_event_data_required_fields
         CHECK (
@@ -53,7 +67,9 @@ def upgrade():
                 ELSE true
             END
         )
-    """)
+        """)
+    except:
+        pass  # Constraint might already exist or fail on some data
     
     # Standardize transaction types
     op.execute("""

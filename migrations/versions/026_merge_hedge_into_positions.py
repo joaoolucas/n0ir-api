@@ -19,29 +19,48 @@ depends_on = None
 def upgrade():
     """Add hedge columns to positions table and migrate data."""
     
-    # Add hedge columns to positions table
-    op.add_column('positions', sa.Column('hedge_id', sa.BigInteger(), nullable=True))
-    op.add_column('positions', sa.Column('hedge_enabled', sa.Boolean(), nullable=False, server_default='false'))
-    op.add_column('positions', sa.Column('hedge_size_usdc', sa.Numeric(precision=20, scale=6), nullable=True))
-    op.add_column('positions', sa.Column('hedge_collateral_usdc', sa.Numeric(precision=20, scale=6), nullable=True))
-    op.add_column('positions', sa.Column('hedge_leverage', sa.Integer(), nullable=True))
-    op.add_column('positions', sa.Column('hedge_pair_index', sa.Integer(), nullable=True))
-    op.add_column('positions', sa.Column('hedge_market', sa.String(20), nullable=True))
-    op.add_column('positions', sa.Column('hedge_entry_price', sa.Numeric(precision=20, scale=8), nullable=True))
-    op.add_column('positions', sa.Column('hedge_current_price', sa.Numeric(precision=20, scale=8), nullable=True))
-    op.add_column('positions', sa.Column('hedge_pnl_usdc', sa.Numeric(precision=20, scale=6), nullable=True))
-    op.add_column('positions', sa.Column('hedge_funding_paid_usdc', sa.Numeric(precision=20, scale=6), nullable=True))
-    op.add_column('positions', sa.Column('hedge_status', sa.String(20), nullable=True))
-    op.add_column('positions', sa.Column('hedge_closed_at', sa.DateTime(timezone=True), nullable=True))
+    # Check what columns already exist
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    existing_columns = [col['name'] for col in inspector.get_columns('positions')]
+    existing_tables = inspector.get_table_names()
     
-    # Create indexes for hedge columns
-    op.create_index('idx_positions_hedge_status', 'positions', ['hedge_status'], 
-                     postgresql_where=sa.text("hedge_status IS NOT NULL"))
-    op.create_index('idx_positions_hedge_id', 'positions', ['hedge_id'],
-                     postgresql_where=sa.text("hedge_id IS NOT NULL"))
+    # Add hedge columns to positions table (only if they don't exist)
+    hedge_columns = [
+        ('hedge_id', sa.BigInteger(), True),
+        ('hedge_enabled', sa.Boolean(), False, 'false'),
+        ('hedge_size_usdc', sa.Numeric(precision=20, scale=6), True),
+        ('hedge_collateral_usdc', sa.Numeric(precision=20, scale=6), True),
+        ('hedge_leverage', sa.Integer(), True),
+        ('hedge_pair_index', sa.Integer(), True),
+        ('hedge_market', sa.String(20), True),
+        ('hedge_entry_price', sa.Numeric(precision=20, scale=8), True),
+        ('hedge_current_price', sa.Numeric(precision=20, scale=8), True),
+        ('hedge_pnl_usdc', sa.Numeric(precision=20, scale=6), True),
+        ('hedge_funding_paid_usdc', sa.Numeric(precision=20, scale=6), True),
+        ('hedge_status', sa.String(20), True),
+        ('hedge_closed_at', sa.DateTime(timezone=True), True)
+    ]
     
-    # Migrate data from hedge_positions to positions table
-    op.execute("""
+    for col_name, col_type, nullable, *default in hedge_columns:
+        if col_name not in existing_columns:
+            if default:
+                op.add_column('positions', sa.Column(col_name, col_type, nullable=nullable, server_default=default[0]))
+            else:
+                op.add_column('positions', sa.Column(col_name, col_type, nullable=nullable))
+    
+    # Create indexes for hedge columns (only if they don't exist)
+    existing_indexes = [idx['name'] for idx in inspector.get_indexes('positions')]
+    if 'idx_positions_hedge_status' not in existing_indexes:
+        op.create_index('idx_positions_hedge_status', 'positions', ['hedge_status'], 
+                         postgresql_where=sa.text("hedge_status IS NOT NULL"))
+    if 'idx_positions_hedge_id' not in existing_indexes:
+        op.create_index('idx_positions_hedge_id', 'positions', ['hedge_id'],
+                         postgresql_where=sa.text("hedge_id IS NOT NULL"))
+    
+    # Migrate data from hedge_positions to positions table (only if hedge_positions exists)
+    if 'hedge_positions' in existing_tables:
+        op.execute("""
         UPDATE positions p
         SET 
             hedge_id = hp.hedge_id,
@@ -59,10 +78,11 @@ def upgrade():
             hedge_closed_at = hp.closed_at
         FROM hedge_positions hp
         WHERE p.token_id = hp.nft_token_id
-    """)
+        """)
     
-    # Migrate hedge events to transactions table
-    op.execute("""
+    # Migrate hedge events to transactions table (only if hedge_events exists)
+    if 'hedge_events' in existing_tables:
+        op.execute("""
         INSERT INTO transactions (
             id, 
             tx_hash, 
@@ -100,14 +120,20 @@ def upgrade():
         FROM hedge_events he
         JOIN positions p ON p.token_id = he.nft_token_id
         WHERE he.tx_hash IS NOT NULL
-    """)
+        """)
     
-    # Drop foreign key constraints first
-    op.drop_constraint('hedge_positions_nft_token_id_fkey', 'hedge_positions', type_='foreignkey')
+    # Drop foreign key constraints first (only if table exists)
+    if 'hedge_positions' in existing_tables:
+        try:
+            op.drop_constraint('hedge_positions_nft_token_id_fkey', 'hedge_positions', type_='foreignkey')
+        except:
+            pass  # Constraint might not exist
     
-    # Drop the hedge tables
-    op.drop_table('hedge_events')
-    op.drop_table('hedge_positions')
+    # Drop the hedge tables (only if they exist)
+    if 'hedge_events' in existing_tables:
+        op.drop_table('hedge_events')
+    if 'hedge_positions' in existing_tables:
+        op.drop_table('hedge_positions')
 
 
 def downgrade():
