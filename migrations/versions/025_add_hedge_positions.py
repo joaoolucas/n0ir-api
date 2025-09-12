@@ -17,8 +17,14 @@ depends_on = None
 
 
 def upgrade():
-    # Create hedge_positions table
-    op.create_table('hedge_positions',
+    # Check if tables already exist
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    existing_tables = inspector.get_table_names()
+    
+    # Create hedge_positions table if it doesn't exist
+    if 'hedge_positions' not in existing_tables:
+        op.create_table('hedge_positions',
         sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
         sa.Column('nft_token_id', sa.Integer(), nullable=False),
         sa.Column('hedge_id', sa.BigInteger(), nullable=False),
@@ -39,15 +45,16 @@ def upgrade():
         sa.PrimaryKeyConstraint('id'),
         sa.UniqueConstraint('nft_token_id'),
         sa.ForeignKeyConstraint(['nft_token_id'], ['positions.token_id'], ondelete='CASCADE')
-    )
+        )
+        
+        # Create indexes for hedge_positions
+        op.create_index('idx_hedge_positions_status', 'hedge_positions', ['status'], unique=False)
+        op.create_index('idx_hedge_positions_nft', 'hedge_positions', ['nft_token_id'], unique=False)
+        op.create_index('idx_hedge_positions_hedge_id', 'hedge_positions', ['hedge_id'], unique=False)
     
-    # Create indexes for hedge_positions
-    op.create_index('idx_hedge_positions_status', 'hedge_positions', ['status'], unique=False)
-    op.create_index('idx_hedge_positions_nft', 'hedge_positions', ['nft_token_id'], unique=False)
-    op.create_index('idx_hedge_positions_hedge_id', 'hedge_positions', ['hedge_id'], unique=False)
-    
-    # Create hedge_events table for tracking
-    op.create_table('hedge_events',
+    # Create hedge_events table for tracking if it doesn't exist
+    if 'hedge_events' not in existing_tables:
+        op.create_table('hedge_events',
         sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
         sa.Column('nft_token_id', sa.Integer(), nullable=False),
         sa.Column('hedge_id', sa.BigInteger(), nullable=False),
@@ -58,13 +65,13 @@ def upgrade():
         sa.Column('data', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
         sa.PrimaryKeyConstraint('id')
-    )
-    
-    # Create indexes for hedge_events
-    op.create_index('idx_hedge_events_nft', 'hedge_events', ['nft_token_id'], unique=False)
-    op.create_index('idx_hedge_events_hedge_id', 'hedge_events', ['hedge_id'], unique=False)
-    op.create_index('idx_hedge_events_type', 'hedge_events', ['event_type'], unique=False)
-    op.create_index('idx_hedge_events_timestamp', 'hedge_events', ['block_timestamp'], unique=False)
+        )
+        
+        # Create indexes for hedge_events
+        op.create_index('idx_hedge_events_nft', 'hedge_events', ['nft_token_id'], unique=False)
+        op.create_index('idx_hedge_events_hedge_id', 'hedge_events', ['hedge_id'], unique=False)
+        op.create_index('idx_hedge_events_type', 'hedge_events', ['event_type'], unique=False)
+        op.create_index('idx_hedge_events_timestamp', 'hedge_events', ['block_timestamp'], unique=False)
 
 
 def downgrade():
