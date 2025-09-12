@@ -47,6 +47,31 @@ async def fix_migration_state():
             """))
             position_columns = {row[0] for row in result}
             
+            # Check and fix column names if needed
+            if 'unrealized_pnl_usd' in position_columns and 'pnl_usdc' not in position_columns:
+                print("⚠️ Found old column names, renaming to match migration 027...")
+                try:
+                    await conn.execute(text("ALTER TABLE positions RENAME COLUMN unrealized_pnl_usd TO pnl_usdc"))
+                    print("✅ Renamed unrealized_pnl_usd to pnl_usdc")
+                    
+                    await conn.execute(text("ALTER TABLE positions RENAME COLUMN unrealized_pnl_pct TO pnl_pct"))
+                    print("✅ Renamed unrealized_pnl_pct to pnl_pct")
+                    
+                    if 'realized_pnl_usd' in position_columns:
+                        await conn.execute(text("ALTER TABLE positions RENAME COLUMN realized_pnl_usd TO realized_pnl_usdc"))
+                        print("✅ Renamed realized_pnl_usd to realized_pnl_usdc")
+                    
+                    # Refresh column list after renaming
+                    result = await conn.execute(text("""
+                        SELECT column_name 
+                        FROM information_schema.columns 
+                        WHERE table_name = 'positions'
+                        ORDER BY column_name
+                    """))
+                    position_columns = {row[0] for row in result}
+                except Exception as e:
+                    print(f"⚠️ Column rename error (may already be renamed): {e}")
+            
             # Check if tables exist
             result = await conn.execute(text("""
                 SELECT table_name 
@@ -66,7 +91,7 @@ async def fix_migration_state():
             # - If token0_symbol exists: migration 028+ are done
             
             hedge_columns = {'hedge_id', 'hedge_enabled', 'hedge_size_usdc'}
-            new_columns = {'entry_date', 'exit_date', 'realized_pnl_usdc'}
+            new_columns = {'entry_date', 'exit_date', 'pnl_usdc', 'pnl_pct', 'realized_pnl_usdc'}
             real_columns = {'token0_symbol', 'token1_symbol', 'pool_fee_tier'}
             
             target_version = current_version
