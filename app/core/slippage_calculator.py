@@ -10,31 +10,31 @@ class SlippageCalculator:
     Calculates dynamic slippage based on pair characteristics, volatility, and position size.
     """
     
-    # Slippage profiles for different pair types (optimized for Base L2/Aerodrome)
+    # Fixed slippage for all pair types - 0.1%
     SLIPPAGE_PROFILES = {
         'stable': {
-            'base': 0.0005,  # 0.05% - very tight for stablecoins
-            'max': 0.002,    # 0.2% max
-            'volatility_multiplier': 0.2,
-            'size_impact_factor': 0.1
+            'base': 0.001,   # 0.1% fixed
+            'max': 0.001,    # 0.1% fixed
+            'volatility_multiplier': 0.0,
+            'size_impact_factor': 0.0
         },
         'semi-volatile': {
-            'base': 0.001,   # 0.1% - major pairs like WETH/USDC
-            'max': 0.005,    # 0.5% max
-            'volatility_multiplier': 0.5,
-            'size_impact_factor': 0.2
+            'base': 0.001,   # 0.1% fixed
+            'max': 0.001,    # 0.1% fixed
+            'volatility_multiplier': 0.0,
+            'size_impact_factor': 0.0
         },
         'volatile': {
-            'base': 0.003,   # 0.3% - volatile but liquid pairs
-            'max': 0.015,    # 1.5% max
-            'volatility_multiplier': 1.0,
-            'size_impact_factor': 0.4
+            'base': 0.001,   # 0.1% fixed
+            'max': 0.001,    # 0.1% fixed
+            'volatility_multiplier': 0.0,
+            'size_impact_factor': 0.0
         },
         'memecoin': {
-            'base': 0.005,   # 0.5% - memecoins with lower liquidity
-            'max': 0.030,    # 3.0% max
-            'volatility_multiplier': 1.5,
-            'size_impact_factor': 0.6
+            'base': 0.001,   # 0.1% fixed
+            'max': 0.001,    # 0.1% fixed
+            'volatility_multiplier': 0.0,
+            'size_impact_factor': 0.0
         }
     }
     

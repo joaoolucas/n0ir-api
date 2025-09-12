@@ -882,13 +882,13 @@ class PortfolioAnalyzer:
         # Estimate slippage (exit + entry)
         # Higher for larger positions
         if position_value < 10_000:
-            slippage_rate = 0.003  # 0.3%
+            slippage_rate = 0.001  # 0.1% fixed
         elif position_value < 50_000:
-            slippage_rate = 0.005  # 0.5%
+            slippage_rate = 0.001  # 0.1% fixed
         elif position_value < 100_000:
-            slippage_rate = 0.008  # 0.8%
+            slippage_rate = 0.001  # 0.1% fixed
         else:
-            slippage_rate = 0.012  # 1.2%
+            slippage_rate = 0.001  # 0.1% fixed
         
         slippage_cost = position_value * slippage_rate * 2  # Exit and entry
         

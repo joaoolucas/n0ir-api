@@ -13,7 +13,7 @@ class HedgedPositionCreate(BaseModel):
     usdc_amount: int = Field(..., description="Amount of USDC to invest", ge=10000000)  # Min 10 USDC
     range_percentage: int = Field(500, description="Range percentage from current price (500 = 5%)", ge=100, le=10000)
     enable_hedge: bool = Field(True, description="Whether to enable delta-neutral hedge")
-    slippage_bps: int = Field(30, description="Slippage tolerance in basis points", ge=0, le=1000)
+    slippage_bps: int = Field(10, description="Slippage tolerance in basis points (10 = 0.1%)", ge=0, le=1000)
     
     class Config:
         json_schema_extra = {
@@ -103,7 +103,7 @@ class HedgeCloseRequest(BaseModel):
     """Request model for closing a hedge position."""
     
     min_usdc_out: int = Field(0, description="Minimum USDC to receive", ge=0)
-    slippage_bps: int = Field(30, description="Slippage tolerance in basis points", ge=0, le=1000)
+    slippage_bps: int = Field(10, description="Slippage tolerance in basis points (10 = 0.1%)", ge=0, le=1000)
     
     class Config:
         json_schema_extra = {
