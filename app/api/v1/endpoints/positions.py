@@ -7,7 +7,10 @@ from sqlalchemy import select
 from app.schemas.positions import (
     PositionInfo,
     PositionListResponse,
-    PositionDetailResponse
+    PositionDetailResponse,
+    HedgedPositionCreate,
+    HedgedPositionResponse,
+    HedgeStatusResponse
 )
 from app.schemas.common import ErrorResponse
 from app.core.positions_service import positions_service
@@ -15,6 +18,8 @@ from app.core.pools_service import pools_service
 from app.core.logger import logger
 from app.database.session import get_db
 from app.database.models.position import Position
+from app.services.hedge_service import HedgeService
+from app.core.exceptions import HedgeNotFoundError, HedgeError
 
 router = APIRouter()
 
@@ -205,6 +210,170 @@ async def get_positions(
                 "error": {
                     "code": "INTERNAL_ERROR",
                     "message": "Failed to fetch positions",
+                    "details": {"error": str(e)}
+                }
+            }
+        )
+
+
+@router.get(
+    "/positions/{token_id}/hedge",
+    response_model=HedgeStatusResponse,
+    responses={
+        404: {"model": ErrorResponse, "description": "Hedge not found"},
+        500: {"model": ErrorResponse, "description": "Internal Server Error"}
+    }
+)
+async def get_hedge_status(
+    request: Request,
+    token_id: int = Path(..., description="NFT token ID of the position", ge=1),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get hedge status and P&L for a position.
+    
+    Returns current hedge information including:
+    - Market and leverage
+    - Entry and current prices
+    - P&L and funding costs
+    - Health ratio
+    - Risk status
+    """
+    logger.info(f"GET /positions/{token_id}/hedge - IP: {request.client.host}")
+    
+    try:
+        hedge_service = HedgeService(db)
+        hedge = await hedge_service.get_hedge_status(token_id)
+        
+        if not hedge:
+            raise HedgeNotFoundError(token_id)
+        
+        # Calculate health ratio
+        health_ratio = hedge.health_ratio
+        
+        return HedgeStatusResponse(
+            nft_token_id=hedge.nft_token_id,
+            hedge_id=hedge.hedge_id,
+            hedge_enabled=hedge.hedge_enabled,
+            market=hedge.market,
+            size_usdc=hedge.hedge_size_usdc,
+            collateral_usdc=hedge.collateral_usdc,
+            leverage=hedge.leverage,
+            entry_price=hedge.entry_price,
+            current_price=hedge.current_price,
+            pnl_usdc=hedge.pnl_usdc,
+            funding_paid_usdc=hedge.funding_paid_usdc,
+            status=hedge.status,
+            health_ratio=health_ratio
+        )
+        
+    except HedgeNotFoundError as e:
+        logger.warning(f"Hedge not found for position {token_id}")
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": {
+                    "code": e.code,
+                    "message": e.message,
+                    "details": e.details
+                }
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error fetching hedge status for {token_id}: {e!r}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": f"Failed to fetch hedge status",
+                    "details": {"error": str(e)}
+                }
+            }
+        )
+
+
+@router.post(
+    "/positions/hedged",
+    response_model=HedgedPositionResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid parameters"},
+        500: {"model": ErrorResponse, "description": "Internal Server Error"}
+    }
+)
+async def create_hedged_position(
+    request: Request,
+    position_data: HedgedPositionCreate,
+    user_id: str = Query(..., description="User ID creating the position"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Create a delta-neutral LP position with optional hedge.
+    
+    This endpoint:
+    - Creates a Uniswap V3 LP position
+    - Optionally opens a hedge on Avantis
+    - Returns position and hedge IDs
+    - Manages collateral requirements
+    """
+    logger.info(f"POST /positions/hedged - IP: {request.client.host} - User: {user_id}")
+    
+    try:
+        hedge_service = HedgeService(db)
+        
+        result = await hedge_service.create_hedged_position(
+            user_id=user_id,
+            pool_address=position_data.pool_address,
+            usdc_amount=position_data.usdc_amount,
+            range_percentage=position_data.range_percentage,
+            enable_hedge=position_data.enable_hedge,
+            slippage_bps=position_data.slippage_bps
+        )
+        
+        return HedgedPositionResponse(
+            token_id=result["token_id"],
+            hedge_id=result.get("hedge_id", 0),
+            pool_address=position_data.pool_address,
+            usdc_invested=position_data.usdc_amount,
+            hedge_enabled=position_data.enable_hedge,
+            hedge_size_usdc=result.get("hedge_size"),
+            collateral_usdc=result.get("hedge_collateral"),
+            leverage=result.get("hedge_leverage"),
+            status="active"
+        )
+        
+    except ValueError as e:
+        logger.warning(f"Invalid parameters for hedged position: {str(e)}")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": {
+                    "code": "INVALID_PARAMETERS",
+                    "message": str(e),
+                    "details": {"request": position_data.dict()}
+                }
+            }
+        )
+    except HedgeError as e:
+        logger.error(f"Hedge error creating position: {e.message}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": {
+                    "code": e.code,
+                    "message": e.message,
+                    "details": e.details
+                }
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error creating hedged position: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Failed to create hedged position",
                     "details": {"error": str(e)}
                 }
             }

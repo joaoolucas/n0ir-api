@@ -11,6 +11,7 @@ from app.database.base import Base
 if TYPE_CHECKING:
     from app.database.models.user import User
     from app.database.models.transaction import Transaction
+    from app.database.models.hedge_position import HedgePosition
 
 
 class Position(Base):
@@ -107,6 +108,13 @@ class Position(Base):
         "Transaction",
         back_populates="position",
         cascade="all, delete-orphan",
+        lazy="select"
+    )
+    hedge_position: Mapped[Optional["HedgePosition"]] = relationship(
+        "HedgePosition",
+        back_populates="position",
+        cascade="all, delete-orphan",
+        uselist=False,
         lazy="select"
     )
     

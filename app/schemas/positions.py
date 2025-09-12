@@ -2,6 +2,7 @@
 
 from typing import Optional, List
 from pydantic import BaseModel, Field
+from decimal import Decimal
 
 
 class PositionInfo(BaseModel):
@@ -86,5 +87,93 @@ class PositionDetailResponse(BaseModel):
                     "current_value_usd": 1500.50,
                     "gauge_address": "0x456..."
                 }
+            }
+        }
+
+
+# Hedge-related schemas (imported from spec)
+class HedgedPositionCreate(BaseModel):
+    """Request model for creating a hedged position via positions endpoint."""
+    
+    pool_address: str = Field(..., description="Pool address for the position")
+    usdc_amount: int = Field(..., description="Amount of USDC to invest")
+    range_percentage: int = Field(500, description="Range percentage (500 = 5%)")
+    enable_hedge: bool = Field(True, description="Whether to enable hedge")
+    slippage_bps: int = Field(30, description="Slippage tolerance in basis points")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "pool_address": "0x123...",
+                "usdc_amount": 100000000,
+                "range_percentage": 500,
+                "enable_hedge": True,
+                "slippage_bps": 30
+            }
+        }
+
+
+class HedgedPositionResponse(BaseModel):
+    """Response model for hedged position creation."""
+    
+    token_id: int = Field(..., description="NFT token ID")
+    hedge_id: int = Field(..., description="Hedge ID (0 if no hedge)")
+    pool_address: str = Field(..., description="Pool address")
+    usdc_invested: int = Field(..., description="USDC invested")
+    hedge_enabled: bool = Field(..., description="Hedge enabled status")
+    hedge_size_usdc: Optional[int] = Field(None, description="Hedge size in USDC")
+    collateral_usdc: Optional[int] = Field(None, description="Hedge collateral")
+    leverage: Optional[int] = Field(None, description="Hedge leverage")
+    status: str = Field(..., description="Position status")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "token_id": 12345,
+                "hedge_id": 67890,
+                "pool_address": "0x123...",
+                "usdc_invested": 100000000,
+                "hedge_enabled": True,
+                "hedge_size_usdc": 50000000,
+                "collateral_usdc": 16666667,
+                "leverage": 3,
+                "status": "active"
+            }
+        }
+
+
+class HedgeStatusResponse(BaseModel):
+    """Response model for hedge status query."""
+    
+    nft_token_id: int = Field(..., description="NFT token ID")
+    hedge_id: int = Field(..., description="Hedge ID")
+    hedge_enabled: bool = Field(..., description="Hedge enabled")
+    market: str = Field(..., description="Market (ETH-USD, BTC-USD)")
+    size_usdc: Decimal = Field(..., description="Hedge size")
+    collateral_usdc: Decimal = Field(..., description="Collateral")
+    leverage: int = Field(..., description="Leverage")
+    entry_price: Decimal = Field(..., description="Entry price")
+    current_price: Decimal = Field(..., description="Current price")
+    pnl_usdc: Decimal = Field(..., description="P&L in USDC")
+    funding_paid_usdc: Decimal = Field(..., description="Funding paid")
+    status: str = Field(..., description="Status")
+    health_ratio: float = Field(..., description="Health ratio")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "nft_token_id": 12345,
+                "hedge_id": 67890,
+                "hedge_enabled": True,
+                "market": "ETH-USD",
+                "size_usdc": "50.000000",
+                "collateral_usdc": "16.666667",
+                "leverage": 3,
+                "entry_price": "3500.00000000",
+                "current_price": "3550.00000000",
+                "pnl_usdc": "2.500000",
+                "funding_paid_usdc": "0.150000",
+                "status": "active",
+                "health_ratio": 0.85
             }
         }

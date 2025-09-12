@@ -1,13 +1,17 @@
-"""Unified 3-table database models."""
+"""Unified 3-table database models with hedge tracking."""
 
 from app.database.models.user import User
 from app.database.models.position import Position
 from app.database.models.transaction import Transaction
+from app.database.models.hedge_position import HedgePosition
+from app.database.models.hedge_event import HedgeEvent
 
 __all__ = [
     "User",
     "Position",
-    "Transaction"
+    "Transaction",
+    "HedgePosition",
+    "HedgeEvent"
 ]
 
 # Note: The following models are deprecated and replaced by the unified schema:
