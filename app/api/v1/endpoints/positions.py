@@ -9,8 +9,7 @@ from app.schemas.positions import (
     PositionListResponse,
     PositionDetailResponse,
     HedgedPositionCreate,
-    HedgedPositionResponse,
-    HedgeStatusResponse
+    HedgedPositionResponse
 )
 from app.schemas.common import ErrorResponse
 from app.core.positions_service import positions_service
@@ -86,6 +85,35 @@ async def get_position(
         
         # Add pool_name to position data
         position_dict['pool_name'] = pool_name
+        
+        # Fetch hedge information if it exists
+        hedge_info = None
+        try:
+            hedge_service = HedgeService(db)
+            hedge = await hedge_service.get_hedge_status(position_id)
+            
+            if hedge:
+                from app.schemas.positions import HedgeInfo
+                hedge_info = HedgeInfo(
+                    hedge_id=hedge.hedge_id,
+                    enabled=hedge.hedge_enabled,
+                    market=hedge.market,
+                    size_usdc=hedge.hedge_size_usdc,
+                    collateral_usdc=hedge.collateral_usdc,
+                    leverage=hedge.leverage,
+                    entry_price=hedge.entry_price,
+                    current_price=hedge.current_price,
+                    pnl_usdc=hedge.pnl_usdc,
+                    funding_paid_usdc=hedge.funding_paid_usdc,
+                    health_ratio=hedge.health_ratio,
+                    status=hedge.status
+                )
+                logger.info(f"Found hedge for position {position_id}: hedge_id={hedge.hedge_id}")
+        except Exception as e:
+            logger.debug(f"No hedge found for position {position_id}: {e}")
+        
+        # Add hedge to position data
+        position_dict['hedge'] = hedge_info
         
         logger.info(f"Successfully fetched position {position_id}")
         return PositionDetailResponse(position=PositionInfo(**position_dict))
@@ -216,80 +244,5 @@ async def get_positions(
         )
 
 
-@router.get(
-    "/positions/{token_id}/hedge",
-    response_model=HedgeStatusResponse,
-    responses={
-        404: {"model": ErrorResponse, "description": "Hedge not found"},
-        500: {"model": ErrorResponse, "description": "Internal Server Error"}
-    }
-)
-async def get_hedge_status(
-    request: Request,
-    token_id: int = Path(..., description="NFT token ID of the position", ge=1),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Get hedge status and P&L for a position.
-    
-    Returns current hedge information including:
-    - Market and leverage
-    - Entry and current prices
-    - P&L and funding costs
-    - Health ratio
-    - Risk status
-    """
-    logger.info(f"GET /positions/{token_id}/hedge - IP: {request.client.host}")
-    
-    try:
-        hedge_service = HedgeService(db)
-        hedge = await hedge_service.get_hedge_status(token_id)
-        
-        if not hedge:
-            raise HedgeNotFoundError(token_id)
-        
-        # Calculate health ratio
-        health_ratio = hedge.health_ratio
-        
-        return HedgeStatusResponse(
-            nft_token_id=hedge.nft_token_id,
-            hedge_id=hedge.hedge_id,
-            hedge_enabled=hedge.hedge_enabled,
-            market=hedge.market,
-            size_usdc=hedge.hedge_size_usdc,
-            collateral_usdc=hedge.collateral_usdc,
-            leverage=hedge.leverage,
-            entry_price=hedge.entry_price,
-            current_price=hedge.current_price,
-            pnl_usdc=hedge.pnl_usdc,
-            funding_paid_usdc=hedge.funding_paid_usdc,
-            status=hedge.status,
-            health_ratio=health_ratio
-        )
-        
-    except HedgeNotFoundError as e:
-        logger.warning(f"Hedge not found for position {token_id}")
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": {
-                    "code": e.code,
-                    "message": e.message,
-                    "details": e.details
-                }
-            }
-        )
-    except Exception as e:
-        logger.error(f"Error fetching hedge status for {token_id}: {e!r}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": {
-                    "code": "INTERNAL_ERROR",
-                    "message": f"Failed to fetch hedge status",
-                    "details": {"error": str(e)}
-                }
-            }
-        )
 
 

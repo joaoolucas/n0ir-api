@@ -1,8 +1,25 @@
 """Position schemas for API responses."""
 
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 from decimal import Decimal
+
+
+class HedgeInfo(BaseModel):
+    """Hedge information nested in position."""
+    
+    hedge_id: int = Field(..., description="Hedge position ID")
+    enabled: bool = Field(..., description="Whether hedge is enabled")
+    market: str = Field(..., description="Market (ETH-USD, BTC-USD)")
+    size_usdc: Decimal = Field(..., description="Hedge size in USDC")
+    collateral_usdc: Decimal = Field(..., description="Collateral amount in USDC")
+    leverage: int = Field(..., description="Position leverage")
+    entry_price: Decimal = Field(..., description="Entry price")
+    current_price: Decimal = Field(..., description="Current market price")
+    pnl_usdc: Decimal = Field(..., description="Current P&L in USDC")
+    funding_paid_usdc: Decimal = Field(..., description="Total funding paid in USDC")
+    health_ratio: float = Field(..., description="Position health ratio (< 0.2 = liquidation risk)")
+    status: str = Field(..., description="Hedge status (active, closed, liquidated)")
 
 
 class PositionInfo(BaseModel):
@@ -32,6 +49,9 @@ class PositionInfo(BaseModel):
     
     # User tracking field (from database)
     user_id: Optional[str] = Field(None, description="User ID if position is tracked in database")
+    
+    # Hedge information (optional, null if no hedge)
+    hedge: Optional[HedgeInfo] = Field(None, description="Hedge position information if delta-neutral hedge exists")
 
     class Config:
         json_schema_extra = {
