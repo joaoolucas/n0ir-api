@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
-from sqlalchemy import Column, String, DateTime, ForeignKey, Index, Integer
+from sqlalchemy import Column, String, DateTime, ForeignKey, Index, Integer, Numeric
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship, Mapped
 import uuid
@@ -41,10 +41,12 @@ class Transaction(Base):
     status = Column(String(20), nullable=False, default="PENDING", index=True)
     # Status: PENDING, CONFIRMED, FAILED
     
+    # Amount tracking
+    amount_usdc = Column(Numeric(precision=20, scale=6), nullable=True)
+    
     # Blockchain information
     block_number = Column(Integer, nullable=True, index=True)
     block_timestamp = Column(DateTime(timezone=True), nullable=True)
-    gas_used = Column(Integer, nullable=True)
     
     # Event data - flexible storage for type-specific data
     event_data = Column(JSONB, default={}, nullable=False)
@@ -59,21 +61,9 @@ class Transaction(Base):
     # DEPOSIT: {amount_usdc, from_address}
     # WITHDRAWAL: {amount_usdc, to_address}
     
-    # Additional metadata
-    tx_metadata = Column(JSONB, default={}, nullable=False)
-    # Examples:
-    # - usd_values: amounts in USD at transaction time
-    # - price_impacts: for swaps
-    # - related_tx_ids: linked transactions
-    # - error_messages: if failed
-    # - retry_count: for failed transactions
-    # - gas_price: in Gwei
-    # - realized_pnl_usdc: PnL realized in this transaction
-    # - portfolio_value_at_time: for PnL tracking
-    
     # Timestamps
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
-    processed_at = Column(DateTime(timezone=True), nullable=True)
+    confirmed_at = Column(DateTime(timezone=True), nullable=True)
     
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="transactions")
@@ -85,6 +75,7 @@ class Transaction(Base):
         Index("idx_transactions_position", "position_id", "tx_type"),
         Index("idx_transactions_block", "block_number"),
         Index("idx_transactions_type", "tx_type", "status"),
+        Index("idx_transactions_composite", "user_id", "tx_type", "block_timestamp"),
     )
     
     # Computed properties for backward compatibility

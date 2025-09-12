@@ -21,7 +21,6 @@ class User(Base):
     
     # CDP Wallet information
     cdp_wallet_address = Column(String(42), unique=True, nullable=True, index=True)
-    cdp_wallet_name = Column(String(100), nullable=True)
     
     # Wallet balance tracking fields (watcher-owned) - these DO exist
     usdc_balance = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
