@@ -8,8 +8,8 @@ import asyncio
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy import text
 
-async def mark_025_complete():
-    """Mark migration 025 as complete if tables exist."""
+async def skip_applied_migrations():
+    """Skip migrations that have already been applied."""
     try:
         db_url = os.environ.get("DATABASE_URL", "")
         if not db_url:
@@ -24,40 +24,62 @@ async def mark_025_complete():
         engine = create_async_engine(db_url)
         
         async with engine.begin() as conn:
-            # Check if hedge_positions table exists
-            result = await conn.execute(text("""
-                SELECT EXISTS (
-                    SELECT FROM information_schema.tables 
-                    WHERE table_name = 'hedge_positions'
-                )
-            """))
-            table_exists = result.scalar()
+            # Check current version
+            result = await conn.execute(text("SELECT version_num FROM alembic_version"))
+            current_version = result.scalar()
+            print(f"📊 Current migration: {current_version}")
             
-            if table_exists:
-                # Check current version
-                result = await conn.execute(text("SELECT version_num FROM alembic_version"))
-                current_version = result.scalar()
+            # Check what already exists in the database
+            result = await conn.execute(text("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'positions'
+            """))
+            existing_columns = {row[0] for row in result}
+            
+            # Check if tables exist
+            result = await conn.execute(text("""
+                SELECT table_name 
+                FROM information_schema.tables 
+                WHERE table_schema = 'public'
+            """))
+            existing_tables = {row[0] for row in result}
+            
+            # If hedge columns already exist in positions, skip to migration 029
+            hedge_columns = {'hedge_id', 'hedge_enabled', 'hedge_size_usdc'}
+            if hedge_columns.issubset(existing_columns):
+                print("✅ Hedge columns already exist in positions table")
                 
-                if current_version == "024_relax_position_fields":
-                    # Update to 025 since tables already exist
+                # Skip directly to the last migration if we're behind
+                if current_version in ["024_relax_position_fields", "025_add_hedge_positions", 
+                                       "026_merge_hedge_into_positions", "027_remove_unused_columns",
+                                       "028_jsonb_to_real_columns"]:
                     await conn.execute(text("""
                         UPDATE alembic_version 
-                        SET version_num = '025_add_hedge_positions'
-                        WHERE version_num = '024_relax_position_fields'
+                        SET version_num = '029_consolidate_transactions'
                     """))
-                    print("✅ Marked migration 025 as complete (tables already exist)")
+                    print("✅ Skipped to migration 029 (database already has all changes)")
+                    return
+            
+            # If hedge_positions table exists and we're at 024, mark 025 as complete
+            if 'hedge_positions' in existing_tables and current_version == "024_relax_position_fields":
+                await conn.execute(text("""
+                    UPDATE alembic_version 
+                    SET version_num = '025_add_hedge_positions'
+                """))
+                print("✅ Marked migration 025 as complete (tables already exist)")
         
         await engine.dispose()
     except Exception as e:
-        print(f"⚠️ Could not mark migration: {e}")
+        print(f"⚠️ Could not check migrations: {e}")
 
 # Use the DATABASE_URL from environment (Railway sets this)
 # Don't override it here!
 
 print("🔧 Starting migration fix process...")
 
-# Mark migration 025 as complete if tables exist
-asyncio.run(mark_025_complete())
+# Skip migrations that have already been applied
+asyncio.run(skip_applied_migrations())
 
 # Run alembic upgrade head
 print("\n📦 Running database migrations...")
