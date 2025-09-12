@@ -15,10 +15,8 @@ from app.core.config import settings
 from app.database.base import Base
 
 # Import all models to register them with SQLAlchemy
-from app.database.models import (
-    user, transaction, position,
-    pool_metrics, executor_stats, strategy_decision, daily_metrics
-)
+# Use the compat models from __init__ to avoid conflicts
+from app.database.models import User, Transaction, Position
 
 config = context.config
 
