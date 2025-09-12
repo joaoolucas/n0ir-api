@@ -5,9 +5,8 @@ from decimal import Decimal
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, update
-from app.database.models.hedge_position import HedgePosition
-from app.database.models.hedge_event import HedgeEvent
 from app.database.models.position import Position
+from app.database.models.transaction import Transaction
 from app.integrations.avantis import AvantisClient
 from app.integrations.liquidity_manager import LiquidityManagerClient
 from app.services.agent_management_service import get_agent_service
@@ -65,9 +64,9 @@ class HedgeService:
                 request_data
             )
             
-            # If hedge was created, store in database
+            # If hedge was created, update position with hedge data
             if response.get("hedge_id") and response["hedge_id"] > 0:
-                await self._store_hedge_position(
+                await self._update_position_hedge_data(
                     nft_token_id=response["token_id"],
                     hedge_id=response["hedge_id"],
                     hedge_size=response.get("hedge_size", 0),
@@ -82,7 +81,7 @@ class HedgeService:
             logger.error(f"Error creating hedged position: {e}")
             raise
     
-    async def _store_hedge_position(
+    async def _update_position_hedge_data(
         self,
         nft_token_id: int,
         hedge_id: int,
@@ -90,54 +89,65 @@ class HedgeService:
         collateral: int,
         leverage: int,
         pair_index: int
-    ) -> HedgePosition:
-        """Store hedge position in database."""
+    ) -> Position:
+        """Update position with hedge data."""
         try:
             # Get current price from Avantis
             status = await self.avantis.get_position_status(hedge_id, pair_index)
             
-            # Create hedge position record
-            hedge_position = HedgePosition(
-                nft_token_id=nft_token_id,
+            # Update position with hedge data
+            stmt = update(Position).where(Position.token_id == nft_token_id).values(
                 hedge_id=hedge_id,
                 hedge_enabled=True,
                 hedge_size_usdc=Decimal(hedge_size) / Decimal(10**6),
-                collateral_usdc=Decimal(collateral) / Decimal(10**6),
-                leverage=leverage,
-                pair_index=pair_index,
-                market=self.avantis.get_market_name(pair_index),
-                entry_price=status.get("entry_price", Decimal(0)),
-                current_price=status.get("current_price", Decimal(0)),
-                pnl_usdc=Decimal(0),
-                funding_paid_usdc=Decimal(0),
-                status="active"
+                hedge_collateral_usdc=Decimal(collateral) / Decimal(10**6),
+                hedge_leverage=leverage,
+                hedge_pair_index=pair_index,
+                hedge_market=self.avantis.get_market_name(pair_index),
+                hedge_entry_price=status.get("entry_price", Decimal(0)),
+                hedge_current_price=status.get("current_price", Decimal(0)),
+                hedge_pnl_usdc=Decimal(0),
+                hedge_funding_paid_usdc=Decimal(0),
+                hedge_status="active"
             )
             
-            self.db.add(hedge_position)
+            await self.db.execute(stmt)
             
-            # Create opening event
-            event = HedgeEvent(
-                nft_token_id=nft_token_id,
-                hedge_id=hedge_id,
-                event_type="opened",
-                data={
+            # Create hedge opening transaction
+            transaction = Transaction(
+                user_id=(await self._get_user_id_for_position(nft_token_id)),
+                position_id=nft_token_id,
+                tx_type="HEDGE_OPENED",
+                status="CONFIRMED",
+                amount_usdc=Decimal(hedge_size) / Decimal(10**6),
+                event_data={
+                    "hedge_id": hedge_id,
                     "size_usdc": str(hedge_size),
                     "collateral_usdc": str(collateral),
                     "leverage": leverage,
                     "entry_price": str(status.get("entry_price", 0))
                 }
             )
-            self.db.add(event)
+            self.db.add(transaction)
             
             await self.db.commit()
-            return hedge_position
+            
+            # Return updated position
+            result = await self.db.execute(select(Position).where(Position.token_id == nft_token_id))
+            return result.scalar_one()
             
         except Exception as e:
             await self.db.rollback()
-            logger.error(f"Error storing hedge position: {e}")
+            logger.error(f"Error updating position with hedge data: {e}")
             raise
     
-    async def get_hedge_status(self, token_id: int) -> Optional[HedgePosition]:
+    async def _get_user_id_for_position(self, token_id: int) -> str:
+        """Get user ID for a position."""
+        stmt = select(Position.user_id).where(Position.token_id == token_id)
+        result = await self.db.execute(stmt)
+        return result.scalar_one()
+    
+    async def get_hedge_status(self, token_id: int) -> Optional[Position]:
         """
         Get current hedge status with live data.
         
@@ -145,34 +155,39 @@ class HedgeService:
             token_id: NFT token ID of the position
             
         Returns:
-            HedgePosition with updated live data or None
+            Position with updated hedge data or None
         """
         try:
-            # Get hedge position from database
-            stmt = select(HedgePosition).where(HedgePosition.nft_token_id == token_id)
+            # Get position with hedge data
+            stmt = select(Position).where(
+                and_(
+                    Position.token_id == token_id,
+                    Position.hedge_id.isnot(None)
+                )
+            )
             result = await self.db.execute(stmt)
-            hedge = result.scalar_one_or_none()
+            position = result.scalar_one_or_none()
             
-            if not hedge:
+            if not position or not position.hedge_id:
                 return None
             
-            # Get live data from Avantis if position is active
-            if hedge.status == "active":
+            # Get live data from Avantis if hedge is active
+            if position.hedge_status == "active":
                 live_data = await self.avantis.get_position_status(
-                    hedge.hedge_id,
-                    hedge.pair_index
+                    position.hedge_id,
+                    position.hedge_pair_index
                 )
                 
                 # Update current values
-                hedge.current_price = live_data["current_price"]
-                hedge.pnl_usdc = live_data["pnl"]
-                hedge.funding_paid_usdc = live_data["funding_paid"]
-                hedge.updated_at = datetime.utcnow()
+                position.hedge_current_price = live_data["current_price"]
+                position.hedge_pnl_usdc = live_data["pnl"]
+                position.hedge_funding_paid_usdc = live_data["funding_paid"]
+                position.updated_at = datetime.utcnow()
                 
                 # Update in database
                 await self.db.commit()
             
-            return hedge
+            return position
             
         except Exception as e:
             logger.error(f"Error fetching hedge status for token {token_id}: {e}")
@@ -196,16 +211,16 @@ class HedgeService:
             Dictionary with closing results
         """
         try:
-            # Get hedge position
-            hedge = await self.get_hedge_status(token_id)
-            if not hedge:
+            # Get position with hedge
+            position = await self.get_hedge_status(token_id)
+            if not position or not position.hedge_id:
                 raise ValueError(f"No hedge found for position {token_id}")
             
             # Send close request to agent manager
             request_data = {
                 "action": "close_hedge",
                 "token_id": token_id,
-                "hedge_id": hedge.hedge_id,
+                "hedge_id": position.hedge_id,
                 "min_usdc_out": min_usdc_out,
                 "slippage_bps": slippage_bps
             }
@@ -215,24 +230,27 @@ class HedgeService:
                 request_data
             )
             
-            # Update database
-            hedge.status = "closed"
-            hedge.closed_at = datetime.utcnow()
+            # Update position
+            position.hedge_status = "closed"
+            position.hedge_closed_at = datetime.utcnow()
             
-            # Create closing event
-            event = HedgeEvent(
-                nft_token_id=token_id,
-                hedge_id=hedge.hedge_id,
-                event_type="closed",
+            # Create closing transaction
+            transaction = Transaction(
+                user_id=position.user_id,
+                position_id=token_id,
+                tx_type="HEDGE_CLOSED",
+                status="CONFIRMED",
                 tx_hash=response.get("tx_hash"),
-                data={
-                    "exit_price": str(hedge.current_price),
-                    "final_pnl": str(hedge.pnl_usdc),
-                    "total_funding_paid": str(hedge.funding_paid_usdc),
+                amount_usdc=Decimal(response.get("usdc_out", 0)) / Decimal(10**6),
+                event_data={
+                    "hedge_id": position.hedge_id,
+                    "exit_price": str(position.hedge_current_price),
+                    "final_pnl": str(position.hedge_pnl_usdc),
+                    "total_funding_paid": str(position.hedge_funding_paid_usdc),
                     "usdc_received": str(response.get("usdc_out", 0))
                 }
             )
-            self.db.add(event)
+            self.db.add(transaction)
             
             await self.db.commit()
             
@@ -251,59 +269,65 @@ class HedgeService:
             List of alerts for positions needing attention
         """
         try:
-            # Get all active hedge positions
-            stmt = select(HedgePosition).where(HedgePosition.status == "active")
+            # Get all positions with active hedges
+            stmt = select(Position).where(
+                and_(
+                    Position.hedge_status == "active",
+                    Position.hedge_id.isnot(None)
+                )
+            )
             result = await self.db.execute(stmt)
-            active_hedges = result.scalars().all()
+            hedged_positions = result.scalars().all()
             
             alerts = []
             
-            for hedge in active_hedges:
+            for position in hedged_positions:
                 # Update with live data
                 live_data = await self.avantis.get_position_status(
-                    hedge.hedge_id,
-                    hedge.pair_index
+                    position.hedge_id,
+                    position.hedge_pair_index
                 )
                 
                 # Update database
-                hedge.current_price = live_data["current_price"]
-                hedge.pnl_usdc = live_data["pnl"]
-                hedge.funding_paid_usdc = live_data["funding_paid"]
+                position.hedge_current_price = live_data["current_price"]
+                position.hedge_pnl_usdc = live_data["pnl"]
+                position.hedge_funding_paid_usdc = live_data["funding_paid"]
                 
                 # Check health ratio
-                health_ratio = hedge.health_ratio
+                health_ratio = position.hedge_health_ratio
                 
-                if health_ratio < 0.2:
+                if health_ratio and health_ratio < 0.2:
                     alerts.append({
                         "type": "liquidation_risk",
                         "severity": "critical",
-                        "token_id": hedge.nft_token_id,
-                        "hedge_id": hedge.hedge_id,
+                        "token_id": position.token_id,
+                        "hedge_id": position.hedge_id,
                         "health_ratio": health_ratio,
-                        "pnl": float(hedge.pnl_usdc),
-                        "message": f"Position {hedge.nft_token_id} at liquidation risk (health: {health_ratio:.2f})"
+                        "pnl": float(position.hedge_pnl_usdc),
+                        "message": f"Position {position.token_id} at liquidation risk (health: {health_ratio:.2f})"
                     })
-                elif health_ratio < 0.4:
+                elif health_ratio and health_ratio < 0.4:
                     alerts.append({
                         "type": "low_health",
                         "severity": "warning",
-                        "token_id": hedge.nft_token_id,
-                        "hedge_id": hedge.hedge_id,
+                        "token_id": position.token_id,
+                        "hedge_id": position.hedge_id,
                         "health_ratio": health_ratio,
-                        "pnl": float(hedge.pnl_usdc),
-                        "message": f"Position {hedge.nft_token_id} has low health (health: {health_ratio:.2f})"
+                        "pnl": float(position.hedge_pnl_usdc),
+                        "message": f"Position {position.token_id} has low health (health: {health_ratio:.2f})"
                     })
                 
                 # Check for high funding costs
-                if hedge.funding_paid_usdc and abs(hedge.funding_paid_usdc) > hedge.collateral_usdc * Decimal("0.1"):
-                    alerts.append({
-                        "type": "high_funding",
-                        "severity": "info",
-                        "token_id": hedge.nft_token_id,
-                        "hedge_id": hedge.hedge_id,
-                        "funding_paid": float(hedge.funding_paid_usdc),
-                        "message": f"Position {hedge.nft_token_id} has high funding costs"
-                    })
+                if position.hedge_funding_paid_usdc and position.hedge_collateral_usdc:
+                    if abs(position.hedge_funding_paid_usdc) > position.hedge_collateral_usdc * Decimal("0.1"):
+                        alerts.append({
+                            "type": "high_funding",
+                            "severity": "info",
+                            "token_id": position.token_id,
+                            "hedge_id": position.hedge_id,
+                            "funding_paid": float(position.hedge_funding_paid_usdc),
+                            "message": f"Position {position.token_id} has high funding costs"
+                        })
             
             # Commit updates
             await self.db.commit()
@@ -323,32 +347,32 @@ class HedgeService:
             Dictionary with hedge statistics
         """
         try:
-            # Get all hedge positions
-            stmt = select(HedgePosition)
+            # Get all positions with hedges
+            stmt = select(Position).where(Position.hedge_id.isnot(None))
             result = await self.db.execute(stmt)
-            all_hedges = result.scalars().all()
+            hedged_positions = result.scalars().all()
             
             # Calculate statistics
-            total_positions = len(all_hedges)
-            active_hedges = sum(1 for h in all_hedges if h.status == "active")
+            total_positions = len(hedged_positions)
+            active_hedges = sum(1 for p in hedged_positions if p.hedge_status == "active")
             
-            total_value = sum(h.hedge_size_usdc or 0 for h in all_hedges if h.status == "active")
-            total_pnl = sum(h.pnl_usdc or 0 for h in all_hedges if h.status == "active")
-            total_funding = sum(h.funding_paid_usdc or 0 for h in all_hedges if h.status == "active")
+            total_value = sum(p.hedge_size_usdc or 0 for p in hedged_positions if p.hedge_status == "active")
+            total_pnl = sum(p.hedge_pnl_usdc or 0 for p in hedged_positions if p.hedge_status == "active")
+            total_funding = sum(p.hedge_funding_paid_usdc or 0 for p in hedged_positions if p.hedge_status == "active")
             
             # Average leverage for active positions
-            active_with_leverage = [h for h in all_hedges if h.status == "active" and h.leverage]
+            active_with_leverage = [p for p in hedged_positions if p.hedge_status == "active" and p.hedge_leverage]
             avg_leverage = (
-                sum(h.leverage for h in active_with_leverage) / len(active_with_leverage)
+                sum(p.hedge_leverage for p in active_with_leverage) / len(active_with_leverage)
                 if active_with_leverage else 0
             )
             
             # Count at-risk positions
-            at_risk_count = sum(1 for h in all_hedges if h.status == "active" and h.is_at_risk)
+            at_risk_count = sum(1 for p in hedged_positions if p.hedge_status == "active" and p.hedge_is_at_risk)
             
             # Market breakdown
-            eth_positions = sum(1 for h in all_hedges if h.market == "ETH-USD" and h.status == "active")
-            btc_positions = sum(1 for h in all_hedges if h.market == "BTC-USD" and h.status == "active")
+            eth_positions = sum(1 for p in hedged_positions if p.hedge_market == "ETH-USD" and p.hedge_status == "active")
+            btc_positions = sum(1 for p in hedged_positions if p.hedge_market == "BTC-USD" and p.hedge_status == "active")
             
             return {
                 "total_positions": total_positions,
@@ -391,18 +415,17 @@ class HedgeService:
         """
         try:
             # Get positions with and without hedges
-            stmt_hedged = select(Position).join(
-                HedgePosition,
-                Position.token_id == HedgePosition.nft_token_id
-            ).where(Position.status == "ACTIVE")
-            
-            stmt_unhedged = select(Position).outerjoin(
-                HedgePosition,
-                Position.token_id == HedgePosition.nft_token_id
-            ).where(
+            stmt_hedged = select(Position).where(
                 and_(
                     Position.status == "ACTIVE",
-                    HedgePosition.id.is_(None)
+                    Position.hedge_id.isnot(None)
+                )
+            )
+            
+            stmt_unhedged = select(Position).where(
+                and_(
+                    Position.status == "ACTIVE",
+                    Position.hedge_id.is_(None)
                 )
             )
             
@@ -418,7 +441,7 @@ class HedgeService:
             
             # Calculate average returns
             hedged_pnl = sum(p.total_pnl_usdc for p in hedged_positions)
-            unhedged_pnl = sum(p.total_pnl_usdc for p in unhedged_positions)
+            unhedged_pnl = sum(p.net_pnl_usdc or 0 for p in unhedged_positions)
             
             hedged_avg_return = (hedged_pnl / hedged_count) if hedged_count > 0 else 0
             unhedged_avg_return = (unhedged_pnl / unhedged_count) if unhedged_count > 0 else 0
@@ -432,11 +455,11 @@ class HedgeService:
             
             return {
                 "hedged_count": hedged_count,
-                "hedged_avg_return": hedged_avg_return,
-                "hedged_pnl": hedged_pnl,
+                "hedged_avg_return": float(hedged_avg_return),
+                "hedged_pnl": float(hedged_pnl),
                 "unhedged_count": unhedged_count,
-                "unhedged_avg_return": unhedged_avg_return,
-                "unhedged_pnl": unhedged_pnl,
+                "unhedged_avg_return": float(unhedged_avg_return),
+                "unhedged_pnl": float(unhedged_pnl),
                 "effectiveness_ratio": effectiveness_ratio,
                 "volatility_reduction": volatility_reduction
             }
