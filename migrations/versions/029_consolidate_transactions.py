@@ -18,8 +18,15 @@ depends_on = None
 def upgrade():
     """Consolidate position create/close operations into single transactions."""
     
-    # Add amount_usdc column for standardized amount tracking
-    op.add_column('transactions', sa.Column('amount_usdc', sa.Numeric(precision=20, scale=6), nullable=True))
+    # Check what columns already exist
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    existing_columns = [col['name'] for col in inspector.get_columns('transactions')]
+    existing_indexes = [idx['name'] for idx in inspector.get_indexes('transactions')]
+    
+    # Add amount_usdc column for standardized amount tracking (only if it doesn't exist)
+    if 'amount_usdc' not in existing_columns:
+        op.add_column('transactions', sa.Column('amount_usdc', sa.Numeric(precision=20, scale=6), nullable=True))
     
     # Update existing transactions to populate amount_usdc
     op.execute("""
@@ -105,8 +112,9 @@ def upgrade():
         )
     """)
     
-    # Add composite index for better query performance
-    op.create_index('idx_transactions_composite', 'transactions', ['user_id', 'tx_type', 'block_timestamp'])
+    # Add composite index for better query performance (only if it doesn't exist)
+    if 'idx_transactions_composite' not in existing_indexes:
+        op.create_index('idx_transactions_composite', 'transactions', ['user_id', 'tx_type', 'block_timestamp'])
 
 
 def downgrade():

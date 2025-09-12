@@ -32,6 +32,12 @@ async def fix_migration_state():
             current_version = result.scalar()
             print(f"📊 Current migration version: {current_version}")
             
+            # Don't downgrade if we're already past a migration
+            if current_version in ['026_merge_hedge_into_positions', '027_remove_unused_columns', 
+                                  '028_jsonb_to_real_columns', '029_consolidate_transactions']:
+                print(f"ℹ️ Already at or past migration {current_version}, skipping state fix")
+                return True
+            
             # Check what actually exists in the database
             result = await conn.execute(text("""
                 SELECT column_name 
@@ -115,42 +121,77 @@ print("🔧 Starting migration fix process...")
 # Fix migration state to match actual database
 asyncio.run(fix_migration_state())
 
+# Get current migration state first
+print("\n📦 Checking current migration state...")
+try:
+    result = subprocess.run(
+        ["alembic", "current"],
+        capture_output=True,
+        text=True,
+        check=False
+    )
+    print(f"Current alembic state: {result.stdout.strip()}")
+except:
+    pass
+
 # Run migrations one by one to handle errors better
-print("\n📦 Running database migrations one by one...")
+print("\n📦 Running database migrations...")
 
-migrations = [
-    "026_merge_hedge_into_positions",
-    "027_remove_unused_columns", 
-    "028_jsonb_to_real_columns",
-    "029_consolidate_transactions"
-]
-
-for migration in migrations:
-    print(f"\n🔄 Running migration: {migration}")
-    try:
-        result = subprocess.run(
-            ["alembic", "upgrade", migration],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=30
-        )
+# Try to run to head first
+try:
+    result = subprocess.run(
+        ["alembic", "upgrade", "head"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60
+    )
+    
+    if result.returncode == 0:
+        print("✅ All migrations completed successfully!")
+    else:
+        # If that fails, run them one by one
+        print("⚠️ Batch migration failed, trying one by one...")
         
-        if result.returncode == 0:
-            print(f"  ✅ Migration {migration} completed")
-        else:
-            # Check if it's just a "already exists" error
-            if "already exists" in result.stderr or "does not exist" in result.stderr:
-                print(f"  ⚠️  Migration {migration} had minor issues (schema already modified)")
-            else:
-                print(f"  ❌ Migration {migration} failed: {result.stderr[:200]}")
-                # Continue anyway - don't block app startup
+        migrations = [
+            "026_merge_hedge_into_positions",
+            "027_remove_unused_columns", 
+            "028_jsonb_to_real_columns",
+            "029_consolidate_transactions"
+        ]
+        
+        for migration in migrations:
+            print(f"\n🔄 Running migration: {migration}")
+            try:
+                result = subprocess.run(
+                    ["alembic", "upgrade", migration],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=30
+                )
                 
-    except subprocess.TimeoutExpired:
-        print(f"  ⚠️  Migration {migration} timed out, continuing...")
-    except Exception as e:
-        print(f"  ⚠️  Migration {migration} error: {e}")
-        # Continue with next migration
+                if result.returncode == 0:
+                    print(f"  ✅ Migration {migration} completed")
+                else:
+                    # Check if it's just a "already exists" error
+                    error_msg = result.stderr or result.stdout
+                    if "already exists" in error_msg or "does not exist" in error_msg:
+                        print(f"  ⚠️  Migration {migration} had minor issues (schema already modified)")
+                    else:
+                        print(f"  ❌ Migration {migration} failed")
+                        print(f"     Error: {error_msg[:300]}")
+                        # Continue anyway - don't block app startup
+                        
+            except subprocess.TimeoutExpired:
+                print(f"  ⚠️  Migration {migration} timed out, continuing...")
+            except Exception as e:
+                print(f"  ⚠️  Migration {migration} error: {e}")
+                # Continue with next migration
+                
+except Exception as e:
+    print(f"⚠️ Migration error: {e}")
+    # Continue anyway
 
 print("\n🚀 Starting application...")
 # Start the app regardless of migration status
