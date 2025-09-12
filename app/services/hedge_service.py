@@ -5,8 +5,7 @@ from decimal import Decimal
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, update
-from app.database.models.position import Position
-from app.database.models.transaction import Transaction
+from app.database.models import Position, Transaction  # Use compat version
 from app.integrations.avantis import AvantisClient
 from app.integrations.liquidity_manager import LiquidityManagerClient
 from app.services.agent_management_service import get_agent_service

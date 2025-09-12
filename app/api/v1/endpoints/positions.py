@@ -16,7 +16,7 @@ from app.core.positions_service import positions_service
 from app.core.pools_service import pools_service
 from app.core.logger import logger
 from app.database.session import get_db
-from app.database.models.position import Position
+from app.database.models import Position  # Import from __init__ to get compat version
 from app.services.hedge_service import HedgeService
 from app.core.exceptions import HedgeNotFoundError, HedgeError
 
