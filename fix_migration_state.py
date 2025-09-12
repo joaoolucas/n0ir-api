@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""Fix and run migrations on production database."""
+"""Fix migration state to match actual database schema."""
 
 import os
-import subprocess
-import sys
 import asyncio
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy import text
+from app.core.config import settings
 from app.core.logger import logger
 
 async def fix_migration_state():
-    """Fix migration state to match actual database schema."""
+    """Update alembic version to match actual database state."""
     try:
-        db_url = os.environ.get("DATABASE_URL", "")
+        # Get database URL
+        db_url = os.environ.get("DATABASE_URL") or settings.get_database_url
         if not db_url:
-            print("⚠️ No database URL configured")
+            logger.error("No database URL configured")
             return False
         
         # Ensure it uses asyncpg
@@ -23,14 +23,14 @@ async def fix_migration_state():
         elif db_url.startswith("postgres://"):
             db_url = db_url.replace("postgres://", "postgresql+asyncpg://", 1)
         
-        print("🔧 Connecting to database to fix migration state...")
+        logger.info("Connecting to database...")
         engine = create_async_engine(db_url)
         
         async with engine.begin() as conn:
             # Check current version
             result = await conn.execute(text("SELECT version_num FROM alembic_version"))
             current_version = result.scalar()
-            print(f"📊 Current migration version: {current_version}")
+            logger.info(f"Current migration version: {current_version}")
             
             # Check what actually exists in the database
             result = await conn.execute(text("""
@@ -51,8 +51,8 @@ async def fix_migration_state():
             existing_tables = {row[0] for row in result}
             
             # Determine the actual state
-            print(f"📋 Found {len(position_columns)} columns in positions table")
-            print(f"📋 Hedge tables exist: {existing_tables}")
+            logger.info(f"Found {len(position_columns)} columns in positions table")
+            logger.info(f"Hedge tables exist: {existing_tables}")
             
             # Key indicators of migration progress:
             # - If hedge columns exist in positions: migrations 026+ are done
@@ -68,19 +68,19 @@ async def fix_migration_state():
             if real_columns.issubset(position_columns):
                 # All migrations through 028 are applied
                 target_version = '029_consolidate_transactions'
-                print("✅ Database has all schema changes through migration 029")
+                logger.info("✅ Database has all schema changes through migration 029")
             elif new_columns.issubset(position_columns):
                 # Migrations through 027 are applied
                 target_version = '028_jsonb_to_real_columns'
-                print("✅ Database has schema changes through migration 027")
+                logger.info("✅ Database has schema changes through migration 027")
             elif hedge_columns.issubset(position_columns):
                 # Migrations through 026 are applied
                 target_version = '027_remove_unused_columns'
-                print("✅ Database has hedge columns (migration 026 applied)")
+                logger.info("✅ Database has hedge columns (migration 026 applied)")
             elif 'hedge_positions' in existing_tables:
                 # Migration 025 is applied
                 target_version = '026_merge_hedge_into_positions'
-                print("✅ Database has hedge_positions table (migration 025 applied)")
+                logger.info("✅ Database has hedge_positions table (migration 025 applied)")
             
             if target_version != current_version:
                 # Update the alembic version
@@ -88,56 +88,25 @@ async def fix_migration_state():
                     UPDATE alembic_version 
                     SET version_num = '{target_version}'
                 """))
-                print(f"✅ Updated migration version from {current_version} to {target_version}")
+                logger.info(f"✅ Updated migration version from {current_version} to {target_version}")
             else:
-                print(f"ℹ️ Migration version is already correct: {current_version}")
+                logger.info(f"ℹ️ Migration version is already correct: {current_version}")
             
             # Show summary
-            print("\n📊 Database Schema Summary:")
-            print(f"  - Hedge columns in positions: {'✅' if hedge_columns.issubset(position_columns) else '❌'}")
-            print(f"  - Date columns added: {'✅' if new_columns.issubset(position_columns) else '❌'}")
-            print(f"  - Real columns added: {'✅' if real_columns.issubset(position_columns) else '❌'}")
-            print(f"  - Hedge tables dropped: {'✅' if not existing_tables else '❌'}")
-            print(f"  - Final migration version: {target_version}")
+            logger.info("\n📊 Database Schema Summary:")
+            logger.info(f"  - Hedge columns in positions: {'✅' if hedge_columns.issubset(position_columns) else '❌'}")
+            logger.info(f"  - Date columns added: {'✅' if new_columns.issubset(position_columns) else '❌'}")
+            logger.info(f"  - Real columns added: {'✅' if real_columns.issubset(position_columns) else '❌'}")
+            logger.info(f"  - Hedge tables dropped: {'✅' if not existing_tables else '❌'}")
+            logger.info(f"  - Final migration version: {target_version}")
         
         await engine.dispose()
         return True
         
     except Exception as e:
-        print(f"❌ Failed to fix migration state: {e}")
+        logger.error(f"Failed to fix migration state: {e}")
         return False
 
-# Use the DATABASE_URL from environment (Railway sets this)
-# Don't override it here!
-
-print("🔧 Starting migration fix process...")
-
-# Fix migration state to match actual database
-asyncio.run(fix_migration_state())
-
-# Run alembic upgrade head
-print("\n📦 Running database migrations...")
-try:
-    result = subprocess.run(
-        ["alembic", "upgrade", "head"],
-        capture_output=True,
-        text=True,
-        check=False
-    )
-    
-    if result.returncode == 0:
-        print("✅ Migrations completed successfully!")
-        print(result.stdout)
-    else:
-        print("⚠️ Migration had issues (this is expected if schema already exists)")
-        if result.stderr:
-            print("Details:", result.stderr[:500])  # Truncate long error messages
-        # Don't exit - let the app start anyway
-        
-except Exception as e:
-    print(f"⚠️  Migration error: {e}")
-    # Don't exit - let the app start anyway
-
-print("\n🚀 Starting application...")
-# Start the app regardless of migration status
-os.system("python run.py")
+if __name__ == "__main__":
+    success = asyncio.run(fix_migration_state())
+    exit(0 if success else 1)
