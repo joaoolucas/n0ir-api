@@ -11,7 +11,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision = '025_add_hedge_positions'
-down_revision = '024_relax_position_nullable_fields'
+down_revision = '024_relax_position_fields'
 branch_labels = None
 depends_on = None
 
