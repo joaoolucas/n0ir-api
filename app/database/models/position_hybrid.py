@@ -1,11 +1,12 @@
-"""Backward-compatible Position model that works with both old and new schemas."""
+"""Hybrid Position model that works with both old and new database schemas."""
 
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional, TYPE_CHECKING, List
-from sqlalchemy import Column, String, DateTime, ForeignKey, Index, Numeric, Integer, Boolean, BigInteger
+from sqlalchemy import Column, String, DateTime, ForeignKey, Index, Numeric, Integer, Boolean
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship, Mapped
+from sqlalchemy.ext.hybrid import hybrid_property
 from app.database.base import Base
 
 if TYPE_CHECKING:
@@ -14,7 +15,7 @@ if TYPE_CHECKING:
 
 
 class Position(Base):
-    """Uniswap V3 positions - backward compatible version."""
+    """Uniswap V3 positions - hybrid version for both schemas."""
     __tablename__ = "positions"
     
     # Primary key - NFT token ID from blockchain
@@ -34,7 +35,6 @@ class Position(Base):
     # Tick and liquidity information
     tick_lower = Column(Integer, nullable=True)
     tick_upper = Column(Integer, nullable=True)
-    # tick_spacing removed in migration 027
     liquidity = Column(String(80), nullable=True)  # Stored as string due to uint256 size
     
     # USD amounts
@@ -51,7 +51,7 @@ class Position(Base):
     entry_tx_hash = Column(String(66), nullable=True)
     exit_tx_hash = Column(String(66), nullable=True)
     
-    # Protocol fee fields - Keep these if they still exist in database
+    # Protocol fee fields (might exist in old schema)
     protocol_fee_amount = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
     protocol_fee_collected = Column(Boolean, default=False, nullable=False)
     protocol_fee_tx_hash = Column(String(66), nullable=True)
@@ -59,44 +59,10 @@ class Position(Base):
     # Position status
     status = Column(String(20), nullable=False, default="ACTIVE", index=True)
     
-    # PnL tracking fields - Database has NEW column names after migration 027
-    # Database has: realized_pnl_usdc (not the old unrealized_pnl_usd, etc.)
-    # Based on the error message, the database HAS realized_pnl_usdc but NOT unrealized_pnl_usd
+    # The NEW PnL column that exists in the migrated database
     realized_pnl_usdc = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
     
-    # Create properties for the old names that code might still use
-    @property
-    def unrealized_pnl_usd(self):
-        # Map to realized_pnl_usdc for backward compatibility
-        return self.realized_pnl_usdc or 0
-    
-    @property
-    def unrealized_pnl_pct(self):
-        # Calculate percentage if possible
-        if self.entry_amount_usdc and self.entry_amount_usdc > 0:
-            return ((self.realized_pnl_usdc or 0) / self.entry_amount_usdc) * 100
-        return 0
-    
-    @property
-    def realized_pnl_usd(self):
-        return self.realized_pnl_usdc or 0
-    
-    @property
-    def realized_pnl_pct(self):
-        # Calculate percentage if possible
-        if self.entry_amount_usdc and self.entry_amount_usdc > 0:
-            return ((self.realized_pnl_usdc or 0) / self.entry_amount_usdc) * 100
-        return 0
-    
-    @property
-    def pnl_usdc(self):
-        return self.realized_pnl_usdc or 0
-    
-    @property
-    def pnl_pct(self):
-        return self.unrealized_pnl_pct
-    
-    # JSONB fields - These are still being selected successfully
+    # JSONB fields
     position_data = Column(JSONB, default={}, nullable=False)
     blockchain_data = Column(JSONB, default={}, nullable=False)
     
@@ -114,6 +80,64 @@ class Position(Base):
         Index("idx_positions_user_status", "user_id", "status"),
         Index("idx_positions_status", "status"),
     )
+    
+    # Hybrid properties for OLD column names that the code expects
+    @hybrid_property
+    def unrealized_pnl_usd(self):
+        """Map to realized_pnl_usdc for backward compatibility."""
+        return self.realized_pnl_usdc or Decimal(0)
+    
+    @unrealized_pnl_usd.expression
+    def unrealized_pnl_usd(cls):
+        """SQL expression for unrealized_pnl_usd."""
+        return cls.realized_pnl_usdc
+    
+    @hybrid_property
+    def unrealized_pnl_pct(self):
+        """Calculate percentage if possible."""
+        if self.entry_amount_usdc and self.entry_amount_usdc > 0:
+            return ((self.realized_pnl_usdc or Decimal(0)) / self.entry_amount_usdc) * 100
+        return Decimal(0)
+    
+    @unrealized_pnl_pct.expression
+    def unrealized_pnl_pct(cls):
+        """SQL expression for unrealized_pnl_pct."""
+        # Return a simple default for SQL queries
+        return 0
+    
+    @hybrid_property
+    def realized_pnl_usd(self):
+        """Map to realized_pnl_usdc."""
+        return self.realized_pnl_usdc or Decimal(0)
+    
+    @realized_pnl_usd.expression
+    def realized_pnl_usd(cls):
+        """SQL expression for realized_pnl_usd."""
+        return cls.realized_pnl_usdc
+    
+    @hybrid_property
+    def realized_pnl_pct(self):
+        """Calculate percentage if possible."""
+        if self.entry_amount_usdc and self.entry_amount_usdc > 0:
+            return ((self.realized_pnl_usdc or Decimal(0)) / self.entry_amount_usdc) * 100
+        return Decimal(0)
+    
+    @realized_pnl_pct.expression
+    def realized_pnl_pct(cls):
+        """SQL expression for realized_pnl_pct."""
+        # Return a simple default for SQL queries
+        return 0
+    
+    # Additional properties for compatibility
+    @property
+    def pnl_usdc(self):
+        return self.realized_pnl_usdc or Decimal(0)
+    
+    @property
+    def pnl_pct(self):
+        if self.entry_amount_usdc and self.entry_amount_usdc > 0:
+            return ((self.realized_pnl_usdc or Decimal(0)) / self.entry_amount_usdc) * 100
+        return Decimal(0)
     
     # Properties for compatibility with new schema
     @property
@@ -137,85 +161,86 @@ class Position(Base):
             return self.position_data.get('token1_symbol')
         return None
     
+    # Hedge-related properties (no hedge in old schema)
     @property
     def hedge_id(self) -> Optional[int]:
-        """Get hedge ID if position has hedge (check related table or JSONB)."""
-        return None  # No hedge in old schema
+        """Get hedge ID if position has hedge."""
+        return None
     
     @property
     def hedge_enabled(self) -> bool:
         """Check if hedge is enabled."""
-        return False  # No hedge in old schema
+        return False
     
     @property
     def hedge_status(self) -> Optional[str]:
         """Get hedge status."""
-        return None  # No hedge in old schema
+        return None
     
     @property
     def hedge_health_ratio(self) -> Optional[float]:
         """Get hedge health ratio."""
-        return None  # No hedge in old schema
+        return None
     
     @property
     def hedge_is_at_risk(self) -> bool:
         """Check if hedge is at risk."""
-        return False  # No hedge in old schema
+        return False
     
     @property
     def hedge_net_pnl(self) -> Optional[Decimal]:
         """Get hedge net P&L."""
-        return None  # No hedge in old schema
+        return None
     
     @property
     def hedge_pnl_usdc(self) -> Optional[Decimal]:
         """Get hedge P&L."""
-        return None  # No hedge in old schema
+        return None
     
     @property
     def hedge_collateral_usdc(self) -> Optional[Decimal]:
         """Get hedge collateral."""
-        return None  # No hedge in old schema
+        return None
     
     @property
     def hedge_funding_paid_usdc(self) -> Optional[Decimal]:
         """Get hedge funding paid."""
-        return None  # No hedge in old schema
+        return None
     
     @property
     def hedge_size_usdc(self) -> Optional[Decimal]:
         """Get hedge size."""
-        return None  # No hedge in old schema
+        return None
     
     @property
     def hedge_leverage(self) -> Optional[int]:
         """Get hedge leverage."""
-        return None  # No hedge in old schema
+        return None
     
     @property
     def hedge_market(self) -> Optional[str]:
         """Get hedge market."""
-        return None  # No hedge in old schema
+        return None
     
     @property
     def hedge_pair_index(self) -> Optional[int]:
         """Get hedge pair index."""
-        return None  # No hedge in old schema
+        return None
     
     @property
     def hedge_entry_price(self) -> Optional[Decimal]:
         """Get hedge entry price."""
-        return None  # No hedge in old schema
+        return None
     
     @property
     def hedge_current_price(self) -> Optional[Decimal]:
         """Get hedge current price."""
-        return None  # No hedge in old schema
+        return None
     
     @property
     def hedge_closed_at(self) -> Optional[datetime]:
         """Get hedge closed timestamp."""
-        return None  # No hedge in old schema
+        return None
     
     @property
     def price_lower(self) -> Optional[Decimal]:
@@ -257,7 +282,6 @@ class Position(Base):
             return (self.net_pnl_usdc / self.entry_amount_usdc) * 100
         return None
     
-    
     @property
     def entry_date(self) -> Optional[datetime]:
         """Get entry date."""
@@ -278,7 +302,7 @@ class Position(Base):
     @property
     def is_hedged(self) -> bool:
         """Check if position has an active hedge."""
-        return False  # No hedge in old schema
+        return False
     
     def __repr__(self):
         return f"<Position(token_id={self.token_id}, user={self.user_id}, status={self.status})>"

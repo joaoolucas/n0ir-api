@@ -1,7 +1,7 @@
 """Simplified database models with integrated hedge tracking."""
 
 from app.database.models.user import User
-from app.database.models.position_compat import Position  # Using compat version until migrations are run
+from app.database.models.position_hybrid import Position  # Using hybrid version for both old and new schemas
 from app.database.models.transaction import Transaction
 
 __all__ = [
