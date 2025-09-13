@@ -56,7 +56,7 @@ async def get_position(
         # Query database to get user_id for this NFT token ID
         user_id = None
         try:
-            stmt = select(Position.user_id).where(Position.nft_token_id == position_id)
+            stmt = select(Position.user_id).where(Position.token_id == position_id)
             result = await db.execute(stmt)
             db_user_id = result.scalar_one_or_none()
             if db_user_id:

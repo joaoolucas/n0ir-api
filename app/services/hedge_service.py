@@ -157,13 +157,12 @@ class HedgeService:
             Position with updated hedge data or None
         """
         try:
-            # Get position with hedge data
-            stmt = select(Position).where(
-                and_(
-                    Position.token_id == token_id,
-                    Position.hedge_id.isnot(None)
-                )
-            )
+            # Hedge functionality has been deprecated
+            # Return None since hedge data is no longer tracked in database
+            return None
+            
+            # Legacy code - kept for reference but not executed
+            stmt = select(Position).where(Position.token_id == token_id)
             result = await self.db.execute(stmt)
             position = result.scalar_one_or_none()
             
@@ -268,6 +267,11 @@ class HedgeService:
             List of alerts for positions needing attention
         """
         try:
+            # Hedge functionality has been deprecated
+            # Return empty list since hedge data is no longer tracked
+            return []
+            
+            # Legacy code - kept for reference but not executed
             # Get all positions with active hedges
             stmt = select(Position).where(
                 and_(
@@ -346,6 +350,21 @@ class HedgeService:
             Dictionary with hedge statistics
         """
         try:
+            # Hedge functionality has been deprecated
+            # Return zero statistics since hedge data is no longer tracked
+            return {
+                "total_positions": 0,
+                "active_hedges": 0,
+                "total_value": 0,
+                "total_pnl": 0,
+                "avg_leverage": 0,
+                "total_funding": 0,
+                "at_risk_count": 0,
+                "eth_positions": 0,
+                "btc_positions": 0
+            }
+            
+            # Legacy code - kept for reference but not executed
             # Get all positions with hedges
             stmt = select(Position).where(Position.hedge_id.isnot(None))
             result = await self.db.execute(stmt)
@@ -413,6 +432,20 @@ class HedgeService:
             Dictionary with performance metrics
         """
         try:
+            # Hedge functionality has been deprecated
+            # Return zero performance metrics
+            return {
+                "hedged_count": 0,
+                "hedged_avg_return": 0,
+                "hedged_pnl": 0,
+                "unhedged_count": 0,
+                "unhedged_avg_return": 0,
+                "unhedged_pnl": 0,
+                "effectiveness_ratio": 1.0,
+                "volatility_reduction": 0
+            }
+            
+            # Legacy code - kept for reference but not executed
             # Get positions with and without hedges
             stmt_hedged = select(Position).where(
                 and_(
