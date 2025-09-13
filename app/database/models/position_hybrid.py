@@ -65,7 +65,8 @@ class Position(Base):
     # Timestamps
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-    closed_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    entry_date = Column(DateTime(timezone=True), nullable=True)
+    exit_date = Column(DateTime(timezone=True), nullable=True, index=True)
     
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="positions")
@@ -300,14 +301,9 @@ class Position(Base):
         return None
     
     @property
-    def entry_date(self) -> Optional[datetime]:
-        """Get entry date."""
-        return self.created_at
-    
-    @property
-    def exit_date(self) -> Optional[datetime]:
-        """Get exit date."""
-        return self.closed_at
+    def closed_at(self) -> Optional[datetime]:
+        """Backward compatibility for closed_at."""
+        return self.exit_date
     
     @property
     def total_pnl_usdc(self) -> Decimal:
