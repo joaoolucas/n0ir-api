@@ -439,13 +439,22 @@ class PositionsService:
             # Get position data from position manager
             position_data = position_manager.functions.positions(token_id).call()
             
-            # Get owner from LiquidityManager's getPositionOwner
-            # This works for all positions tracked by LiquidityManager
-            owner = liquidity_manager.functions.getPositionOwner(token_id).call()
+            # Try to get owner from LiquidityManager first (for positions created through it)
+            owner = None
+            try:
+                owner = liquidity_manager.functions.getPositionOwner(token_id).call()
+                if owner and owner != "0x0000000000000000000000000000000000000000":
+                    logger.debug(f"Position {token_id} owner from LiquidityManager: {owner}")
+            except Exception as e:
+                logger.debug(f"Could not get owner from LiquidityManager for {token_id}: {e}")
             
-            # If owner is zero address, the position doesn't exist or isn't tracked
+            # If not found in LiquidityManager, get owner directly from NFT
             if not owner or owner == "0x0000000000000000000000000000000000000000":
-                raise ValueError(f"Position {token_id} not found or not tracked by LiquidityManager")
+                try:
+                    owner = position_manager.functions.ownerOf(token_id).call()
+                    logger.debug(f"Position {token_id} owner from NFT: {owner}")
+                except Exception as e:
+                    raise ValueError(f"Position {token_id} not found: {e}")
             
             # Extract position data
             token0 = position_data[2]
