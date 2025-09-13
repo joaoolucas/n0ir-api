@@ -65,17 +65,19 @@ class LiquidityManagerClient:
         return [
             {
                 "inputs": [
-                    {"internalType": "uint256", "name": "usdcAmount", "type": "uint256"},
                     {"internalType": "address", "name": "pool", "type": "address"},
+                    {"internalType": "uint256", "name": "rangePercentage", "type": "uint256"},
                     {"internalType": "int24", "name": "tickLower", "type": "int24"},
                     {"internalType": "int24", "name": "tickUpper", "type": "int24"},
-                    {"internalType": "bool", "name": "enableHedge", "type": "bool"},
                     {"internalType": "uint256", "name": "deadline", "type": "uint256"},
-                    {"internalType": "uint256", "name": "slippageBps", "type": "uint256"}
+                    {"internalType": "uint256", "name": "usdcAmount", "type": "uint256"},
+                    {"internalType": "uint256", "name": "slippageBps", "type": "uint256"},
+                    {"internalType": "bool", "name": "enableHedge", "type": "bool"}
                 ],
-                "name": "createPositionWithHedge",
+                "name": "createPosition",
                 "outputs": [
                     {"internalType": "uint256", "name": "tokenId", "type": "uint256"},
+                    {"internalType": "uint128", "name": "liquidity", "type": "uint128"},
                     {"internalType": "uint256", "name": "hedgeId", "type": "uint256"}
                 ],
                 "stateMutability": "payable",
@@ -84,11 +86,12 @@ class LiquidityManagerClient:
             {
                 "inputs": [
                     {"internalType": "uint256", "name": "tokenId", "type": "uint256"},
+                    {"internalType": "address", "name": "pool", "type": "address"},
                     {"internalType": "uint256", "name": "deadline", "type": "uint256"},
                     {"internalType": "uint256", "name": "minUsdcOut", "type": "uint256"},
                     {"internalType": "uint256", "name": "slippageBps", "type": "uint256"}
                 ],
-                "name": "closePositionWithHedge",
+                "name": "closePosition",
                 "outputs": [
                     {"internalType": "uint256", "name": "totalUsdcOut", "type": "uint256"}
                 ],
