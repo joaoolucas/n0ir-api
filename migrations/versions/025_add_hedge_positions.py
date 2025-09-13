@@ -17,6 +17,10 @@ depends_on = None
 
 
 def upgrade():
+    # DISABLED: These tables are deprecated and merged into positions/transactions
+    # See migration 026_merge_hedge_into_positions
+    return
+    
     # Check if tables already exist
     conn = op.get_bind()
     inspector = sa.inspect(conn)
