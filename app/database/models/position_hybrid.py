@@ -62,10 +62,6 @@ class Position(Base):
     # The NEW PnL column that exists in the migrated database
     realized_pnl_usdc = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
     
-    # JSONB fields
-    position_data = Column(JSONB, default={}, nullable=False)
-    blockchain_data = Column(JSONB, default={}, nullable=False)
-    
     # Timestamps
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -80,6 +76,27 @@ class Position(Base):
         Index("idx_positions_user_status", "user_id", "status"),
         Index("idx_positions_status", "status"),
     )
+    
+    # Hybrid properties for JSONB columns that may not exist
+    @hybrid_property
+    def position_data(self):
+        """Return empty dict if column doesn't exist."""
+        return {}
+    
+    @position_data.expression
+    def position_data(cls):
+        """SQL expression for position_data - returns empty JSON."""
+        return '{}'
+    
+    @hybrid_property
+    def blockchain_data(self):
+        """Return empty dict if column doesn't exist."""
+        return {}
+    
+    @blockchain_data.expression  
+    def blockchain_data(cls):
+        """SQL expression for blockchain_data - returns empty JSON."""
+        return '{}'
     
     # Hybrid properties for OLD column names that the code expects
     @hybrid_property
