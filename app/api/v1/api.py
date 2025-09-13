@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from app.api.v1.endpoints import pools, tokens, health, positions, wallets, strategy, users
+from app.api.v1.endpoints import pools, tokens, health, positions, strategy, users
 from app.core.auth import verify_bearer_token
 
 api_router = APIRouter()
@@ -26,12 +26,6 @@ api_router.include_router(
 api_router.include_router(
     positions.router,
     tags=["Positions"],
-    dependencies=[Depends(verify_bearer_token)]
-)
-
-api_router.include_router(
-    wallets.router,
-    tags=["Wallet Registry"],
     dependencies=[Depends(verify_bearer_token)]
 )
 

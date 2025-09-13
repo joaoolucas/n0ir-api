@@ -58,20 +58,6 @@ class Settings(BaseSettings):
         env="WETH_ADDRESS"
     )
     
-    # Wallet Registry Configuration
-    wallet_registry_contract_address: str = Field(
-        default="0xade8EB85dAE5F102B26499B0Fe43D2217b679778",
-        env="WALLET_REGISTRY_CONTRACT_ADDRESS"
-    )
-    wallet_registry_operator_address: str = Field(
-        default="0x27f4f543c35ee533A7566663C0207Eb179FbA656",
-        env="WALLET_REGISTRY_OPERATOR_ADDRESS"
-    )
-    wallet_registry_operator_private_key: str = Field(
-        default="",
-        env="WALLET_REGISTRY_OPERATOR_PRIVATE_KEY"
-    )
-    
     # Gas Configuration
     max_gas_price_gwei: int = Field(default=50, env="MAX_GAS_PRICE_GWEI")
     gas_multiplier: float = Field(default=1.2, env="GAS_MULTIPLIER")

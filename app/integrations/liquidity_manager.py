@@ -14,7 +14,6 @@ class LiquidityManagerClient:
     
     # Contract addresses on Base Mainnet
     LIQUIDITY_MANAGER = "0xF1D9a32A41593885b6eDdF0De166fC47F390d070"
-    WALLET_REGISTRY = "0x970E09D2F2CB6ED652b0f10f1DCd5E3B36f3C7E6"
     ROUTE_FINDER = "0x77e616a845B2b5Eb97a4f4e2d09547D555752C77"
     
     # Uniswap V3 contracts
@@ -30,7 +29,6 @@ class LiquidityManagerClient:
         """Initialize the LiquidityManager client."""
         self._w3: Optional[Web3] = None
         self._liquidity_manager: Optional[Contract] = None
-        self._wallet_registry: Optional[Contract] = None
         self._abi_loaded = False
         self._abi_data = None
         
