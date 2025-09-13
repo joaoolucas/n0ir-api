@@ -38,10 +38,14 @@ class Settings(BaseSettings):
     cors_allow_methods: List[str] = Field(default=["*"], env="CORS_ALLOW_METHODS")
     cors_allow_headers: List[str] = Field(default=["*"], env="CORS_ALLOW_HEADERS")
     
-    # Sugar Contract Configuration
+    # Contract Addresses
     sugar_contract_address: str = Field(
         default="0x27fc745390d1f4BaF8D184FBd97748340f786634",
         env="SUGAR_CONTRACT_ADDRESS"
+    )
+    liquidity_manager_address: str = Field(
+        default="0xA933aAa8222De2f85E7A904E3E3e940652FBFdFD",
+        env="LIQUIDITY_MANAGER_ADDRESS"
     )
     
     # Common Token Addresses

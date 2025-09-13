@@ -13,7 +13,6 @@ class LiquidityManagerClient:
     """Client for interacting with n0ir LiquidityManager contract."""
     
     # Contract addresses on Base Mainnet
-    LIQUIDITY_MANAGER = "0xF1D9a32A41593885b6eDdF0De166fC47F390d070"
     ROUTE_FINDER = "0x77e616a845B2b5Eb97a4f4e2d09547D555752C77"
     
     # Uniswap V3 contracts
@@ -146,7 +145,7 @@ class LiquidityManagerClient:
             w3 = self._get_w3()
             abi = self._load_abi()
             self._liquidity_manager = w3.eth.contract(
-                address=Web3.to_checksum_address(self.LIQUIDITY_MANAGER),
+                address=Web3.to_checksum_address(settings.liquidity_manager_address),
                 abi=abi
             )
         return self._liquidity_manager
