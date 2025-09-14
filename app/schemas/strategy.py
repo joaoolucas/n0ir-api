@@ -1,354 +1,577 @@
 """
-Pydantic schemas for the strategy module.
+Consolidated Pydantic schemas for strategy-related endpoints.
+
+This module combines all strategy schemas (v1, v2, v2_enhanced) into a single file
+with clear organization and version support for backwards compatibility.
 """
 from datetime import datetime
-from typing import List, Optional, Dict, Any, Literal
+from typing import List, Optional, Dict, Any, Literal, Union
 from pydantic import BaseModel, Field, validator
 from decimal import Decimal
 
 
-# ============= Common Models =============
+# ============= Base/Common Models =============
+
+class ErrorDetail(BaseModel):
+    """Detailed error information."""
+    field: Optional[str] = None
+    message: str
+    code: Optional[str] = None
+
+
+class ErrorResponse(BaseModel):
+    """Standard error response."""
+    error: str
+    details: Optional[ErrorDetail] = None
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
 
 class RangeParameters(BaseModel):
-    """Concentrated liquidity range parameters."""
-    lower_tick: int
-    upper_tick: int
-    lower_price: Optional[float] = None
-    upper_price: Optional[float] = None
-    range_percentage: Optional[float] = Field(None, description="Range width as percentage from current price")
-    lower_percentage: Optional[float] = Field(None, description="Percentage below current price")
-    upper_percentage: Optional[float] = Field(None, description="Percentage above current price")
+    """Range parameters for a position."""
+    tick_lower: int
+    tick_upper: int
+    price_lower: float
+    price_upper: float
+    width_percentage: float = Field(..., ge=0, le=100)
 
 
 class RiskMetrics(BaseModel):
-    """Risk metrics for a position or pool."""
-    volatility_24h: float = Field(..., description="24-hour volatility percentage")
-    volume_tvl_ratio: float = Field(..., description="Volume to TVL ratio")
-    slippage_estimate: float = Field(..., description="Estimated slippage percentage")
+    """Risk metrics for position/pool analysis."""
+    volatility_1d: float = Field(..., ge=0)
+    volatility_7d: float = Field(..., ge=0)
+    var_95_1d: float
+    var_95_7d: float
+    sharpe_ratio: Optional[float] = None
+    max_drawdown: Optional[float] = None
+    impermanent_loss_estimate: float
 
 
 class SlippageInfo(BaseModel):
-    """Slippage calculation details."""
-    estimated_percentage: float
-    max_acceptable: float
-    pair_volatility_class: Literal["stable", "semi-volatile", "volatile", "memecoin"]
+    """Slippage information for transactions."""
+    estimated_slippage_bps: float
+    max_slippage_bps: float
+    price_impact: float
+    execution_price: float
 
 
 class ExecutionParams(BaseModel):
-    """Execution parameters for trades."""
-    exit_percentage: float = Field(..., ge=0, le=100)
-    max_slippage: float = Field(..., ge=0, le=10)
-    deadline: int = Field(..., description="Deadline in seconds")
+    """Parameters for transaction execution."""
+    gas_estimate: int
+    gas_price_gwei: float
+    max_priority_fee_gwei: float
+    deadline_minutes: int = 30
 
 
-# ============= Request Models =============
+# ============= Pool & Position Models =============
 
-class OpportunitiesRequest(BaseModel):
-    """Request for finding pool opportunities."""
-    executor_address: str
-    available_capital: float = Field(..., gt=0)
-    
-    @validator('executor_address')
-    def strip_executor_address(cls, v: str) -> str:
-        """Strip whitespace from executor address."""
-        return v.strip() if v else v
+class PoolInfo(BaseModel):
+    """Basic pool information."""
+    address: str
+    token0_symbol: str
+    token1_symbol: str
+    fee: int
+    tick_spacing: int
+    current_tick: int
+    current_price: float
+    liquidity: float
+    volume_24h: float
+    tvl_usd: float
 
 
-class AnalyzeEntryRequest(BaseModel):
-    """Request for analyzing position entry."""
+class PositionStatus(BaseModel):
+    """Status of an existing position."""
+    token_id: int
+    pool_address: str
+    is_active: bool
+    in_range: bool
+    current_price: float
+    range_parameters: RangeParameters
+    liquidity: float
+    unclaimed_fees_usd: float
+    current_value_usd: float
+    pnl_usd: float
+    pnl_percentage: float
+    time_held_hours: float
+
+
+class PoolOpportunity(BaseModel):
+    """Complete pool opportunity analysis."""
+    pool: PoolInfo
+    score: float = Field(..., ge=0, le=100)
+    expected_apr: float
+    confidence_level: float = Field(..., ge=0, le=100)
+    optimal_range: RangeParameters
+    risk_metrics: RiskMetrics
+    recommended_amount_usdc: float
+    reasoning: str
+
+
+# ============= Portfolio & Analysis Models =============
+
+class PortfolioMetrics(BaseModel):
+    """Portfolio-level metrics."""
+    total_value_usd: float
+    total_pnl_usd: float
+    total_pnl_percentage: float
+    active_positions: int
+    average_apr: float
+    portfolio_volatility: float
+    diversification_score: float = Field(..., ge=0, le=100)
+
+
+class RiskAnalysis(BaseModel):
+    """Comprehensive risk analysis."""
+    overall_risk_score: float = Field(..., ge=0, le=100)
+    concentration_risk: float = Field(..., ge=0, le=100)
+    market_risk: float = Field(..., ge=0, le=100)
+    liquidity_risk: float = Field(..., ge=0, le=100)
+    warnings: List[str]
+    recommendations: List[str]
+
+
+class OptimalTiming(BaseModel):
+    """Optimal timing recommendations."""
+    recommended_action: Literal["immediate", "wait", "dca"]
+    reasoning: str
+    wait_hours: Optional[int] = None
+    confidence: float = Field(..., ge=0, le=100)
+
+
+class AlternativeAction(BaseModel):
+    """Alternative action suggestion."""
+    action_type: Literal["switch_pool", "adjust_range", "partial_exit", "add_liquidity"]
+    description: str
+    expected_improvement: float
+    confidence: float = Field(..., ge=0, le=100)
+
+
+# ============= V2 Models (Analyze) =============
+
+class AnalyzeEntryData(BaseModel):
+    """Entry-specific data for analyze request."""
     pool_address: str
     amount_usdc: float = Field(..., gt=0)
 
 
-class PositionInfo(BaseModel):
-    """Information about a position."""
-    pool_address: str
-    token_id: int
-    entry_price: float
-    current_range: RangeParameters
-    invested_amount: float
-    entry_timestamp: datetime
-
-
-class MonitorPositionsRequest(BaseModel):
-    """Request for monitoring active positions."""
-    user_address: str = Field(..., description="User wallet address to monitor positions for")
-
-
-class RangeBreakRequest(BaseModel):
-    """Request for handling range breaks."""
-    token_id: int = Field(..., description="NFT token ID of the position to check")
-
-
-class ExitAnalysisRequest(BaseModel):
-    """Request for analyzing position exit."""
+class AnalyzeExitData(BaseModel):
+    """Exit-specific data for analyze request."""
     token_id: int = Field(..., description="NFT token ID of the position")
     exit_reason: Literal["manual", "stop_loss", "take_profit", "range_break", "rebalance"]
 
 
-class WhipsawDetectionRequest(BaseModel):
-    """Request for detecting whipsaw patterns."""
-    token_id: int = Field(..., description="NFT token ID of the position")
-
-
-class PortfolioRebalanceRequest(BaseModel):
-    """Request for portfolio rebalancing."""
-    user_address: str = Field(..., description="User wallet address")
-    available_capital: float = Field(default=0, ge=0)
-    check_switches: bool = Field(default=True, description="Check for pool switching opportunities")
-
-
-class SlippageCalculationRequest(BaseModel):
-    """Request for calculating slippage."""
+class AnalyzeSlippageData(BaseModel):
+    """Slippage-specific data for analyze request."""
     pool_address: str
     action: Literal["enter", "exit"]
     amount_usdc: float = Field(..., gt=0)
 
 
-# ============= Response Models =============
-
-class PoolOpportunity(BaseModel):
-    """Pool opportunity information."""
-    pool_address: str
-    pair: str
-    score: float = Field(..., ge=0, le=100)
-    expected_apr: float
-    effective_apr: float = Field(..., description="Effective APR based on recommended range")
-    apr_efficiency: float = Field(..., ge=0, le=100, description="Percentage of base APR captured")
-    recommended_amount: float
-    recommended_range: RangeParameters
-    risk_metrics: RiskMetrics
-    entry_conditions_met: bool
+class AnalyzeSwitchData(BaseModel):
+    """Switch-specific data for analyze request."""
+    from_token_id: int
+    to_pool_address: str
+    amount_usdc: Optional[float] = None
 
 
-class OpportunitiesResponse(BaseModel):
-    """Response for pool opportunities."""
+class AnalyzeRequest(BaseModel):
+    """Unified analyze request supporting multiple analyze types."""
+    analyze_type: Literal["entry", "exit", "slippage", "switch"]
+    executor_address: str
+    
+    # Type-specific data (only one should be provided based on analyze_type)
+    entry_data: Optional[AnalyzeEntryData] = None
+    exit_data: Optional[AnalyzeExitData] = None
+    slippage_data: Optional[AnalyzeSlippageData] = None
+    switch_data: Optional[AnalyzeSwitchData] = None
+    
+    @validator('entry_data', 'exit_data', 'slippage_data', 'switch_data')
+    def validate_type_data(cls, v, values):
+        """Ensure the correct data field is provided for the analyze_type."""
+        if 'analyze_type' not in values:
+            return v
+            
+        analyze_type = values['analyze_type']
+        field_map = {
+            'entry': 'entry_data',
+            'exit': 'exit_data',
+            'slippage': 'slippage_data',
+            'switch': 'switch_data'
+        }
+        
+        expected_field = field_map[analyze_type]
+        current_field = None
+        
+        for field, data_field in field_map.items():
+            if v is not None and data_field == expected_field:
+                current_field = data_field
+                break
+                
+        if current_field and current_field != expected_field:
+            raise ValueError(f"For analyze_type '{analyze_type}', only '{expected_field}' should be provided")
+            
+        return v
+
+
+# ============= Screen Models =============
+
+class ScreenRequest(BaseModel):
+    """Enhanced screening request."""
+    executor_address: str
+    available_capital: float = Field(..., gt=0)
+
+
+class ScreenResponse(BaseModel):
+    """Screening response with opportunities."""
     opportunities: List[PoolOpportunity]
-    optimal_position_count: int = Field(..., description="Recommended total number of positions")
-    minimum_position_size: float = Field(..., description="Minimum viable position size in USDC")
+    portfolio_metrics: Optional[PortfolioMetrics] = None
+    risk_analysis: Optional[RiskAnalysis] = None
+    optimal_position_count: int
+    minimum_position_size: float
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    cache_hit: bool = False
+    analysis_time_ms: Optional[int] = None
+
+
+# ============= Monitor Models =============
+
+class MonitorRequest(BaseModel):
+    """Request for position monitoring."""
+    executor_address: str
+    check_all_positions: bool = True
+    position_ids: Optional[List[int]] = None
+
+
+class RangeBreakAlert(BaseModel):
+    """Alert for range break detection."""
+    token_id: int
+    pool_address: str
+    break_type: Literal["upward", "downward"]
+    current_price: float
+    range_lower: float
+    range_upper: float
+    break_percentage: float
+    recommended_action: Literal["rebalance", "exit", "hold"]
+    urgency: Literal["low", "medium", "high", "critical"]
+    reasoning: str
+
+
+class WhipsawAlert(BaseModel):
+    """Alert for whipsaw detection."""
+    token_id: int
+    pool_address: str
+    whipsaw_count: int
+    time_window_hours: float
+    false_signal_probability: float
+    recommended_action: Literal["wait", "widen_range", "exit"]
+    reasoning: str
+
+
+class MonitorResponse(BaseModel):
+    """Response from position monitoring."""
+    positions_checked: int
+    range_breaks: List[RangeBreakAlert]
+    whipsaw_alerts: List[WhipsawAlert]
+    portfolio_health: float = Field(..., ge=0, le=100)
+    recommended_actions: List[str]
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
-class RiskAnalysis(BaseModel):
-    """Risk analysis for a position."""
-    position_var_1d: float
-    portfolio_impact: float
-    correlation_benefit: float
+# ============= V2 Enhanced Models =============
+
+class UserContext(BaseModel):
+    """User context information for comprehensive screening."""
+    executor_address: str
+    available_capital: float
+    positions_value: float
+    total_portfolio_value: float
+    active_positions: int
 
 
-class AnalyzeEntryResponse(BaseModel):
-    """Response for entry analysis."""
-    should_enter: bool
+class EntryAnalysis(BaseModel):
+    """Detailed entry analysis for a pool opportunity."""
+    pool_address: str
+    pool_name: str
     confidence_score: float = Field(..., ge=0, le=100)
-    slippage: SlippageInfo
-    risk_analysis: RiskAnalysis
-    optimal_range: RangeParameters
-    effective_apr: float = Field(..., description="Effective APR for the optimal range")
-    apr_efficiency: float = Field(..., ge=0, le=100, description="Percentage of base APR captured")
-    warnings: List[str] = Field(default_factory=list)
+    optimal_allocation: float
+    expected_apr: float
+    risk_metrics: Dict[str, Any]
+    optimal_range: Dict[str, Any]
 
 
-class RangeStatus(BaseModel):
-    """Range status information."""
-    in_range: bool
-    price_position: float = Field(..., ge=0, le=1, description="Position within range (0-1)")
-    range_break_severity: float = Field(..., ge=0, le=100)
-
-
-class PositionStatus(BaseModel):
-    """Position monitoring status."""
+class ExitRecommendation(BaseModel):
+    """Exit recommendation for an existing position."""
     token_id: int
     pool_address: str
-    status: Literal["in_range", "out_of_range", "critical"]
-    health_score: float = Field(..., ge=0, le=100)
-    current_apr: float
-    accumulated_fees: float
-    accumulated_rewards: float
-    range_status: RangeStatus
-    recommended_action: Literal["hold", "monitor", "rebalance", "exit"]
-    action_details: Optional[Dict[str, Any]] = None
+    urgency: Literal["low", "medium", "high", "critical"]
+    reason: str
+    expected_proceeds: float
+    roi_percentage: float
+    slippage_estimate: float
 
 
-class PortfolioMetrics(BaseModel):
-    """Portfolio-level metrics."""
-    total_value: float
-    unrealized_pnl: float
-    current_apr: float
-    risk_score: float = Field(..., ge=0, le=100)
+class SwitchRecommendation(BaseModel):
+    """Switch recommendation from one position to another."""
+    from_token_id: int
+    from_pool: str
+    to_pool_address: str
+    to_pool_name: str
+    apr_improvement: float
+    net_benefit_after_costs: float
+    confidence: float = Field(..., ge=0, le=100)
 
 
-class MonitorPositionsResponse(BaseModel):
-    """Response for position monitoring."""
-    positions: List[PositionStatus]
-    portfolio_metrics: PortfolioMetrics
+class ImmediateAction(BaseModel):
+    """Immediate action to take."""
+    type: Literal["entry", "exit", "switch"]
+    priority: int
+    details: Dict[str, Any]
 
 
-class AlternativeAction(BaseModel):
-    """Alternative action for range breaks."""
-    type: Literal["rebalance", "hold"]
-    new_range: Optional[RangeParameters] = None
-    expected_cost: float
+class ScheduledAction(BaseModel):
+    """Scheduled action for future execution."""
+    type: Literal["entry", "exit", "switch", "rebalance"]
+    schedule: str  # e.g., "tomorrow", "in_2_hours", etc.
+    details: Dict[str, Any]
+
+
+class CapitalAllocation(BaseModel):
+    """Capital allocation recommendations."""
+    recommended_positions: int
+    allocation_per_position: float
+    active_positions: int
+
+
+class DecisionMatrix(BaseModel):
+    """Decision matrix for strategic actions."""
+    immediate_actions: List[ImmediateAction]
+    scheduled_actions: List[ScheduledAction]
+    capital_allocation: CapitalAllocation
+
+
+class RiskAlert(BaseModel):
+    """Risk alert for portfolio."""
+    type: Literal["concentration", "portfolio_health", "over_diversification", "capital_fragmentation"]
+    message: str
+    severity: Literal["low", "medium", "high", "critical"]
+
+
+class EnhancedScreenRequest(BaseModel):
+    """Enhanced request for comprehensive screening."""
+    executor_address: str
+    available_capital: float = Field(..., gt=0)
+
+
+class EnhancedScreenResponse(BaseModel):
+    """Enhanced response with comprehensive analysis."""
+    # User context
+    user_context: UserContext
+    
+    # Opportunities (existing field for backward compatibility)
+    opportunities: List[PoolOpportunity]
+    
+    # New comprehensive analysis fields
+    entry_analyses: List[EntryAnalysis] = Field(default_factory=list)
+    exit_recommendations: List[ExitRecommendation] = Field(default_factory=list)
+    switch_recommendations: List[SwitchRecommendation] = Field(default_factory=list)
+    
+    # Decision support
+    decision_matrix: Optional[DecisionMatrix] = None
+    risk_alerts: List[RiskAlert] = Field(default_factory=list)
+    
+    # Existing fields for backward compatibility
+    optimal_position_count: int = Field(..., description="Recommended total number of positions")
+    minimum_position_size: float = Field(..., description="Minimum viable position size in USDC")
+    
+    # Metadata
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    analysis_timestamp: Optional[datetime] = None
+    cache_hit: bool = Field(default=False)
+    analysis_time_ms: Optional[int] = None
+
+
+# ============= Legacy/Compatibility Models =============
+
+class OpportunitiesRequest(BaseModel):
+    """Request for pool opportunities (legacy)."""
+    executor_address: str
+    available_capital: float = Field(..., gt=0)
+    min_apr: Optional[float] = Field(None, ge=0)
+    max_positions: Optional[int] = Field(None, ge=1, le=20)
+
+
+class MonitorPositionsRequest(BaseModel):
+    """Request for monitoring positions (legacy)."""
+    executor_address: str
+    check_all_positions: bool = True
+    position_ids: Optional[List[int]] = None
+
+
+class RangeBreakRequest(BaseModel):
+    """Request for range break detection (legacy)."""
+    token_id: int
+    executor_address: str
+
+
+class WhipsawDetectionRequest(BaseModel):
+    """Request for whipsaw detection (legacy)."""
+    token_id: int
+    executor_address: str
+    time_window_hours: Optional[float] = Field(24.0, gt=0)
 
 
 class RangeBreakMetrics(BaseModel):
     """Metrics for range break analysis."""
-    reversal_probability: float = Field(..., ge=0, le=1)
-    expected_loss_if_reversal: float
-    break_severity: float = Field(..., ge=0, le=100)
-
-
-class RangeBreakResponse(BaseModel):
-    """Response for range break handling."""
-    action: Literal["emergency_exit", "rebalance", "monitor"]
-    urgency: Literal["low", "medium", "high", "critical"]
-    reasoning: str
-    execution_params: ExecutionParams
-    alternative_action: AlternativeAction
-    risk_metrics: RangeBreakMetrics
-
-
-class OptimalTiming(BaseModel):
-    """Optimal timing for exit."""
-    execute_now: bool
-    wait_minutes: int = Field(..., ge=0)
-
-
-class ExitAnalysisResponse(BaseModel):
-    """Response for exit analysis."""
-    should_exit: bool
-    exit_strategy: Literal["immediate", "graduated", "wait"]
-    optimal_timing: OptimalTiming
-    slippage_estimate: float
-    expected_proceeds: float
-    roi_percentage: float
-    tax_implications: Optional[str] = None
+    break_detected: bool
+    break_type: Optional[Literal["upward", "downward"]] = None
+    current_price: float
+    range_lower: float
+    range_upper: float
+    break_percentage: float
+    time_since_break_hours: Optional[float] = None
+    reversal_probability: float
+    false_break_probability: float
 
 
 class AlternativeStrategy(BaseModel):
-    """Alternative strategy for whipsaw."""
-    type: Literal["widen_range", "reduce_position", "exit"]
-    new_range_multiplier: Optional[float] = None
-    reduction_percentage: Optional[float] = None
+    """Alternative strategy suggestion."""
+    strategy_type: Literal["widen_range", "narrow_range", "shift_range", "exit_position"]
+    description: str
+    expected_improvement_percentage: float
+    implementation_difficulty: Literal["easy", "medium", "hard"]
+    estimated_gas_cost_usd: float
+
+
+class RebalanceRecommendation(BaseModel):
+    """Recommendation for position rebalancing."""
+    should_rebalance: bool
+    urgency: Literal["low", "medium", "high", "critical"]
+    new_range: Optional[RangeParameters] = None
+    expected_apr_improvement: float
+    cost_benefit_ratio: float
+    reasoning: str
+
+
+class PortfolioImprovement(BaseModel):
+    """Suggestions for portfolio improvement."""
+    action: Literal["add_position", "remove_position", "rebalance_allocation"]
+    target_pool: Optional[str] = None
+    target_position_id: Optional[int] = None
+    allocation_change_usdc: float
+    expected_portfolio_apr_change: float
+    reasoning: str
+
+
+# ============= Response Aggregators =============
+
+class OpportunitiesResponse(BaseModel):
+    """Response containing filtered and ranked opportunities."""
+    opportunities: List[PoolOpportunity]
+    total_opportunities_found: int
+    filters_applied: List[str]
+    portfolio_metrics: Optional[PortfolioMetrics] = None
+    recommended_allocation: Dict[str, float] = Field(default_factory=dict)
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+class MonitorPositionsResponse(BaseModel):
+    """Response from monitoring multiple positions."""
+    positions: List[PositionStatus]
+    alerts: List[Dict[str, Any]]
+    portfolio_metrics: PortfolioMetrics
+    risk_analysis: RiskAnalysis
+    recommended_actions: List[str]
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+class RangeBreakResponse(BaseModel):
+    """Response for range break analysis."""
+    position_status: PositionStatus
+    range_break_metrics: RangeBreakMetrics
+    rebalance_recommendation: RebalanceRecommendation
+    alternative_strategies: List[AlternativeStrategy]
+    risk_analysis: RiskAnalysis
+    optimal_timing: OptimalTiming
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
 class WhipsawDetectionResponse(BaseModel):
     """Response for whipsaw detection."""
     whipsaw_detected: bool
-    severity: float = Field(..., ge=0, le=100)
-    pattern: Literal["high_frequency_reversal", "expanding_volatility", "none"]
-    recommended_action: Literal["exit", "reduce", "widen_range", "monitor"]
-    alternative_strategies: List[AlternativeStrategy]
+    whipsaw_count: int
+    false_signals: int
+    time_window_hours: float
+    confidence_score: float = Field(..., ge=0, le=100)
+    price_oscillations: List[Dict[str, Any]]
+    recommended_action: Literal["wait", "widen_range", "exit"]
+    alternative_actions: List[AlternativeAction]
+    reasoning: str
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
-class RebalanceRecommendation(BaseModel):
-    """Rebalancing recommendation."""
-    action: Literal["close", "reduce", "open", "increase", "switch", "rebalance"]
-    token_id: Optional[int] = None
-    pool_address: Optional[str] = None
-    target_percentage: Optional[float] = None
-    suggested_amount: Optional[float] = None
-    reason: str
+# ============= Backwards Compatibility Exports =============
+# These allow importing from this module directly for backwards compatibility
 
-
-class PortfolioImprovement(BaseModel):
-    """Expected portfolio improvement metrics."""
-    apr_increase: float
-    risk_reduction: float
-    sharpe_improvement: float
-
-
-class PortfolioRebalanceResponse(BaseModel):
-    """Response for portfolio rebalancing."""
-    recommendations: List[RebalanceRecommendation]
-    expected_portfolio_improvement: PortfolioImprovement
-    is_full_rebalance: bool = Field(default=False, description="True if withdrawal detected requiring full rebalance")
-
-
-class SlippageCalculationResponse(BaseModel):
-    """Response for slippage calculation."""
-    base_slippage: float
-    size_impact: float
-    volatility_adjustment: float
-    total_slippage: float
-    max_recommended: float
-    pair_classification: Literal["stable", "semi-volatile", "volatile", "memecoin"]
-
-
-class PortfolioVaR(BaseModel):
-    """Portfolio Value at Risk metrics."""
-    var_1d_95: float
-    var_7d_95: float
-
-
-class ConcentrationRisk(BaseModel):
-    """Concentration risk metrics."""
-    highest_pool_percentage: float
-    highest_token_percentage: float
-
-
-class RangeBreakRisk(BaseModel):
-    """Range break risk metrics."""
-    positions_at_risk: int
-    potential_loss: float
-
-
-class RiskAssessmentResponse(BaseModel):
-    """Response for risk assessment."""
-    portfolio_var: PortfolioVaR
-    concentration_risk: ConcentrationRisk
-    range_break_risk: RangeBreakRisk
-    warnings: List[str]
-    risk_score: float = Field(..., ge=0, le=100)
-    recommended_actions: List[str]
-
-
-class ReturnMetrics(BaseModel):
-    """Return metrics."""
-    total_pnl: float
-    roi_percentage: float
-    apr: float
-
-
-class FeeBreakdown(BaseModel):
-    """Fee breakdown."""
-    trading_fees: float
-    rewards: float
-    gas_costs: float
-    slippage_costs: float
-
-
-class RiskPerformanceMetrics(BaseModel):
-    """Risk-adjusted performance metrics."""
-    sharpe_ratio: float
-    max_drawdown: float
-    win_rate: float = Field(..., ge=0, le=1)
-
-
-class ExecutionQuality(BaseModel):
-    """Execution quality metrics."""
-    avg_slippage: float
-    successful_entries: int
-    successful_exits: int
-    range_breaks_handled: int
-
-
-class PerformanceAnalyticsResponse(BaseModel):
-    """Response for performance analytics."""
-    returns: ReturnMetrics
-    fee_breakdown: FeeBreakdown
-    risk_metrics: RiskPerformanceMetrics
-    execution_quality: ExecutionQuality
-
-
-# ============= Error Models =============
-
-class ErrorDetail(BaseModel):
-    """Error detail information."""
-    code: str
-    message: str
-    details: Optional[Dict[str, Any]] = None
-
-
-class ErrorResponse(BaseModel):
-    """Standard error response."""
-    error: ErrorDetail
+__all__ = [
+    # Base models
+    'ErrorDetail',
+    'ErrorResponse',
+    'RangeParameters',
+    'RiskMetrics',
+    'SlippageInfo',
+    'ExecutionParams',
+    
+    # Pool & Position
+    'PoolInfo',
+    'PositionStatus',
+    'PoolOpportunity',
+    
+    # Portfolio & Analysis
+    'PortfolioMetrics',
+    'RiskAnalysis',
+    'OptimalTiming',
+    'AlternativeAction',
+    
+    # V2 Models
+    'AnalyzeEntryData',
+    'AnalyzeExitData',
+    'AnalyzeSlippageData',
+    'AnalyzeSwitchData',
+    'AnalyzeRequest',
+    
+    # Screen Models
+    'ScreenRequest',
+    'ScreenResponse',
+    
+    # Monitor Models
+    'MonitorRequest',
+    'RangeBreakAlert',
+    'WhipsawAlert',
+    'MonitorResponse',
+    
+    # Enhanced Models
+    'UserContext',
+    'EntryAnalysis',
+    'ExitRecommendation',
+    'SwitchRecommendation',
+    'ImmediateAction',
+    'ScheduledAction',
+    'CapitalAllocation',
+    'DecisionMatrix',
+    'RiskAlert',
+    'EnhancedScreenRequest',
+    'EnhancedScreenResponse',
+    
+    # Legacy Models
+    'OpportunitiesRequest',
+    'MonitorPositionsRequest',
+    'RangeBreakRequest',
+    'WhipsawDetectionRequest',
+    'RangeBreakMetrics',
+    'AlternativeStrategy',
+    'RebalanceRecommendation',
+    'PortfolioImprovement',
+    'OpportunitiesResponse',
+    'MonitorPositionsResponse',
+    'RangeBreakResponse',
+    'WhipsawDetectionResponse',
+]

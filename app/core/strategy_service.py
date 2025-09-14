@@ -17,21 +17,14 @@ from app.core.cache import cache_manager
 from app.core.effective_apr_calculator import EffectiveAPRCalculator
 from app.schemas.strategy import (
     OpportunitiesRequest, OpportunitiesResponse, PoolOpportunity,
-    AnalyzeEntryRequest, AnalyzeEntryResponse,
     MonitorPositionsRequest, MonitorPositionsResponse,
     RangeBreakRequest, RangeBreakResponse,
-    ExitAnalysisRequest, ExitAnalysisResponse,
     WhipsawDetectionRequest, WhipsawDetectionResponse,
-    PortfolioRebalanceRequest, PortfolioRebalanceResponse,
-    SlippageCalculationRequest, SlippageCalculationResponse,
-    RiskAssessmentResponse, PerformanceAnalyticsResponse,
     RiskMetrics, SlippageInfo, RiskAnalysis, RangeParameters,
-    PositionStatus, RangeStatus, PortfolioMetrics,
+    PositionStatus, PortfolioMetrics,
     ExecutionParams, AlternativeAction, RangeBreakMetrics,
     OptimalTiming, AlternativeStrategy, RebalanceRecommendation,
-    PortfolioImprovement, PortfolioVaR, ConcentrationRisk,
-    RangeBreakRisk, ReturnMetrics, FeeBreakdown,
-    RiskPerformanceMetrics, ExecutionQuality
+    PortfolioImprovement, SwitchRecommendation
 )
 
 
@@ -1272,9 +1265,149 @@ class StrategyService:
         Returns:
             Dictionary with switch recommendations and analysis
         """
-        # Use the working implementation
-        from app.core.strategy_service_fixed import analyze_position_switches_working
-        return await analyze_position_switches_working(user_address, token_ids, self)
+        logger.info(f"Analyzing switch opportunities for {len(token_ids)} positions")
+        
+        calculator = StrategyCalculator()
+        
+        # Fetch actual position data
+        positions_list = []
+        for token_id in token_ids:
+            try:
+                # Try to fetch real position
+                from app.core.positions_service import positions_service
+                position = await positions_service.get_position_by_id(token_id)
+                position_dict = position.dict() if hasattr(position, 'dict') else position
+                
+                # Map fields correctly
+                if 'id' in position_dict:
+                    position_dict['token_id'] = position_dict['id']
+                if 'current_value_usd' in position_dict:
+                    position_dict['current_value'] = position_dict['current_value_usd']
+                
+                positions_list.append(position_dict)
+                logger.info(f"Fetched position {token_id} with value ${position_dict.get('current_value_usd', 0):.2f}")
+            except Exception as e:
+                logger.error(f"Failed to fetch position {token_id}: {e}")
+                # Don't add to list if we can't fetch the position
+        
+        if not positions_list:
+            return {
+                'recommendations': [],
+                'total_positions_analyzed': 0,
+                'positions_recommended_for_switch': 0,
+                'total_expected_apr_improvement': 0,
+                'estimated_total_gas_cost': 0
+            }
+        
+        # Fetch pool info for each position
+        from app.core.pools_service import pools_service
+        
+        # Fetch pool info for all positions
+        for position in positions_list:
+            pool_address = position.get('pool_address')
+            if pool_address:
+                try:
+                    pool_data = await pools_service.get_pool(pool_address, include_effective_apr=False)
+                    # Add pool info to position
+                    # Extract token symbols from nested objects
+                    token0_symbol = 'UNKNOWN'
+                    token1_symbol = 'UNKNOWN'
+                    if isinstance(pool_data.get('token0'), dict):
+                        token0_symbol = pool_data['token0'].get('symbol', 'UNKNOWN')
+                    if isinstance(pool_data.get('token1'), dict):
+                        token1_symbol = pool_data['token1'].get('symbol', 'UNKNOWN')
+                    
+                    position['pool_info'] = {
+                        'symbol': pool_data.get('symbol', 'Unknown'),
+                        'token0_symbol': token0_symbol,
+                        'token1_symbol': token1_symbol,
+                        'apr': pool_data.get('apr', pool_data.get('base_apr', 0)),
+                        'base_apr': pool_data.get('base_apr', 0),
+                        'tvl_usd': pool_data.get('tvl_usd', 0)
+                    }
+                    logger.info(f"Added pool info for position {position.get('token_id')}: {position['pool_info']['symbol']}")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch pool info for position {position.get('token_id')}: {e}")
+                    # Add default pool_info if fetch fails
+                    position['pool_info'] = {
+                        'symbol': 'Unknown',
+                        'token0_symbol': 'UNKNOWN',
+                        'token1_symbol': 'UNKNOWN',
+                        'apr': 50,
+                        'base_apr': 50,
+                        'tvl_usd': 0
+                    }
+        
+        # Calculate wallet size
+        wallet_size = sum(p.get('current_value', 0) for p in positions_list)
+        logger.info(f"Wallet size: ${wallet_size}")
+        
+        # Convert set to list for batch fetch
+        whitelist_addresses = list(WHITELISTED_POOLS)
+        
+        # Fetch all whitelisted pools in batch with real APRs
+        test_pools = []
+        try:
+            # Batch fetch all pools
+            logger.info(f"Fetching {len(whitelist_addresses)} whitelisted pools")
+            for pool_address in whitelist_addresses:
+                try:
+                    pool_data = await pools_service.get_pool(pool_address, include_effective_apr=False)
+                    # Extract token symbols from nested objects
+                    token0_symbol = 'UNKNOWN'
+                    token1_symbol = 'UNKNOWN'
+                    if isinstance(pool_data.get('token0'), dict):
+                        token0_symbol = pool_data['token0'].get('symbol', 'UNKNOWN')
+                    if isinstance(pool_data.get('token1'), dict):
+                        token1_symbol = pool_data['token1'].get('symbol', 'UNKNOWN')
+                    
+                    test_pool = {
+                        'address': pool_address,
+                        'symbol': pool_data.get('symbol', 'Unknown'),
+                        'token0_symbol': token0_symbol,
+                        'token1_symbol': token1_symbol,
+                        'fee': pool_data.get('fee', 0),
+                        'tvl_usd': pool_data.get('tvl_usd', 0),
+                        'volume_24h': pool_data.get('volume_24h', 0),
+                        'apr': pool_data.get('apr', pool_data.get('base_apr', 0)),
+                        'base_apr': pool_data.get('base_apr', 0),
+                        'current_tick': pool_data.get('tick', 0)
+                    }
+                    test_pools.append(test_pool)
+                    logger.info(f"Fetched pool {test_pool['symbol']} with APR {test_pool['apr']:.2f}%")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch pool {pool_address}: {e}")
+        except Exception as e:
+            logger.error(f"Failed to fetch whitelisted pools: {e}")
+        
+        # Calculate switch recommendations
+        recommendations = calculator.calculate_switch_recommendations(
+            positions_list,
+            test_pools,
+            wallet_size
+        )
+        
+        # Convert recommendations to response format
+        switch_recommendations = []
+        for rec in recommendations.get('recommendations', []):
+            switch_rec = SwitchRecommendation(
+                from_token_id=rec['from_token_id'],
+                from_pool=rec['from_pool'],
+                to_pool_address=rec['to_pool_address'],
+                to_pool_name=rec['to_pool_name'],
+                apr_improvement=rec['apr_improvement'],
+                net_benefit_after_costs=rec['net_benefit_after_costs'],
+                confidence=rec['confidence']
+            )
+            switch_recommendations.append(switch_rec)
+        
+        return {
+            'recommendations': switch_recommendations,
+            'total_positions_analyzed': recommendations.get('total_positions_analyzed', 0),
+            'positions_recommended_for_switch': recommendations.get('positions_recommended_for_switch', 0),
+            'total_expected_apr_improvement': recommendations.get('total_expected_apr_improvement', 0),
+            'estimated_total_gas_cost': recommendations.get('estimated_total_gas_cost', 0)
+        }
 
     async def rebalance_portfolio(
         self,

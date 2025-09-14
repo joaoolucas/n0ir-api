@@ -453,7 +453,7 @@ async def get_balance(
         raise HTTPException(status_code=404, detail="User not found")
     
     # Get wallet balance - prefer blockchain query for accuracy
-    from app.services.blockchain_service import blockchain_service
+    from app.core.blockchain_service import blockchain_service
     
     # Try to get balance from blockchain first
     if user.cdp_wallet_address:
@@ -1031,7 +1031,7 @@ async def get_performance(
             current_positions_value += (position.current_value_usdc or Decimal(0))
     
     # Get wallet balance - prefer blockchain query for accuracy
-    from app.services.blockchain_service import blockchain_service
+    from app.core.blockchain_service import blockchain_service
     
     # Try to get balance from blockchain first
     if user.cdp_wallet_address:

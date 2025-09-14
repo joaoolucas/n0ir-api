@@ -7,17 +7,16 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import JSONResponse
 
-from app.schemas.strategy_v2 import (
+from app.schemas.strategy import (
+    # V2 Models
     ScreenRequest,
     MonitorRequest,
     MonitorResponse,
     RangeBreakAlert,
     WhipsawAlert,
     ErrorResponse,
-    ErrorDetail
-)
-
-from app.schemas.strategy import (
+    ErrorDetail,
+    # Legacy Models
     OpportunitiesRequest,
     MonitorPositionsRequest,
     RangeBreakRequest,
