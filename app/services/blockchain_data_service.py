@@ -37,9 +37,10 @@ class BlockchainDataService:
     """High-level service for fetching and transforming blockchain data."""
     
     def __init__(self):
-        self.cdp_client = CDPSQLClient()
+        self.cdp_client = CDPSQLClient() if settings.cdp_client_api_key else None
         self.query_builder = CDPQueryBuilder()
         self.cache_manager = CDPCacheManager()
+        self.cdp_enabled = bool(settings.cdp_client_api_key)
     
     async def get_wallet_performance_data(
         self,
@@ -61,7 +62,7 @@ class BlockchainDataService:
         Returns:
             Dictionary with wallet performance metrics
         """
-        if not cdp_wallet:
+        if not cdp_wallet or not self.cdp_enabled:
             return self._empty_performance_data()
         
         # Check cache first

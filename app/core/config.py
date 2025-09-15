@@ -101,7 +101,7 @@ class Settings(BaseSettings):
     cdp_wallet_secret: Optional[str] = Field(default=None, env="CDP_WALLET_SECRET")
     
     # CDP SQL API Configuration
-    cdp_client_api_key: str = Field(
+    cdp_client_api_key: Optional[str] = Field(
         default=None,
         env="CDP_CLIENT_API_KEY"
     )
