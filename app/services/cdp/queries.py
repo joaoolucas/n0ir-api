@@ -219,23 +219,52 @@ class CDPQueryBuilder:
         if end_time:
             time_filter += f" AND timestamp <= '{end_time.isoformat()}'"
         
-        # Since base.transfers is not accessible, only query transactions
-        # USDC transfers would need to be queried separately from events
+        # Query both ETH transactions and USDC Transfer events
         return f"""
-        SELECT 
-            transaction_hash,
-            block_number,
-            timestamp,
-            from_address,
-            to_address,
-            value,
-            gas,
-            gas_price,
-            (gas * gas_price) / 1e18 as gas_cost_eth,
-            'transaction' as tx_type
-        FROM base.transactions
-        WHERE (from_address = '{wallet}' OR to_address = '{wallet}')
+        WITH eth_transactions AS (
+            SELECT 
+                transaction_hash,
+                block_number,
+                timestamp,
+                from_address,
+                to_address,
+                value,
+                gas,
+                gas_price,
+                (gas * gas_price) / 1e18 as gas_cost_eth,
+                'eth_transaction' as tx_type
+            FROM base.transactions
+            WHERE (from_address = '{wallet}' OR to_address = '{wallet}')
             {time_filter}
+        ),
+        usdc_transfers AS (
+            SELECT 
+                e.transaction_hash,
+                e.block_number,
+                e.timestamp,
+                -- Extract from address (topic[1])
+                CONCAT('0x', SUBSTRING(e.topics[2], 27)) as from_address,
+                -- Extract to address (topic[2])
+                CONCAT('0x', SUBSTRING(e.topics[3], 27)) as to_address,
+                -- Extract value from data field
+                e.data as value,
+                t.gas,
+                t.gas_price,
+                (t.gas * t.gas_price) / 1e18 as gas_cost_eth,
+                'usdc_transfer' as tx_type
+            FROM base.events e
+            JOIN base.transactions t ON e.transaction_hash = t.transaction_hash
+            WHERE e.address = '{usdc}'
+                AND e.event_signature = 'Transfer(address,address,uint256)'
+                AND (
+                    LOWER(e.topics[2]) LIKE '%{wallet[2:].lower()}%' 
+                    OR LOWER(e.topics[3]) LIKE '%{wallet[2:].lower()}%'
+                )
+                {time_filter}
+        )
+        SELECT * FROM eth_transactions
+        UNION ALL
+        SELECT * FROM usdc_transfers
         ORDER BY timestamp DESC, block_number DESC
         """
     

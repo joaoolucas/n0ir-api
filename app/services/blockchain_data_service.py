@@ -203,6 +203,8 @@ class BlockchainDataService:
                 cache_key=cache_key,
                 cache_ttl=60  # 1 minute cache
             )
+            
+            logger.info(f"CDP query returned {len(result.result)} rows for wallet {wallet_address}")
         except CDPAPIError:
             # Re-raise CDP errors for proper handling
             raise
@@ -218,7 +220,7 @@ class BlockchainDataService:
         for row in result.result:
             tx_type = row.get('tx_type', '')
             
-            if tx_type == 'transaction':
+            if 'transaction' in tx_type:
                 transactions.append(row)
             elif 'transfer' in tx_type:
                 transfers.append(row)
@@ -524,8 +526,13 @@ class BlockchainDataService:
         """Save wallet transaction data to database."""
         try:
             transactions = wallet_data.get('transactions', [])
+            transfers = wallet_data.get('transfers', [])
             
-            for tx_data in transactions:
+            # Combine transactions and transfers
+            all_txs = transactions + transfers
+            logger.info(f"Saving {len(all_txs)} transactions to database ({len(transactions)} ETH, {len(transfers)} USDC)")
+            
+            for tx_data in all_txs:
                 # Check if transaction already exists
                 existing = await db_session.execute(
                     select(WalletTransaction).where(
