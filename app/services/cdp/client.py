@@ -11,6 +11,40 @@ from app.core.config import settings
 from loguru import logger
 
 
+# Custom exception classes for production error handling
+class CDPAPIError(Exception):
+    """Base exception for CDP API errors."""
+    pass
+
+class CDPRateLimitError(CDPAPIError):
+    """Raised when rate limited by CDP API."""
+    pass
+
+class CDPTimeoutError(CDPAPIError):
+    """Raised when query times out."""
+    pass
+
+class CDPValidationError(CDPAPIError):
+    """Raised when query validation fails."""
+    pass
+
+class CDPAuthenticationError(CDPAPIError):
+    """Raised when authentication fails."""
+    pass
+
+class CDPAuthorizationError(CDPAPIError):
+    """Raised when access is denied."""
+    pass
+
+class CDPServerError(CDPAPIError):
+    """Raised when CDP API has server errors."""
+    pass
+
+class CDPNetworkError(CDPAPIError):
+    """Raised when network connection fails."""
+    pass
+
+
 class CDPSQLClient:
     """Client for CDP SQL API with caching and retry logic."""
     
@@ -332,37 +366,3 @@ class CDPSQLClient:
             await self.client.aclose()
         except Exception as e:
             logger.warning(f"Error closing CDP client: {e}")
-
-
-# Custom exception classes for production error handling
-class CDPAPIError(Exception):
-    """Base exception for CDP API errors."""
-    pass
-
-class CDPRateLimitError(CDPAPIError):
-    """Raised when rate limited by CDP API."""
-    pass
-
-class CDPTimeoutError(CDPAPIError):
-    """Raised when query times out."""
-    pass
-
-class CDPValidationError(CDPAPIError):
-    """Raised when query validation fails."""
-    pass
-
-class CDPAuthenticationError(CDPAPIError):
-    """Raised when authentication fails."""
-    pass
-
-class CDPAuthorizationError(CDPAPIError):
-    """Raised when access is denied."""
-    pass
-
-class CDPServerError(CDPAPIError):
-    """Raised when CDP API has server errors."""
-    pass
-
-class CDPNetworkError(CDPAPIError):
-    """Raised when network connection fails."""
-    pass
