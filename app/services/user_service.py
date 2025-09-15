@@ -9,6 +9,7 @@ from sqlalchemy import select, update, and_, or_, func, case, Numeric
 from sqlalchemy.orm import selectinload
 
 from app.database.models import User, Transaction, Position
+from app.database.models.blockchain_sync import WalletTransaction
 from app.schemas.users import TransactionType, TransactionStatus, PositionStatus, TimePeriod
 from app.core.logger import logger
 from app.core.positions_service import positions_service
@@ -296,7 +297,8 @@ class UserService:
         offset: int = 0,
         sort_order: str = "desc"
     ) -> List[Transaction]:
-        """Get user transactions with optional filters."""
+        """Get user transactions with optional filters, including CDP wallet transactions."""
+        # First get transactions from the main Transaction table
         stmt = select(Transaction).where(Transaction.user_id == user_id)
         
         if transaction_type:
@@ -320,10 +322,61 @@ class UserService:
                 Transaction.block_number.desc().nullslast(),  # Blockchain order first
                 Transaction.created_at.desc()  # Then by creation time
             )
-        stmt = stmt.limit(limit).offset(offset)
         
+        # Execute regular transactions query
         result = await self.db.execute(stmt)
-        return result.scalars().all()
+        transactions = list(result.scalars().all())
+        
+        # Also fetch CDP wallet transactions if no specific transaction type filter
+        # (CDP transactions are on-chain transfers, not specific app transaction types)
+        if not transaction_type:
+            wallet_stmt = select(WalletTransaction).where(
+                WalletTransaction.user_id == user_id
+            )
+            
+            # Apply sorting to wallet transactions
+            if sort_order.lower() == "asc":
+                wallet_stmt = wallet_stmt.order_by(WalletTransaction.timestamp.asc())
+            else:
+                wallet_stmt = wallet_stmt.order_by(WalletTransaction.timestamp.desc())
+            
+            wallet_result = await self.db.execute(wallet_stmt)
+            wallet_txs = wallet_result.scalars().all()
+            
+            # Convert WalletTransaction to Transaction objects for consistent response
+            for wtx in wallet_txs:
+                # Create a Transaction object from WalletTransaction data
+                tx = Transaction(
+                    id=str(uuid.uuid4()),  # Generate a unique ID
+                    user_id=user_id,
+                    tx_type='CDP_TRANSFER',  # Mark as CDP transfer
+                    tx_hash=wtx.transaction_hash,
+                    amount_usdc=Decimal(0),  # Will be calculated from value
+                    status=TransactionStatus.CONFIRMED,
+                    block_number=wtx.block_number,
+                    created_at=wtx.timestamp,
+                    confirmed_at=wtx.timestamp,
+                    event_data={
+                        'from_address': wtx.from_address,
+                        'to_address': wtx.to_address,
+                        'value': str(wtx.value) if wtx.value else '0',
+                        'gas': str(wtx.gas) if wtx.gas else '0',
+                        'gas_price': str(wtx.gas_price) if wtx.gas_price else '0',
+                        'gas_cost_eth': str(wtx.gas_cost_eth) if wtx.gas_cost_eth else '0',
+                        'is_agent_wallet': wtx.is_agent_wallet,
+                        'source': 'CDP'
+                    }
+                )
+                transactions.append(tx)
+        
+        # Sort combined results by block_number/timestamp
+        transactions.sort(
+            key=lambda t: (t.block_number or 0, t.created_at),
+            reverse=(sort_order.lower() == "desc")
+        )
+        
+        # Apply limit and offset to combined results
+        return transactions[offset:offset + limit]
     
     async def deposit_usdc(
         self,
