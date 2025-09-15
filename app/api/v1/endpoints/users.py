@@ -895,6 +895,7 @@ async def get_pnl(
 async def get_performance(
     user_id: str,
     period: Optional[TimePeriod] = Query(None, description="Time period for performance calculation (24h, 7d, 30d, all)"),
+    include_blockchain: bool = Query(False, description="Include on-chain data from CDP SQL API"),
     db: AsyncSession = Depends(get_db)
 ):
     """Get simplified user performance metrics.
@@ -1080,6 +1081,49 @@ async def get_performance(
             # Fallback to 0 if strategy service fails
             apr = 0.0
     
+    # Add blockchain data if requested
+    blockchain_data = None
+    if include_blockchain and user.cdp_wallet_address:
+        from app.services.blockchain_data_service import BlockchainDataService
+        blockchain_service = BlockchainDataService()
+        
+        try:
+            # Determine lookback hours based on period
+            lookback_hours = 24  # Default
+            if period == TimePeriod.DAY_7:
+                lookback_hours = 24 * 7
+            elif period == TimePeriod.DAY_30:
+                lookback_hours = 24 * 30
+            elif period == TimePeriod.ALL_TIME:
+                lookback_hours = 24 * 365  # 1 year for all-time
+            
+            # Fetch blockchain data from CDP SQL API and save to database
+            blockchain_data = await blockchain_service.get_wallet_performance_data(
+                user_id=user_id,
+                cdp_wallet=user.cdp_wallet_address,
+                lookback_hours=lookback_hours,
+                include_liquidity_events=True,
+                db_session=db,
+                save_to_db=True
+            )
+            
+            # Optionally adjust PnL for gas costs from blockchain data
+            if blockchain_data and blockchain_data.get('wallet_metrics'):
+                gas_costs_usdc = Decimal(str(blockchain_data['wallet_metrics'].get('total_gas_usdc', 0)))
+                
+                # Adjust PnL for gas costs
+                pnl_full = pnl_full - gas_costs_usdc
+                pnl_full_pct = (pnl_full / net_deposits * 100) if net_deposits > 0 else Decimal(0)
+                
+                logger.info(f"Adjusted PnL for gas costs: {gas_costs_usdc} USDC")
+            
+            # Close the blockchain service client
+            await blockchain_service.close()
+            
+        except Exception as e:
+            logger.error(f"Failed to fetch blockchain data from CDP: {e}")
+            # Continue without blockchain data
+    
     # Use pnl_full (realized + unrealized) to match /pnl endpoint's pnl_full field
     # This ensures consistency between /performance and /pnl endpoints
     return PerformanceResponse(
@@ -1087,7 +1131,8 @@ async def get_performance(
         balance=total_portfolio_value,
         pnl_usdc=pnl_full,  # Use pnl_full (realized + unrealized) matching /pnl endpoint
         pnl_pct=pnl_full_pct,  # Use pnl_full_pct matching /pnl endpoint
-        active_positions=active_positions_count if active_positions_count is not None else len(positions)
+        active_positions=active_positions_count if active_positions_count is not None else len(positions),
+        blockchain_data=blockchain_data
     )
 
 # NOTE: Protocol fees endpoint removed - fees are included in other endpoints like /pnl

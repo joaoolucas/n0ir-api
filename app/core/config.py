@@ -100,6 +100,18 @@ class Settings(BaseSettings):
     cdp_api_key_secret: Optional[str] = Field(default=None, env="CDP_API_KEY_SECRET")
     cdp_wallet_secret: Optional[str] = Field(default=None, env="CDP_WALLET_SECRET")
     
+    # CDP SQL API Configuration
+    cdp_client_api_key: str = Field(
+        default=None,
+        env="CDP_CLIENT_API_KEY"
+    )
+    cdp_sql_api_url: str = Field(
+        default="https://api.cdp.coinbase.com/platform/v2/data/query/run",
+        env="CDP_SQL_API_URL"
+    )
+    cdp_sql_cache_ttl: int = Field(default=60, env="CDP_SQL_CACHE_TTL")
+    cdp_sql_max_retries: int = Field(default=3, env="CDP_SQL_MAX_RETRIES")
+    
     # Etherscan API Configuration
     etherscan_api_key: Optional[str] = Field(default=None, env="ETHERSCAN_API_KEY")
     base_chain_id: int = Field(default=8453, env="BASE_CHAIN_ID")  # Base mainnet chain ID

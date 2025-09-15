@@ -1,0 +1,622 @@
+"""High-level service for fetching and transforming blockchain data from CDP SQL API."""
+
+from typing import Dict, List, Optional, Any
+from decimal import Decimal
+from datetime import datetime, timedelta
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from app.services.cdp.client import (
+    CDPSQLClient,
+    CDPAPIError,
+    CDPRateLimitError,
+    CDPTimeoutError,
+    CDPValidationError,
+    CDPAuthenticationError,
+    CDPAuthorizationError
+)
+from app.services.cdp.queries import CDPQueryBuilder
+from app.services.cdp.cache_manager import CDPCacheManager
+from app.services.cdp.models import (
+    WalletMetrics,
+    LiquidityEventMetrics,
+    TransactionData,
+    TransferData,
+    EventData
+)
+from app.database.models.blockchain_sync import (
+    BlockchainSync,
+    WalletTransaction,
+    LiquidityEvent
+)
+from app.core.cache import cache
+from app.core.config import settings
+from loguru import logger
+
+
+class BlockchainDataService:
+    """High-level service for fetching and transforming blockchain data."""
+    
+    def __init__(self):
+        self.cdp_client = CDPSQLClient()
+        self.query_builder = CDPQueryBuilder()
+        self.cache_manager = CDPCacheManager()
+    
+    async def get_wallet_performance_data(
+        self,
+        user_id: str,
+        cdp_wallet: Optional[str],
+        lookback_hours: int = 24,
+        include_liquidity_events: bool = True,
+        db_session: Optional[AsyncSession] = None,
+        save_to_db: bool = True
+    ) -> Dict[str, Any]:
+        """Fetch comprehensive wallet performance data from blockchain.
+        
+        Args:
+            user_id: User ID
+            cdp_wallet: CDP wallet address
+            lookback_hours: Hours to look back for data
+            include_liquidity_events: Whether to include liquidity events
+            
+        Returns:
+            Dictionary with wallet performance metrics
+        """
+        if not cdp_wallet:
+            return self._empty_performance_data()
+        
+        # Check cache first
+        cache_params = {
+            'wallet': cdp_wallet,
+            'lookback_hours': lookback_hours,
+            'include_events': include_liquidity_events
+        }
+        cached = await self.cache_manager.get_cached_result('wallet_performance', cache_params)
+        if cached:
+            return cached
+        
+        try:
+            # Calculate time boundaries
+            start_time = datetime.utcnow() - timedelta(hours=lookback_hours)
+            
+            # Fetch wallet history (transactions + transfers)
+            wallet_data = await self._fetch_wallet_data(cdp_wallet, start_time)
+            
+            # Save to database if requested and session provided
+            if save_to_db and db_session:
+                await self._save_wallet_data_to_db(
+                    wallet_data, 
+                    user_id, 
+                    cdp_wallet,
+                    db_session
+                )
+            
+            # Fetch liquidity events if requested
+            liquidity_events = None
+            if include_liquidity_events:
+                liquidity_events = await self._fetch_liquidity_events(cdp_wallet, start_time)
+                
+                # Save liquidity events to database
+                if save_to_db and db_session and liquidity_events:
+                    await self._save_liquidity_events_to_db(
+                        liquidity_events,
+                        user_id,
+                        db_session
+                    )
+            
+            # Transform and aggregate data
+            performance_data = self._transform_performance_data(
+                wallet_data,
+                liquidity_events
+            )
+            
+            # Cache the result
+            if self.cache_manager.should_cache_result({'result': performance_data}):
+                await self.cache_manager.set_cached_result(
+                    'wallet_performance',
+                    cache_params,
+                    performance_data,
+                    custom_ttl=30  # 30 seconds for performance data
+                )
+            
+            return performance_data
+            
+        except CDPAuthenticationError as e:
+            logger.error(f"CDP authentication failed - check API key: {e}")
+            # Return empty data but include error info for monitoring
+            result = self._empty_performance_data()
+            result['error'] = 'authentication_failed'
+            return result
+            
+        except CDPRateLimitError as e:
+            logger.warning(f"CDP rate limit reached: {e}")
+            # Return cached data if available, otherwise empty
+            fallback_cache = await self.cache_manager.get_stale_cache('wallet_performance', cache_params)
+            if fallback_cache:
+                logger.info("Using stale cache due to rate limit")
+                return fallback_cache
+            result = self._empty_performance_data()
+            result['error'] = 'rate_limited'
+            return result
+            
+        except CDPTimeoutError as e:
+            logger.warning(f"CDP query timeout: {e}")
+            # Return partial data if any was fetched
+            result = self._empty_performance_data()
+            result['error'] = 'timeout'
+            return result
+            
+        except CDPValidationError as e:
+            logger.error(f"CDP query validation error: {e}")
+            result = self._empty_performance_data()
+            result['error'] = 'validation_error'
+            return result
+            
+        except CDPAuthorizationError as e:
+            logger.error(f"CDP authorization error - check permissions: {e}")
+            result = self._empty_performance_data()
+            result['error'] = 'authorization_failed'
+            return result
+            
+        except Exception as e:
+            logger.error(f"Unexpected error fetching wallet performance data: {e}")
+            # For unexpected errors, check if we have any cached data
+            fallback_cache = await self.cache_manager.get_stale_cache('wallet_performance', cache_params)
+            if fallback_cache:
+                logger.info("Using stale cache due to unexpected error")
+                return fallback_cache
+            return self._empty_performance_data()
+    
+    async def _fetch_wallet_data(
+        self,
+        wallet_address: str,
+        start_time: datetime
+    ) -> Dict[str, Any]:
+        """Fetch wallet transactions and transfers with error handling.
+        
+        Args:
+            wallet_address: Wallet address
+            start_time: Start time for data fetch
+            
+        Returns:
+            Dictionary with transactions and transfers
+            
+        Raises:
+            CDPAPIError: Re-raises CDP API errors for handling by caller
+        """
+        try:
+            # Build combined query for efficiency
+            combined_query = self.query_builder.combined_wallet_data_query(
+                wallet_address,
+                start_time
+            )
+            
+            # Generate cache key
+            cache_key = self.cache_manager.generate_cache_key(
+                'combined_wallet',
+                {'wallet': wallet_address, 'start': start_time.isoformat()}
+            )
+            
+            # Execute query with caching
+            result = await self.cdp_client.execute_query(
+                combined_query,
+                cache_key=cache_key,
+                cache_ttl=60  # 1 minute cache
+            )
+        except CDPAPIError:
+            # Re-raise CDP errors for proper handling
+            raise
+        except Exception as e:
+            # Wrap unexpected errors
+            logger.error(f"Unexpected error in _fetch_wallet_data: {e}")
+            raise CDPAPIError(f"Failed to fetch wallet data: {e}") from e
+        
+        # Parse results into transactions and transfers
+        transactions = []
+        transfers = []
+        
+        for row in result.result:
+            tx_type = row.get('tx_type', '')
+            
+            if tx_type == 'transaction':
+                transactions.append(row)
+            elif 'transfer' in tx_type:
+                transfers.append(row)
+        
+        return {
+            'transactions': transactions,
+            'transfers': transfers
+        }
+    
+    async def _fetch_liquidity_events(
+        self,
+        wallet_address: str,
+        start_time: datetime
+    ) -> List[Dict[str, Any]]:
+        """Fetch liquidity manager events for wallet.
+        
+        Args:
+            wallet_address: Wallet address (owner of positions)
+            start_time: Start time for data fetch
+            
+        Returns:
+            List of liquidity events
+        """
+        # Calculate start block (approximate)
+        # Base produces ~2 blocks per second
+        blocks_per_hour = 3600 / 2  # 1800 blocks
+        hours_back = (datetime.utcnow() - start_time).total_seconds() / 3600
+        
+        # Get current block from a recent transaction (if available)
+        # For now, we'll use a conservative estimate
+        current_block = 22000000  # Approximate current block on Base
+        start_block = int(current_block - (blocks_per_hour * hours_back))
+        
+        # Build query
+        events_query = self.query_builder.position_events_with_decode_query(
+            owner_address=wallet_address,
+            start_block=start_block
+        )
+        
+        # Generate cache key
+        cache_key = self.cache_manager.generate_cache_key(
+            'position_events',
+            {'wallet': wallet_address, 'start_block': start_block}
+        )
+        
+        # Execute query with caching
+        result = await self.cdp_client.execute_query(
+            events_query,
+            cache_key=cache_key,
+            cache_ttl=300  # 5 minute cache for events
+        )
+        
+        return result.result
+    
+    def _transform_performance_data(
+        self,
+        wallet_data: Dict[str, Any],
+        liquidity_events: Optional[List[Dict[str, Any]]]
+    ) -> Dict[str, Any]:
+        """Transform raw blockchain data into performance metrics.
+        
+        Args:
+            wallet_data: Raw wallet transaction/transfer data
+            liquidity_events: Raw liquidity events
+            
+        Returns:
+            Transformed performance metrics
+        """
+        transactions = wallet_data.get('transactions', [])
+        transfers = wallet_data.get('transfers', [])
+        
+        # Calculate gas costs
+        total_gas_eth = Decimal(0)
+        for tx in transactions:
+            gas_cost = tx.get('gas_cost_eth', 0)
+            if gas_cost:
+                total_gas_eth += Decimal(str(gas_cost))
+        
+        # Assume ETH price (should be fetched from price service)
+        eth_price_usdc = Decimal('3500')  # Placeholder
+        total_gas_usdc = total_gas_eth * eth_price_usdc
+        
+        # Calculate USDC flows
+        usdc_in = Decimal(0)
+        usdc_out = Decimal(0)
+        
+        for transfer in transfers:
+            amount = Decimal(str(transfer.get('value', 0))) / Decimal(1e6)  # Convert from base units
+            direction = transfer.get('direction', '')
+            
+            if 'in' in str(transfer.get('tx_type', '')):
+                usdc_in += amount
+            elif 'out' in str(transfer.get('tx_type', '')):
+                usdc_out += amount
+        
+        net_usdc_flow = usdc_in - usdc_out
+        
+        # Process liquidity events
+        positions_created = 0
+        positions_closed = 0
+        position_events = []
+        
+        if liquidity_events:
+            for event in liquidity_events:
+                event_sig = event.get('event_signature', '')
+                decoded = event.get('decoded_params', {})
+                
+                if 'PositionCreated' in event_sig:
+                    positions_created += 1
+                    position_events.append({
+                        'type': 'created',
+                        'token_id': decoded.get('token_id'),
+                        'timestamp': event.get('block_timestamp'),
+                        'tx_hash': event.get('transaction_hash')
+                    })
+                elif 'PositionClosed' in event_sig:
+                    positions_closed += 1
+                    position_events.append({
+                        'type': 'closed',
+                        'token_id': decoded.get('token_id'),
+                        'timestamp': event.get('block_timestamp'),
+                        'tx_hash': event.get('transaction_hash')
+                    })
+        
+        # Build response
+        return {
+            'wallet_metrics': {
+                'transaction_count': len(transactions),
+                'total_gas_eth': float(total_gas_eth),
+                'total_gas_usdc': float(total_gas_usdc),
+                'usdc_in': float(usdc_in),
+                'usdc_out': float(usdc_out),
+                'net_usdc_flow': float(net_usdc_flow)
+            },
+            'liquidity_metrics': {
+                'positions_created': positions_created,
+                'positions_closed': positions_closed,
+                'events': position_events[:10]  # Limit to 10 most recent
+            },
+            'summary': {
+                'total_transactions': len(transactions),
+                'total_transfers': len(transfers),
+                'total_gas_spent_usdc': float(total_gas_usdc),
+                'net_usdc_change': float(net_usdc_flow - total_gas_usdc),
+                'positions_created': positions_created,
+                'positions_closed': positions_closed
+            },
+            'raw_data': {
+                'transactions': transactions[:10],  # Limit for response size
+                'transfers': transfers[:10],
+                'events': liquidity_events[:10] if liquidity_events else []
+            }
+        }
+    
+    def _empty_performance_data(self) -> Dict[str, Any]:
+        """Return empty performance data structure.
+        
+        Returns:
+            Empty performance data dictionary
+        """
+        return {
+            'wallet_metrics': {
+                'transaction_count': 0,
+                'total_gas_eth': 0,
+                'total_gas_usdc': 0,
+                'usdc_in': 0,
+                'usdc_out': 0,
+                'net_usdc_flow': 0
+            },
+            'liquidity_metrics': {
+                'positions_created': 0,
+                'positions_closed': 0,
+                'events': []
+            },
+            'summary': {
+                'total_transactions': 0,
+                'total_transfers': 0,
+                'total_gas_spent_usdc': 0,
+                'net_usdc_change': 0,
+                'positions_created': 0,
+                'positions_closed': 0
+            },
+            'raw_data': {
+                'transactions': [],
+                'transfers': [],
+                'events': []
+            }
+        }
+    
+    async def get_agent_wallet_history(
+        self,
+        wallet_address: str,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None
+    ) -> WalletMetrics:
+        """Get detailed wallet history for an agent.
+        
+        Args:
+            wallet_address: Agent wallet address
+            start_time: Start time for history
+            end_time: End time for history
+            
+        Returns:
+            WalletMetrics with detailed history
+        """
+        # Build query
+        query = self.query_builder.wallet_history_query(
+            wallet_address,
+            start_time,
+            end_time,
+            include_gas_costs=True
+        )
+        
+        # Execute query
+        result = await self.cdp_client.execute_query(query)
+        
+        # Transform to WalletMetrics
+        metrics = WalletMetrics(wallet_address=wallet_address)
+        
+        for row in result.result:
+            # Create TransactionData
+            tx = TransactionData(
+                transaction_hash=row['transaction_hash'],
+                block_number=row['block_number'],
+                block_timestamp=datetime.fromisoformat(row['block_timestamp']),
+                from_address=row['from_address'],
+                to_address=row.get('to_address'),
+                value=row['value'],
+                gas_used=row.get('gas_used'),
+                gas_price=row.get('gas_price'),
+                gas_cost_eth=Decimal(str(row.get('gas_cost_eth', 0)))
+            )
+            metrics.transactions.append(tx)
+            
+            # Update aggregates
+            if tx.from_address.lower() == wallet_address.lower():
+                metrics.transaction_count += 1
+                metrics.total_gas_eth += tx.gas_cost_eth or Decimal(0)
+        
+        # Set timestamps
+        if metrics.transactions:
+            metrics.first_tx_timestamp = metrics.transactions[-1].block_timestamp
+            metrics.last_tx_timestamp = metrics.transactions[0].block_timestamp
+        
+        return metrics
+    
+    async def get_liquidity_events_for_manager(
+        self,
+        start_block: Optional[int] = None,
+        end_block: Optional[int] = None
+    ) -> LiquidityEventMetrics:
+        """Get liquidity events from the liquidity manager contract.
+        
+        Args:
+            start_block: Starting block number
+            end_block: Ending block number
+            
+        Returns:
+            LiquidityEventMetrics with aggregated data
+        """
+        # Build query
+        query = self.query_builder.liquidity_events_query(
+            start_block=start_block,
+            end_block=end_block
+        )
+        
+        # Execute query
+        result = await self.cdp_client.execute_query(query)
+        
+        # Transform to LiquidityEventMetrics
+        metrics = LiquidityEventMetrics()
+        
+        for row in result.result:
+            # Create EventData
+            event = EventData(
+                transaction_hash=row['transaction_hash'],
+                block_number=row['block_number'],
+                block_timestamp=datetime.fromisoformat(row['block_timestamp']),
+                log_index=row['log_index'],
+                event_signature=row['event_signature'],
+                contract_address=row['contract_address'],
+                topics=row.get('topics', []),
+                data=row.get('data'),
+                decoded_params=row.get('decoded_params')
+            )
+            metrics.events.append(event)
+            
+            # Update counters
+            if 'PositionCreated' in event.event_signature:
+                metrics.positions_created += 1
+            elif 'PositionClosed' in event.event_signature:
+                metrics.positions_closed += 1
+        
+        return metrics
+    
+    async def _save_wallet_data_to_db(
+        self,
+        wallet_data: Dict[str, Any],
+        user_id: str,
+        wallet_address: str,
+        db_session: AsyncSession
+    ):
+        """Save wallet transaction data to database."""
+        try:
+            transactions = wallet_data.get('transactions', [])
+            
+            for tx_data in transactions:
+                # Check if transaction already exists
+                existing = await db_session.execute(
+                    select(WalletTransaction).where(
+                        WalletTransaction.transaction_hash == tx_data['transaction_hash']
+                    )
+                )
+                if existing.scalar_one_or_none():
+                    continue
+                
+                # Create new wallet transaction
+                wallet_tx = WalletTransaction(
+                    transaction_hash=tx_data['transaction_hash'],
+                    block_number=tx_data['block_number'],
+                    from_address=tx_data['from_address'],
+                    to_address=tx_data.get('to_address'),
+                    value=tx_data.get('value'),
+                    gas=tx_data.get('gas'),
+                    gas_price=tx_data.get('gas_price'),
+                    gas_cost_eth=Decimal(str(tx_data.get('gas_cost_eth', 0))),
+                    timestamp=datetime.fromisoformat(tx_data['timestamp'].replace('Z', '+00:00')),
+                    is_agent_wallet=(tx_data['from_address'].lower() == wallet_address.lower() or 
+                                   tx_data.get('to_address', '').lower() == wallet_address.lower()),
+                    user_id=user_id
+                )
+                db_session.add(wallet_tx)
+            
+            await db_session.commit()
+            logger.info(f"Saved {len(transactions)} wallet transactions to database")
+            
+        except Exception as e:
+            logger.error(f"Error saving wallet data to database: {e}")
+            await db_session.rollback()
+    
+    async def _save_liquidity_events_to_db(
+        self,
+        events: List[Dict[str, Any]],
+        user_id: str,
+        db_session: AsyncSession
+    ):
+        """Save liquidity events to database."""
+        try:
+            for event_data in events:
+                # Check if event already exists
+                existing = await db_session.execute(
+                    select(LiquidityEvent).where(
+                        LiquidityEvent.transaction_hash == event_data['transaction_hash'],
+                        LiquidityEvent.log_index == event_data['log_index']
+                    )
+                )
+                if existing.scalar_one_or_none():
+                    continue
+                
+                # Parse decoded params if available
+                decoded = event_data.get('decoded_params', {})
+                token_id = None
+                owner_address = None
+                
+                if decoded:
+                    if isinstance(decoded, str):
+                        import json
+                        try:
+                            decoded = json.loads(decoded)
+                        except:
+                            pass
+                    
+                    token_id = decoded.get('token_id')
+                    owner_address = decoded.get('owner')
+                
+                # Create new liquidity event
+                event = LiquidityEvent(
+                    transaction_hash=event_data['transaction_hash'],
+                    block_number=event_data['block_number'],
+                    log_index=event_data['log_index'],
+                    event_signature=event_data['event_signature'],
+                    event_name=event_data.get('event_name'),
+                    contract_address=event_data['address'],
+                    parameters=event_data.get('parameters'),
+                    topics=event_data.get('topics'),
+                    token_id=int(token_id) if token_id else None,
+                    owner_address=owner_address,
+                    timestamp=datetime.fromisoformat(event_data['timestamp'].replace('Z', '+00:00')),
+                    user_id=user_id
+                )
+                db_session.add(event)
+            
+            await db_session.commit()
+            logger.info(f"Saved {len(events)} liquidity events to database")
+            
+        except Exception as e:
+            logger.error(f"Error saving liquidity events to database: {e}")
+            await db_session.rollback()
+    
+    async def close(self):
+        """Clean up resources."""
+        await self.cdp_client.close()
