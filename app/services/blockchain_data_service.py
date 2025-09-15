@@ -197,6 +197,10 @@ class BlockchainDataService:
                 {'wallet': wallet_address, 'start': start_time.isoformat()}
             )
             
+            # Log the query being executed
+            logger.info(f"Executing CDP query for wallet {wallet_address}")
+            logger.debug(f"CDP Query: {combined_query[:500]}...")  # Log first 500 chars
+            
             # Execute query with caching
             result = await self.cdp_client.execute_query(
                 combined_query,
@@ -205,6 +209,8 @@ class BlockchainDataService:
             )
             
             logger.info(f"CDP query returned {len(result.result)} rows for wallet {wallet_address}")
+            if result.result:
+                logger.info(f"First row sample: {result.result[0]}")
         except CDPAPIError:
             # Re-raise CDP errors for proper handling
             raise
@@ -532,6 +538,7 @@ class BlockchainDataService:
             all_txs = transactions + transfers
             logger.info(f"Saving {len(all_txs)} transactions to database ({len(transactions)} ETH, {len(transfers)} USDC)")
             
+            saved_count = 0
             for tx_data in all_txs:
                 # Check if transaction already exists
                 existing = await db_session.execute(
@@ -558,9 +565,10 @@ class BlockchainDataService:
                     user_id=user_id
                 )
                 db_session.add(wallet_tx)
+                saved_count += 1
             
             await db_session.commit()
-            logger.info(f"Saved {len(transactions)} wallet transactions to database")
+            logger.info(f"Saved {saved_count} new wallet transactions to database")
             
         except Exception as e:
             logger.error(f"Error saving wallet data to database: {e}")

@@ -242,11 +242,11 @@ class CDPQueryBuilder:
                 e.transaction_hash,
                 e.block_number,
                 e.timestamp,
-                -- Extract from address (topic[1])
-                CONCAT('0x', SUBSTRING(e.topics[2], 27)) as from_address,
-                -- Extract to address (topic[2])
-                CONCAT('0x', SUBSTRING(e.topics[3], 27)) as to_address,
-                -- Extract value from data field
+                -- Extract from address (topic[1]) - last 40 chars after 0x prefix
+                CONCAT('0x', RIGHT(e.topics[2], 40)) as from_address,
+                -- Extract to address (topic[2]) - last 40 chars after 0x prefix  
+                CONCAT('0x', RIGHT(e.topics[3], 40)) as to_address,
+                -- Extract value from data field (it's already a hex string)
                 e.data as value,
                 t.gas,
                 t.gas_price,
@@ -254,11 +254,11 @@ class CDPQueryBuilder:
                 'usdc_transfer' as tx_type
             FROM base.events e
             JOIN base.transactions t ON e.transaction_hash = t.transaction_hash
-            WHERE e.address = '{usdc}'
+            WHERE e.address = LOWER('{usdc}')
                 AND e.event_signature = 'Transfer(address,address,uint256)'
                 AND (
-                    LOWER(e.topics[2]) LIKE '%{wallet[2:].lower()}%' 
-                    OR LOWER(e.topics[3]) LIKE '%{wallet[2:].lower()}%'
+                    RIGHT(LOWER(e.topics[2]), 40) = '{wallet[2:].lower()}'
+                    OR RIGHT(LOWER(e.topics[3]), 40) = '{wallet[2:].lower()}'
                 )
                 {time_filter}
         )
