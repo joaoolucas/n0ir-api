@@ -6,7 +6,7 @@ from decimal import Decimal
 import asyncio
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from app.services.cdp.models import CDPQueryResponse
-from app.core.cache import cache
+from app.core.cache import cache_manager as cache
 from app.core.config import settings
 from loguru import logger
 

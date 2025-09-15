@@ -1,7 +1,7 @@
 """Intelligent caching for CDP queries."""
 
 from typing import Optional, Dict, Any
-from app.core.cache import cache
+from app.core.cache import cache_manager as cache
 import hashlib
 import json
 from loguru import logger

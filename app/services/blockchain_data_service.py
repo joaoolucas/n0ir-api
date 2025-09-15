@@ -28,7 +28,7 @@ from app.database.models.blockchain_sync import (
     WalletTransaction,
     LiquidityEvent
 )
-from app.core.cache import cache
+from app.core.cache import cache_manager as cache
 from app.core.config import settings
 from loguru import logger
 

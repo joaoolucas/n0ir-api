@@ -9,7 +9,7 @@ from sqlalchemy import text
 from app.database.session import get_db
 from app.services.cdp.client import CDPSQLClient, CDPAPIError
 from app.services.cdp.monitoring import metrics_collector, circuit_breakers
-from app.core.cache import cache
+from app.core.cache import cache_manager as cache
 from loguru import logger
 
 router = APIRouter()
