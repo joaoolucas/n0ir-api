@@ -89,20 +89,21 @@ class CDPQueryBuilder:
             time_filter += f" AND timestamp <= '{end_time.isoformat()}'"
         
         # Query Transfer events from USDC contract
-        # Transfer event signature: Transfer(address,address,uint256)
+        # Note: event_signature filter causes 500 errors, so we filter by topics[0] instead
+        # Transfer event hash: 0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef
+        wallet_no_prefix = wallet[2:].lower()
         return f"""
         SELECT 
             transaction_hash,
             block_number,
             timestamp,
-            event_name,
-            parameters,
-            topics
+            topics,
+            data
         FROM base.events
-        WHERE address = '{usdc}'
-            AND event_signature = 'Transfer(address,address,uint256)'
-            AND (topics[2] LIKE '%{wallet[2:].lower()}%' 
-                OR topics[3] LIKE '%{wallet[2:].lower()}%')
+        WHERE address = '{usdc.lower()}'
+            AND topics[0] = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
+            AND (topics[1] LIKE '%{wallet_no_prefix}' 
+                OR topics[2] LIKE '%{wallet_no_prefix}')
             {time_filter}
         ORDER BY timestamp DESC, block_number DESC
         """
@@ -128,15 +129,8 @@ class CDPQueryBuilder:
         # Keep original case - CDP SQL API is case-sensitive
         manager = liquidity_manager or CDPQueryBuilder.LIQUIDITY_MANAGER_ADDRESS
         
-        # Default event signatures for position management
-        if not event_signatures:
-            event_signatures = [
-                'PositionCreated(uint256,address,address,uint256,uint256)',
-                'PositionClosed(uint256,address,uint256,uint256)'
-            ]
-        
-        # Build event signature filter
-        sig_filter = " OR ".join([f"event_signature = '{sig}'" for sig in event_signatures])
+        # Note: event_signature filter causes 500 errors
+        # For now, we'll fetch all events from the manager and filter client-side
         
         # Block filters
         block_filter = ""
@@ -151,16 +145,14 @@ class CDPQueryBuilder:
             block_number,
             timestamp,
             log_index,
-            event_signature,
-            event_name,
             address,
             topics,
-            parameters
+            data
         FROM base.events
-        WHERE address = '{manager}'
-            AND ({sig_filter})
+        WHERE address = '{manager.lower()}'
             {block_filter}
         ORDER BY block_number DESC, log_index DESC
+        LIMIT 100
         """
     
     @staticmethod
@@ -220,6 +212,7 @@ class CDPQueryBuilder:
             time_filter += f" AND timestamp <= '{end_time.isoformat()}'"
         
         # Query both ETH transactions and USDC Transfer events
+        wallet_no_prefix = wallet[2:].lower()
         return f"""
         WITH eth_transactions AS (
             SELECT 
@@ -242,10 +235,10 @@ class CDPQueryBuilder:
                 e.transaction_hash,
                 e.block_number,
                 e.timestamp,
-                -- Extract from address (topic[1]) - last 40 chars after 0x prefix
-                CONCAT('0x', RIGHT(e.topics[2], 40)) as from_address,
-                -- Extract to address (topic[2]) - last 40 chars after 0x prefix  
-                CONCAT('0x', RIGHT(e.topics[3], 40)) as to_address,
+                -- Extract from address (topic[1]) - last 40 chars
+                CONCAT('0x', SUBSTRING(e.topics[1], 27)) as from_address,
+                -- Extract to address (topic[2]) - last 40 chars
+                CONCAT('0x', SUBSTRING(e.topics[2], 27)) as to_address,
                 -- Extract value from data field (it's already a hex string)
                 e.data as value,
                 t.gas,
@@ -254,11 +247,11 @@ class CDPQueryBuilder:
                 'usdc_transfer' as tx_type
             FROM base.events e
             JOIN base.transactions t ON e.transaction_hash = t.transaction_hash
-            WHERE e.address = LOWER('{usdc}')
-                AND e.event_signature = 'Transfer(address,address,uint256)'
+            WHERE e.address = '{usdc.lower()}'
+                AND e.topics[0] = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
                 AND (
-                    RIGHT(LOWER(e.topics[2]), 40) = '{wallet[2:].lower()}'
-                    OR RIGHT(LOWER(e.topics[3]), 40) = '{wallet[2:].lower()}'
+                    e.topics[1] LIKE '%{wallet_no_prefix}'
+                    OR e.topics[2] LIKE '%{wallet_no_prefix}'
                 )
                 {time_filter}
         )
@@ -294,39 +287,20 @@ class CDPQueryBuilder:
         # Block filter
         block_filter = f" AND block_number >= {start_block}" if start_block else ""
         
+        # Note: event_signature and JSON_OBJECT cause errors, simplified query
         return f"""
         SELECT 
             transaction_hash,
             block_number,
-            block_timestamp,
+            timestamp,
             log_index,
-            event_signature,
-            contract_address,
+            address,
             topics,
-            data,
-            CASE 
-                WHEN event_signature = 'PositionCreated(uint256,address,address,uint256,uint256)' THEN
-                    JSON_OBJECT(
-                        'event_type', 'position_created',
-                        'token_id', topics[1],
-                        'owner', CONCAT('0x', SUBSTRING(topics[2], 27)),
-                        'pool', CONCAT('0x', SUBSTRING(topics[3], 27))
-                    )
-                WHEN event_signature = 'PositionClosed(uint256,address,uint256,uint256)' THEN
-                    JSON_OBJECT(
-                        'event_type', 'position_closed',
-                        'token_id', topics[1],
-                        'owner', CONCAT('0x', SUBSTRING(topics[2], 27))
-                    )
-                ELSE JSON_OBJECT('event_type', 'unknown')
-            END as decoded_params
+            data
         FROM base.events
-        WHERE LOWER(contract_address) = '{manager}'
-            AND event_signature IN (
-                'PositionCreated(uint256,address,address,uint256,uint256)',
-                'PositionClosed(uint256,address,uint256,uint256)'
-            )
+        WHERE address = '{manager}'
             {owner_filter}
             {block_filter}
         ORDER BY block_number DESC, log_index DESC
+        LIMIT 100
         """

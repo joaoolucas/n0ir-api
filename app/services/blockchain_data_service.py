@@ -229,6 +229,14 @@ class BlockchainDataService:
             if 'transaction' in tx_type:
                 transactions.append(row)
             elif 'transfer' in tx_type:
+                # For USDC transfers parsed from new query format
+                # Extract addresses from topics if needed
+                if 'topics' in row and not row.get('from_address'):
+                    topics = row['topics']
+                    if len(topics) >= 3:
+                        # Extract addresses from padded topics
+                        row['from_address'] = '0x' + topics[1][-40:] if len(topics[1]) >= 40 else topics[1]
+                        row['to_address'] = '0x' + topics[2][-40:] if len(topics[2]) >= 40 else topics[2]
                 transfers.append(row)
         
         return {
