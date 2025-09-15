@@ -1181,4 +1181,27 @@ async def get_performance(
         blockchain_data=blockchain_data
     )
 
+
+@router.patch("/{user_id}/wallet-address", response_model=UserResponse)
+async def update_wallet_address(
+    user_id: str,
+    wallet_address: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """Update user's CDP wallet address."""
+    from sqlalchemy import update
+    from app.database.models import User
+    
+    stmt = update(User).where(User.user_id == user_id).values(cdp_wallet_address=wallet_address)
+    await db.execute(stmt)
+    await db.commit()
+    
+    # Fetch and return updated user
+    service = UserService(db)
+    user = await service.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
 # NOTE: Protocol fees endpoint removed - fees are included in other endpoints like /pnl
