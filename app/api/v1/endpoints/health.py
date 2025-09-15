@@ -6,7 +6,7 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
-from app.database.session import get_async_db
+from app.database.session import get_db
 from app.services.cdp.client import CDPSQLClient, CDPAPIError
 from app.services.cdp.monitoring import metrics_collector, circuit_breakers
 from app.core.cache import cache
@@ -31,7 +31,7 @@ async def health_check() -> Dict[str, Any]:
 
 @router.get("/health/detailed")
 async def detailed_health_check(
-    db: AsyncSession = Depends(get_async_db)
+    db: AsyncSession = Depends(get_db)
 ) -> Dict[str, Any]:
     """Detailed health check with component status.
     
