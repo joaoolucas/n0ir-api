@@ -1069,7 +1069,7 @@ class StrategyService:
     
     async def analyze_exit(
         self,
-        request: ExitAnalysisRequest
+        request: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
         Analyze whether and how to exit a position.
@@ -1412,7 +1412,7 @@ class StrategyService:
 
     async def rebalance_portfolio(
         self,
-        request: PortfolioRebalanceRequest
+        request: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
         Generate portfolio rebalancing recommendations.
@@ -1565,7 +1565,7 @@ class StrategyService:
     
     async def calculate_slippage(
         self,
-        request: SlippageCalculationRequest
+        request: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
         Calculate dynamic slippage for a trade.
