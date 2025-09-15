@@ -462,7 +462,7 @@ async def get_balance(
             wallet_balance = blockchain_balance
             # Update database if significantly different
             db_balance = await service.get_user_balance(user_id)
-            if abs(db_balance - blockchain_balance) > 0.01:
+            if abs(float(db_balance) - blockchain_balance) > 0.01:
                 logger.info(f"Updating {user_id} balance from {db_balance} to {blockchain_balance}")
                 user.usdc_balance = float(blockchain_balance)
                 await db.commit()
@@ -1041,7 +1041,7 @@ async def get_performance(
             wallet_balance = blockchain_balance
             # Update database if significantly different
             db_balance = await service.get_user_balance(user_id)
-            if abs(db_balance - blockchain_balance) > 0.01:
+            if abs(float(db_balance) - blockchain_balance) > 0.01:
                 logger.info(f"Updating {user_id} balance from {db_balance} to {blockchain_balance}")
                 user.usdc_balance = float(blockchain_balance)
                 await db.commit()
