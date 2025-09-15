@@ -603,10 +603,13 @@ async def get_transactions(
         try:
             # Fetch fresh data from CDP SQL API
             blockchain_service = BlockchainDataService()
-            await blockchain_service.fetch_wallet_data(
+            await blockchain_service.get_wallet_performance_data(
                 user_id=user_id,
-                wallet_address=user.cdp_wallet_address,
-                db_session=db
+                cdp_wallet=user.cdp_wallet_address,
+                lookback_hours=24 * 365,  # Get all historical data
+                include_liquidity_events=False,  # Just transactions for this endpoint
+                db_session=db,
+                save_to_db=True
             )
             logger.info(f"Fetched fresh CDP data for user {user_id} wallet {user.cdp_wallet_address}")
         except Exception as e:
@@ -726,10 +729,13 @@ async def get_positions(
         try:
             # Fetch fresh liquidity events from CDP SQL API
             blockchain_service = BlockchainDataService()
-            await blockchain_service.fetch_liquidity_events(
+            await blockchain_service.get_wallet_performance_data(
                 user_id=user_id,
-                wallet_address=user.cdp_wallet_address,
-                db_session=db
+                cdp_wallet=user.cdp_wallet_address,
+                lookback_hours=24 * 365,  # Get all historical data
+                include_liquidity_events=True,  # Include liquidity events for positions
+                db_session=db,
+                save_to_db=True
             )
             logger.info(f"Fetched fresh CDP liquidity events for user {user_id} wallet {user.cdp_wallet_address}")
         except Exception as e:
