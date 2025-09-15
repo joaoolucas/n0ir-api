@@ -24,7 +24,8 @@ from app.schemas.strategy import (
     PositionStatus, PortfolioMetrics,
     ExecutionParams, AlternativeAction, RangeBreakMetrics,
     OptimalTiming, AlternativeStrategy, RebalanceRecommendation,
-    PortfolioImprovement, SwitchRecommendation
+    PortfolioImprovement, SwitchRecommendation,
+    AnalyzeRequest
 )
 
 
@@ -559,8 +560,8 @@ class StrategyService:
     
     async def analyze_entry(
         self,
-        request: AnalyzeEntryRequest
-    ) -> AnalyzeEntryResponse:
+        request: AnalyzeRequest
+    ) -> Dict[str, Any]:
         """
         Analyze a potential position entry with detailed risk assessment.
         """
@@ -711,7 +712,7 @@ class StrategyService:
             efficiency_str = f"{apr_efficiency:.1f}" if apr_efficiency is not None else "N/A"
             warnings.append(f"Low effective APR: {effective_apr:.2f}% (efficiency: {efficiency_str}%)")
         
-        return AnalyzeEntryResponse(
+        return dict(
             should_enter=should_enter,
             confidence_score=confidence_score,
             slippage=slippage_info,
@@ -1069,7 +1070,7 @@ class StrategyService:
     async def analyze_exit(
         self,
         request: ExitAnalysisRequest
-    ) -> ExitAnalysisResponse:
+    ) -> Dict[str, Any]:
         """
         Analyze whether and how to exit a position.
         """
@@ -1412,7 +1413,7 @@ class StrategyService:
     async def rebalance_portfolio(
         self,
         request: PortfolioRebalanceRequest
-    ) -> PortfolioRebalanceResponse:
+    ) -> Dict[str, Any]:
         """
         Generate portfolio rebalancing recommendations.
         Handles withdrawals by closing all positions and redeploying.
@@ -1565,7 +1566,7 @@ class StrategyService:
     async def calculate_slippage(
         self,
         request: SlippageCalculationRequest
-    ) -> SlippageCalculationResponse:
+    ) -> Dict[str, Any]:
         """
         Calculate dynamic slippage for a trade.
         """
@@ -1602,7 +1603,7 @@ class StrategyService:
             pair_classification=breakdown['pair_classification']
         )
     
-    async def assess_risk(self, user_address: Optional[str] = None) -> RiskAssessmentResponse:
+    async def assess_risk(self, user_address: Optional[str] = None) -> Dict[str, Any]:
         """
         Get current portfolio risk assessment.
         """
@@ -1660,7 +1661,7 @@ class StrategyService:
         self,
         period: str = '24h',
         user_address: Optional[str] = None
-    ) -> PerformanceAnalyticsResponse:
+    ) -> Dict[str, Any]:
         """
         Get performance analytics for the strategy.
         """
