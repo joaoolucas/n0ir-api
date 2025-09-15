@@ -1,0 +1,561 @@
+{
+  "wallet": "0x7b3106f56447c9c313c19f519b290ff4e293d573",
+  "analysis_time": "2025-09-15T20:52:12.563508",
+  "summary": {
+    "total_transactions": 166,
+    "deposits": 17,
+    "withdrawals": 16,
+    "stakings": 44,
+    "unknown": 89,
+    "total_deposited_usdc": 795000000,
+    "total_withdrawn_usdc": 779603035,
+    "net_flow_usdc": 15396965
+  },
+  "transactions": {
+    "deposits": [
+      {
+        "tx_hash": "0x2c5cb071b9caba2d9b73089857fb993312a40fa08acaa53c286682156b832fbe",
+        "block": 35494586,
+        "timestamp": "2025-09-13T15:48:39Z",
+        "amount": 5000000,
+        "description": "USDC deposit from contract"
+      },
+      {
+        "tx_hash": "0x625c9e21a7159bd52d77deee4757dd781c56a96f29d3d940b26a94fad48ab585",
+        "block": 35494101,
+        "timestamp": "2025-09-13T15:32:29Z",
+        "amount": 20000000,
+        "description": "USDC deposit from contract"
+      },
+      {
+        "tx_hash": "0x3aeaeb8001a3cb7dba64f5ee9eb3522c7f44ef60f2f9284c2fcd14695e70df40",
+        "block": 35451800,
+        "timestamp": "2025-09-12T16:02:27Z",
+        "amount": 50000000,
+        "description": "USDC deposit from contract"
+      },
+      {
+        "tx_hash": "0xcab7c9730b9fc5e00193547c936f93462e1aca70a9ed7d172b8f61ce3f64b3bb",
+        "block": 35403237,
+        "timestamp": "2025-09-11T13:03:41Z",
+        "amount": 50000000,
+        "description": "USDC deposit from contract"
+      },
+      {
+        "tx_hash": "0x6f8f74f3addd5640fcd027bfac0e856f07ba27bd8d57ca3df5c2bec1a35e8f1d",
+        "block": 35379811,
+        "timestamp": "2025-09-11T00:02:49Z",
+        "amount": 50000000,
+        "description": "USDC deposit from contract"
+      },
+      {
+        "tx_hash": "0xeb7ce26075f87c8bdf0ff535fa9ca3700cc80e88db8461843fc5dd9b6da8da00",
+        "block": 35379244,
+        "timestamp": "2025-09-10T23:43:55Z",
+        "amount": 50000000,
+        "description": "USDC deposit from contract"
+      },
+      {
+        "tx_hash": "0xfa18ba06b8cddabcd6f03e77ea0984ce53f54947596b3e6f0991f6352e55d7bd",
+        "block": 35368626,
+        "timestamp": "2025-09-10T17:49:59Z",
+        "amount": 50000000,
+        "description": "USDC deposit from contract"
+      },
+      {
+        "tx_hash": "0x43d04d2d3a14674d121e245d659b9b5f660178caa687f36f8d2eab3ba88e775b",
+        "block": 35365209,
+        "timestamp": "2025-09-10T15:56:05Z",
+        "amount": 50000000,
+        "description": "USDC deposit from contract"
+      },
+      {
+        "tx_hash": "0x44454d0a7c8aad676e2b18d24d79d1f1e6d1164eddfaa3da67e3e49fa9418916",
+        "block": 35364848,
+        "timestamp": "2025-09-10T15:44:03Z",
+        "amount": 60000000,
+        "description": "USDC deposit from contract"
+      },
+      {
+        "tx_hash": "0xfa52c48c65b019aa2e057c689f1fd1a8623508c7111ea256d4062c2ac223a117",
+        "block": 35364327,
+        "timestamp": "2025-09-10T15:26:41Z",
+        "amount": 60000000,
+        "description": "USDC deposit from contract"
+      },
+      {
+        "tx_hash": "0x2eebe1d00615d80b9e3676e3e32ace488e4c7fe84b2e0fcc07b42402012c076d",
+        "block": 35360650,
+        "timestamp": "2025-09-10T13:24:07Z",
+        "amount": 50000000,
+        "description": "USDC deposit from contract"
+      },
+      {
+        "tx_hash": "0x40de301561225d055fd5aeffeb2e5aefa2337d9bfcdbee7bd20c2a1f51b732ec",
+        "block": 35359729,
+        "timestamp": "2025-09-10T12:53:25Z",
+        "amount": 50000000,
+        "description": "USDC deposit from contract"
+      },
+      {
+        "tx_hash": "0xe0040718004d1139d1fb83a294aaeb0911697e2cb8302b0ed7ad1fa9d23c55cc",
+        "block": 35336266,
+        "timestamp": "2025-09-09T23:51:19Z",
+        "amount": 50000000,
+        "description": "USDC deposit from contract"
+      },
+      {
+        "tx_hash": "0x3badca51873242d19f9630ce204f4478435cc8f1b38311a5bb8f83bbfaac9b8a",
+        "block": 35335614,
+        "timestamp": "2025-09-09T23:29:35Z",
+        "amount": 50000000,
+        "description": "USDC deposit from contract"
+      },
+      {
+        "tx_hash": "0xb010be0988c4b1bfd911789a049b04d7b47f1724829dc63b443af89039ab79bb",
+        "block": 35335232,
+        "timestamp": "2025-09-09T23:16:51Z",
+        "amount": 50000000,
+        "description": "USDC deposit from contract"
+      },
+      {
+        "tx_hash": "0x8c5a763f9694c9c366659b116427299598a3bf6147bb8c21fd4d71fab9369db1",
+        "block": 35333852,
+        "timestamp": "2025-09-09T22:30:51Z",
+        "amount": 50000000,
+        "description": "USDC deposit from contract"
+      },
+      {
+        "tx_hash": "0x4e85998251552c9a7426d9920c7c49593916b8c0d0db286a32c2b19b3efeaf9b",
+        "block": 35289657,
+        "timestamp": "2025-09-08T21:57:41Z",
+        "amount": 50000000,
+        "description": "USDC deposit from contract"
+      }
+    ],
+    "withdrawals": [
+      {
+        "tx_hash": "0x9a04398627f106069a31e46373e25fa2ff40356b31ef8d5b44552ee918a2f1c8",
+        "block": 35404648,
+        "timestamp": "2025-09-11T13:50:43Z",
+        "amount": 49964018,
+        "description": "USDC withdrawal to contract"
+      },
+      {
+        "tx_hash": "0xeab1b9b62f08cc18908e86b4be7a231e5be8420df3d2c4634e603ed42daae296",
+        "block": 35380151,
+        "timestamp": "2025-09-11T00:14:09Z",
+        "amount": 49963179,
+        "description": "USDC withdrawal to contract"
+      },
+      {
+        "tx_hash": "0x1f5ae5321f62d49cc1ffd4e177408e781f78e0da25f7283b0178226d7c34a96c",
+        "block": 35379697,
+        "timestamp": "2025-09-10T23:59:01Z",
+        "amount": 50009559,
+        "description": "USDC withdrawal to contract"
+      },
+      {
+        "tx_hash": "0x598fb91c06f574bf9365354044274643428f0f3fff99187f97acd5c2ddfb5202",
+        "block": 35368812,
+        "timestamp": "2025-09-10T17:56:11Z",
+        "amount": 50000000,
+        "description": "USDC withdrawal to contract"
+      },
+      {
+        "tx_hash": "0x0d78bf00a783e96dce844174744f600a0593ee0a6e822645a8cc10c745713446",
+        "block": 35365570,
+        "timestamp": "2025-09-10T16:08:07Z",
+        "amount": 49945145,
+        "description": "USDC withdrawal to contract"
+      },
+      {
+        "tx_hash": "0x08537f2942c01e142638496cb5abb364b888d7ddada7dd9e69306fd9366fca17",
+        "block": 35365055,
+        "timestamp": "2025-09-10T15:50:57Z",
+        "amount": 59952403,
+        "description": "USDC withdrawal to contract"
+      },
+      {
+        "tx_hash": "0x7495498be93cd00406ca2d568a211373dc71a11c45d2d8d0d669164a9a4abb0c",
+        "block": 35365054,
+        "timestamp": "2025-09-10T15:50:55Z",
+        "amount": 59952403,
+        "description": "USDC withdrawal to contract"
+      },
+      {
+        "tx_hash": "0x51b13304bf2d1a7e6e13809d4afa55d57346ec114f13a024e7f4585fc4b5d7d9",
+        "block": 35364698,
+        "timestamp": "2025-09-10T15:39:03Z",
+        "amount": 59965850,
+        "description": "USDC withdrawal to contract"
+      },
+      {
+        "tx_hash": "0x8f65ec166ff43200e60564488680830bdf0534b8ec54f775ff6e10ead327d856",
+        "block": 35360976,
+        "timestamp": "2025-09-10T13:34:59Z",
+        "amount": 49961195,
+        "description": "USDC withdrawal to contract"
+      },
+      {
+        "tx_hash": "0x66716c287196c5c8b1c79ca5fd8f6c66169fd0941600488ec6f75402dec4217e",
+        "block": 35360272,
+        "timestamp": "2025-09-10T13:11:31Z",
+        "amount": 50117795,
+        "description": "USDC withdrawal to contract"
+      },
+      {
+        "tx_hash": "0x4fbb138c7ec167e5d5653c7b9c29e48cf354b256abb49f02af5bcf0260d2353c",
+        "block": 35340372,
+        "timestamp": "2025-09-10T02:08:11Z",
+        "amount": 49946185,
+        "description": "USDC withdrawal to contract"
+      },
+      {
+        "tx_hash": "0xa223fdf9cefa41b29a4573b7e7588a3741d530b7a994032fc641586d8027fbb6",
+        "block": 35336451,
+        "timestamp": "2025-09-09T23:57:29Z",
+        "amount": 20778,
+        "description": "USDC withdrawal to contract"
+      },
+      {
+        "tx_hash": "0x5f82120d118975b2fa1cdb7331588618257f40eabd94fd0abd06f972613ff608",
+        "block": 35335780,
+        "timestamp": "2025-09-09T23:35:07Z",
+        "amount": 49954664,
+        "description": "USDC withdrawal to contract"
+      },
+      {
+        "tx_hash": "0x94b10408cd537193d27336d70fe9c666a23c9510a6c242863e0cb717f67e6d3e",
+        "block": 35335437,
+        "timestamp": "2025-09-09T23:23:41Z",
+        "amount": 50000000,
+        "description": "USDC withdrawal to contract"
+      },
+      {
+        "tx_hash": "0x4883423315cab0cdd8365f9d320f19ff14e41e24c0bec3173a8b063ffb580789",
+        "block": 35334724,
+        "timestamp": "2025-09-09T22:59:55Z",
+        "amount": 50044806,
+        "description": "USDC withdrawal to contract"
+      },
+      {
+        "tx_hash": "0x66802e3dc54e031c08605787cce11e41eb11a3a1d85b4c6bb4d41f98fd5bd587",
+        "block": 35328544,
+        "timestamp": "2025-09-09T19:33:55Z",
+        "amount": 49805055,
+        "description": "USDC withdrawal to contract"
+      }
+    ],
+    "stakings": [
+      {
+        "tx_hash": "0x1f0dacac078f7a9bc02057a413787d3f170800938bd8641f3bd901006d1ea76c",
+        "block": 35496115,
+        "timestamp": "2025-09-13T16:39:37Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0xd3b0abeab4f87af8923c17f11c65b89340ea9dae900782e792034e6de8a8056e",
+        "block": 35495398,
+        "timestamp": "2025-09-13T16:15:43Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0x51e6e00e9ab7e2e90a980c03a00cef3256f1487905c3d0744d68af1757dfc942",
+        "block": 35404607,
+        "timestamp": "2025-09-11T13:49:21Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0xd9212e01cca25ed8c35b6e3da015278f07cade5d7c43b48612146cc2a4408e05",
+        "block": 35404582,
+        "timestamp": "2025-09-11T13:48:31Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0x16d061ac4cb18e0638cdc40388e06c0a5edfd383c552f3fe39a0eca29a730315",
+        "block": 35403304,
+        "timestamp": "2025-09-11T13:05:55Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0xbfc2dced6f26caa79fc68d6e8abc6253220836fe154b4d3293284cba84125b59",
+        "block": 35403293,
+        "timestamp": "2025-09-11T13:05:33Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0xcf52cf223a8f94d90077c84b73ac3be2f8dbf7c8efe9ae39da3a977e7d88443f",
+        "block": 35403281,
+        "timestamp": "2025-09-11T13:05:09Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0x019ce8730aeee21956286f771575f5db56bd9c8c251a8cbec90ad30b714158f4",
+        "block": 35403269,
+        "timestamp": "2025-09-11T13:04:45Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0x0bc868058ed427fca43a8223d6e3deb21035a695eecdb954dfcf8554b7a1427b",
+        "block": 35380126,
+        "timestamp": "2025-09-11T00:13:19Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0xe712aa284b76bfea462f7040b477f7aca7ff457489055e75894006038f5c0f5a",
+        "block": 35379842,
+        "timestamp": "2025-09-11T00:03:51Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0xb9b8c4a20040127aec3232473f2fb8d7b1afbd1cb80d8b0783cf336872e51f46",
+        "block": 35379832,
+        "timestamp": "2025-09-11T00:03:31Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0xd530312cdb0277246e044bab9673aa8e782fa532b28f6a7f3b2a33d37c09f010",
+        "block": 35379667,
+        "timestamp": "2025-09-10T23:58:01Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0x4ee43bd4ffa528fa84331c94c82f3d993911ecdf28f5937991319c685709a91b",
+        "block": 35379648,
+        "timestamp": "2025-09-10T23:57:23Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0x2539a80307660ab28e1fc16101a3fc4beff60f7fe1f1a5c1938f1af0743a8556",
+        "block": 35379480,
+        "timestamp": "2025-09-10T23:51:47Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0xb32889d81979720a8051bbb939f4f9590fdd3405d6c04e429f1c3d09a9bfe34d",
+        "block": 35365527,
+        "timestamp": "2025-09-10T16:06:41Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0x24d46cbe58a00c52b6231b32e156a14229d3a76c220a68dbb2c09177abbd0cdf",
+        "block": 35365277,
+        "timestamp": "2025-09-10T15:58:21Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0x883c151520ef5f7033ce92c19936cf7b40b4b042193d6530065b13a1b73e066f",
+        "block": 35364975,
+        "timestamp": "2025-09-10T15:48:17Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0x02000bd8467b6d25a7e69ae4001422395df9e972c6129eaa51d836829580ce0b",
+        "block": 35364877,
+        "timestamp": "2025-09-10T15:45:01Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0x95b3c7e546953370fc98ff51a89004b50aa8d73dee1d2cb5250077f9bfb6a012",
+        "block": 35364665,
+        "timestamp": "2025-09-10T15:37:57Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0xcf8ac306a839e842e663c2e01c6a0707be637df1fec685d968487047c45104fb",
+        "block": 35364646,
+        "timestamp": "2025-09-10T15:37:19Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0xb06a4a509ae38d5681159ccd0cb1270260f160333749cb90cb5d4914273e562d",
+        "block": 35364386,
+        "timestamp": "2025-09-10T15:28:39Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0x5b88a2ffca07f3640a0f71d5e9af522c0b71565294c43462b5c99575fc65b135",
+        "block": 35360934,
+        "timestamp": "2025-09-10T13:33:35Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0x40d323449ea6a5d4ee0f18988d3006e67cf494e3926547b9a35ca07f4c165511",
+        "block": 35360845,
+        "timestamp": "2025-09-10T13:30:37Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0x660584dd23958e01e6bb7ddb0877e9e860a71341325bddcfe0e3c86181ac4e7d",
+        "block": 35360229,
+        "timestamp": "2025-09-10T13:10:05Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0x494a9ab0c8b999631b0b08dc45927d6163e52a6ff281aac06c889b5b08d2a6d2",
+        "block": 35359804,
+        "timestamp": "2025-09-10T12:55:55Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0x1a74ccc6823f9cb7e95f3f84f326f81d1bf67b678248d5ba4aadb2eb7f4493e0",
+        "block": 35359793,
+        "timestamp": "2025-09-10T12:55:33Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0xdce8de418262e94c31e4de277645ded9025e9db3989e6e71d9053408c5ec1364",
+        "block": 35359782,
+        "timestamp": "2025-09-10T12:55:11Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0x5d38f42abd00747698f1cc62451481956e710fe71f131b4f04c4d9d7d7ba11df",
+        "block": 35340342,
+        "timestamp": "2025-09-10T02:07:11Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0x6cf705087cc81bd3f0752c795fc84d15117923d86f60ac32f4ece6c5169a1ac7",
+        "block": 35340322,
+        "timestamp": "2025-09-10T02:06:31Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0x90bbaae47d4138ebdd19cce97923765e8a87b3aabecdd6be57eed7b34718fe2c",
+        "block": 35340302,
+        "timestamp": "2025-09-10T02:05:51Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0x27267968d4e91338e1972dcb804f546531ca8b5ade423942ad83fe6cfb3714f8",
+        "block": 35340284,
+        "timestamp": "2025-09-10T02:05:15Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0xc6f2fecd2020c1d3b7618dbf3d76e6003fa30238c340d397d86352339f3ab3ef",
+        "block": 35340265,
+        "timestamp": "2025-09-10T02:04:37Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0x2c6034041af0cfa9a5dea27bdec4c876219d321f26b5ab5cbb3148d0537e3892",
+        "block": 35336440,
+        "timestamp": "2025-09-09T23:57:07Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0x6327962991f3bc461139160a878c20445cb0ca4bd954dcd13bf33e18d8aa3231",
+        "block": 35336430,
+        "timestamp": "2025-09-09T23:56:47Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0x00cec65cb11a2efb4ae31cfa04d81a817aaf15867b059a082380193d64de7489",
+        "block": 35336407,
+        "timestamp": "2025-09-09T23:56:01Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0xcbf9d4b4741c03b200c7f6cefbfdc27d1a51325c1c87b8b8e07426a4ac96ce24",
+        "block": 35336387,
+        "timestamp": "2025-09-09T23:55:21Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0xcc1a1c9c9af320ddf275409bd63420d899558308e0741bfde824ed904eb5a9fe",
+        "block": 35336368,
+        "timestamp": "2025-09-09T23:54:43Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0x7e7521db29fdd040f51fec67e72f5c10fc491b4f636c0c6fbff422db7e5ce111",
+        "block": 35336303,
+        "timestamp": "2025-09-09T23:52:33Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0x4c2e91c4857cec2355f8b6150417797f7e9f3b7b63c73ad2936b1ad1a00312a7",
+        "block": 35335738,
+        "timestamp": "2025-09-09T23:33:43Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0xb9dfc5edfd9037e5ef4d01941ecfb7a13e58f922206cbe0062b4af6ffc086cba",
+        "block": 35335649,
+        "timestamp": "2025-09-09T23:30:45Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0xf6fe81e27c67ef9cad76b7e8579d8ced07fad6560ab2540230ffd7f251e373da",
+        "block": 35334675,
+        "timestamp": "2025-09-09T22:58:17Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0xa0dc48babe5e515b435571d4d57fa4b8ad11d0ac0a9f3d27c35b6c45b6cd84fc",
+        "block": 35333892,
+        "timestamp": "2025-09-09T22:32:11Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0x3220dada5b6b0b347bf1915b78e2995030b0a5f6a0ad87e9956e8e8025e00616",
+        "block": 35328512,
+        "timestamp": "2025-09-09T19:32:51Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      },
+      {
+        "tx_hash": "0xdc44fe27c515ab533736be39d388a1a7bffda18295b993884baf2807e4dd0eb5",
+        "block": 35290310,
+        "timestamp": "2025-09-08T22:19:27Z",
+        "amount": 0,
+        "description": "Interaction with position manager (potential staking)"
+      }
+    ]
+  }
+}
