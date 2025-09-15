@@ -89,8 +89,7 @@ class CDPQueryBuilder:
             time_filter += f" AND timestamp <= '{end_time.isoformat()}'"
         
         # Query Transfer events from USDC contract
-        # Note: event_signature filter causes 500 errors, so we filter by topics[0] instead
-        # Transfer event hash: 0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef
+        # Note: event_signature filter causes 500 errors, we'll fetch all and filter client-side
         wallet_no_prefix = wallet[2:].lower()
         return f"""
         SELECT 
@@ -101,11 +100,11 @@ class CDPQueryBuilder:
             data
         FROM base.events
         WHERE address = '{usdc.lower()}'
-            AND topics[0] = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
             AND (topics[1] LIKE '%{wallet_no_prefix}' 
                 OR topics[2] LIKE '%{wallet_no_prefix}')
             {time_filter}
         ORDER BY timestamp DESC, block_number DESC
+        LIMIT 100
         """
     
     @staticmethod
@@ -213,52 +212,24 @@ class CDPQueryBuilder:
         
         # Query both ETH transactions and USDC Transfer events
         wallet_no_prefix = wallet[2:].lower()
+        
+        # Simplified query without CTEs due to CDP SQL limitations
         return f"""
-        WITH eth_transactions AS (
-            SELECT 
-                transaction_hash,
-                block_number,
-                timestamp,
-                from_address,
-                to_address,
-                value,
-                gas,
-                gas_price,
-                (gas * gas_price) / 1e18 as gas_cost_eth,
-                'eth_transaction' as tx_type
-            FROM base.transactions
-            WHERE (from_address = '{wallet}' OR to_address = '{wallet}')
+        SELECT 
+            transaction_hash,
+            block_number,
+            timestamp,
+            from_address,
+            to_address,
+            value,
+            gas,
+            gas_price,
+            'eth_transaction' AS tx_type
+        FROM base.transactions
+        WHERE (from_address = '{wallet}' OR to_address = '{wallet}')
             {time_filter}
-        ),
-        usdc_transfers AS (
-            SELECT 
-                e.transaction_hash,
-                e.block_number,
-                e.timestamp,
-                -- Extract from address (topic[1]) - last 40 chars
-                CONCAT('0x', SUBSTRING(e.topics[1], 27)) as from_address,
-                -- Extract to address (topic[2]) - last 40 chars
-                CONCAT('0x', SUBSTRING(e.topics[2], 27)) as to_address,
-                -- Extract value from data field (it's already a hex string)
-                e.data as value,
-                t.gas,
-                t.gas_price,
-                (t.gas * t.gas_price) / 1e18 as gas_cost_eth,
-                'usdc_transfer' as tx_type
-            FROM base.events e
-            JOIN base.transactions t ON e.transaction_hash = t.transaction_hash
-            WHERE e.address = '{usdc.lower()}'
-                AND e.topics[0] = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
-                AND (
-                    e.topics[1] LIKE '%{wallet_no_prefix}'
-                    OR e.topics[2] LIKE '%{wallet_no_prefix}'
-                )
-                {time_filter}
-        )
-        SELECT * FROM eth_transactions
-        UNION ALL
-        SELECT * FROM usdc_transfers
-        ORDER BY timestamp DESC, block_number DESC
+        ORDER BY timestamp DESC
+        LIMIT 100
         """
     
     @staticmethod

@@ -184,33 +184,80 @@ class BlockchainDataService:
         Raises:
             CDPAPIError: Re-raises CDP API errors for handling by caller
         """
+        transactions = []
+        transfers = []
+        
         try:
-            # Build combined query for efficiency
-            combined_query = self.query_builder.combined_wallet_data_query(
+            # Fetch ETH transactions
+            eth_query = self.query_builder.wallet_history_query(
                 wallet_address,
                 start_time
             )
             
-            # Generate cache key
-            cache_key = self.cache_manager.generate_cache_key(
-                'combined_wallet',
+            # Generate cache key for ETH
+            eth_cache_key = self.cache_manager.generate_cache_key(
+                'eth_wallet',
                 {'wallet': wallet_address, 'start': start_time.isoformat()}
             )
             
-            # Log the query being executed
-            logger.info(f"Executing CDP query for wallet {wallet_address}")
-            logger.debug(f"CDP Query: {combined_query[:500]}...")  # Log first 500 chars
+            logger.info(f"Fetching ETH transactions for wallet {wallet_address}")
             
-            # Execute query with caching
-            result = await self.cdp_client.execute_query(
-                combined_query,
-                cache_key=cache_key,
-                cache_ttl=60  # 1 minute cache
+            # Execute ETH query
+            eth_result = await self.cdp_client.execute_query(
+                eth_query,
+                cache_key=eth_cache_key,
+                cache_ttl=60
             )
             
-            logger.info(f"CDP query returned {len(result.result)} rows for wallet {wallet_address}")
-            if result.result:
-                logger.info(f"First row sample: {result.result[0]}")
+            logger.info(f"Found {len(eth_result.result)} ETH transactions")
+            
+            # Add ETH transactions
+            for row in eth_result.result:
+                row['tx_type'] = 'eth_transaction'
+                transactions.append(row)
+            
+            # Try to fetch USDC transfers
+            try:
+                usdc_query = self.query_builder.usdc_transfers_query(
+                    wallet_address,
+                    start_time
+                )
+                
+                # Generate cache key for USDC
+                usdc_cache_key = self.cache_manager.generate_cache_key(
+                    'usdc_wallet',
+                    {'wallet': wallet_address, 'start': start_time.isoformat()}
+                )
+                
+                logger.info(f"Fetching USDC transfers for wallet {wallet_address}")
+                
+                # Execute USDC query
+                usdc_result = await self.cdp_client.execute_query(
+                    usdc_query,
+                    cache_key=usdc_cache_key,
+                    cache_ttl=60
+                )
+                
+                logger.info(f"Found {len(usdc_result.result)} USDC transfer events")
+                
+                # Parse USDC transfers
+                for row in usdc_result.result:
+                    # Extract addresses from topics
+                    topics = row.get('topics', [])
+                    if len(topics) >= 3:
+                        # Check if it's a Transfer event (topic[0])
+                        if topics[0] == '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef':
+                            row['tx_type'] = 'usdc_transfer'
+                            row['from_address'] = '0x' + topics[1][-40:] if len(topics[1]) >= 40 else topics[1]
+                            row['to_address'] = '0x' + topics[2][-40:] if len(topics[2]) >= 40 else topics[2]
+                            # Value is in data field as hex
+                            row['value'] = row.get('data', '0x0')
+                            transfers.append(row)
+                
+            except Exception as e:
+                logger.warning(f"Failed to fetch USDC transfers: {e}")
+                # Continue with just ETH transactions
+                
         except CDPAPIError:
             # Re-raise CDP errors for proper handling
             raise
@@ -218,26 +265,6 @@ class BlockchainDataService:
             # Wrap unexpected errors
             logger.error(f"Unexpected error in _fetch_wallet_data: {e}")
             raise CDPAPIError(f"Failed to fetch wallet data: {e}") from e
-        
-        # Parse results into transactions and transfers
-        transactions = []
-        transfers = []
-        
-        for row in result.result:
-            tx_type = row.get('tx_type', '')
-            
-            if 'transaction' in tx_type:
-                transactions.append(row)
-            elif 'transfer' in tx_type:
-                # For USDC transfers parsed from new query format
-                # Extract addresses from topics if needed
-                if 'topics' in row and not row.get('from_address'):
-                    topics = row['topics']
-                    if len(topics) >= 3:
-                        # Extract addresses from padded topics
-                        row['from_address'] = '0x' + topics[1][-40:] if len(topics[1]) >= 40 else topics[1]
-                        row['to_address'] = '0x' + topics[2][-40:] if len(topics[2]) >= 40 else topics[2]
-                transfers.append(row)
         
         return {
             'transactions': transactions,
