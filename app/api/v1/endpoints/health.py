@@ -218,3 +218,90 @@ async def cdp_health_check() -> Dict[str, Any]:
         cdp_status["overall_status"] = "degraded"
     
     return cdp_status
+
+
+@router.post("/migrate-cdp-tables")
+async def create_cdp_tables(
+    db: AsyncSession = Depends(get_db)
+):
+    """Create CDP-related tables if they don't exist."""
+    try:
+        # Create wallet_transactions table
+        await db.execute(text("""
+            CREATE TABLE IF NOT EXISTS wallet_transactions (
+                id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+                transaction_hash VARCHAR(66) UNIQUE NOT NULL,
+                block_number BIGINT NOT NULL,
+                from_address VARCHAR(42) NOT NULL,
+                to_address VARCHAR(42),
+                value VARCHAR(78),
+                gas BIGINT,
+                gas_price BIGINT,
+                gas_cost_eth NUMERIC(20, 10),
+                timestamp TIMESTAMPTZ NOT NULL,
+                fetched_at TIMESTAMPTZ DEFAULT NOW(),
+                is_agent_wallet BOOLEAN DEFAULT FALSE,
+                user_id VARCHAR(42) REFERENCES users(user_id) ON DELETE CASCADE
+            )
+        """))
+        
+        # Create indexes
+        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_wallet_tx_user ON wallet_transactions(user_id)"))
+        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_wallet_tx_hash ON wallet_transactions(transaction_hash)"))
+        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_wallet_tx_block ON wallet_transactions(block_number)"))
+        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_wallet_tx_timestamp ON wallet_transactions(timestamp)"))
+        
+        # Create liquidity_events table
+        await db.execute(text("""
+            CREATE TABLE IF NOT EXISTS liquidity_events (
+                id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+                transaction_hash VARCHAR(66) NOT NULL,
+                block_number BIGINT NOT NULL,
+                log_index INTEGER NOT NULL,
+                event_signature VARCHAR(255) NOT NULL,
+                event_name VARCHAR(100),
+                owner_address VARCHAR(42),
+                token_id BIGINT,
+                tick_lower INTEGER,
+                tick_upper INTEGER,
+                liquidity VARCHAR(78),
+                amount0 VARCHAR(78),
+                amount1 VARCHAR(78),
+                timestamp TIMESTAMPTZ NOT NULL,
+                fetched_at TIMESTAMPTZ DEFAULT NOW(),
+                user_id VARCHAR(42) REFERENCES users(user_id) ON DELETE CASCADE,
+                UNIQUE(transaction_hash, log_index)
+            )
+        """))
+        
+        # Create indexes for liquidity_events
+        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_liquidity_events_user ON liquidity_events(user_id)"))
+        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_liquidity_events_owner ON liquidity_events(owner_address)"))
+        
+        # Create blockchain_sync table
+        await db.execute(text("""
+            CREATE TABLE IF NOT EXISTS blockchain_sync (
+                id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+                sync_type VARCHAR(50) NOT NULL,
+                user_id VARCHAR(42),
+                wallet_address VARCHAR(42),
+                last_synced_block BIGINT,
+                last_synced_at TIMESTAMPTZ,
+                sync_status VARCHAR(20) DEFAULT 'idle',
+                error_message TEXT,
+                metadata JSONB DEFAULT '{}',
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """))
+        
+        await db.commit()
+        
+        return {
+            "status": "success",
+            "message": "CDP tables created successfully",
+            "tables": ["wallet_transactions", "liquidity_events", "blockchain_sync"]
+        }
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
