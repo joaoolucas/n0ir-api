@@ -13,8 +13,7 @@ from app.core.positions_service import positions_service
 from app.core.pools_service import pools_service
 from app.core.rebalancing_config import RebalancingStrategy, RebalancingThresholds
 from app.schemas.strategy import (
-    AnalyzeEntryRequest,
-    ExitAnalysisRequest,
+    AnalyzeRequest,
     OpportunitiesRequest
 )
 # Schema imports will be handled in the endpoint to avoid circular imports
@@ -192,7 +191,7 @@ class StrategyOrchestrator:
             available_capital=available_capital
         )
         response = await self.strategy_service.find_opportunities(request)
-        return response.opportunities
+        return response.get('opportunities', [])
     
     
     async def _run_parallel_analyses(
@@ -297,26 +296,26 @@ class StrategyOrchestrator:
             else:
                 amount = min(recommended_allocation, available_capital)
             
-            request = AnalyzeEntryRequest(
-                pool_address=pool_address,
-                amount_usdc=amount
+            request = AnalyzeRequest(
+                analyze_type="entry",
+                entry={"pool_address": pool_address, "amount_usdc": amount}
             )
             
             response = await self.strategy_service.analyze_entry(request)
             
-            if response.should_enter:
+            if response.get('should_enter'):
                 return {
                     'pool_address': pool_address,
                     'pool_name': pool_name,
-                    'confidence_score': response.confidence_score,
+                    'confidence_score': response.get('confidence_score'),
                     'optimal_allocation': amount,
-                    'expected_apr': response.effective_apr,
+                    'expected_apr': response.get('effective_apr'),
                     'risk_metrics': {
                         'safety_score': safety_score,
-                        'slippage': response.slippage.dict() if hasattr(response.slippage, 'dict') else response.slippage,
-                        'warnings': response.warnings
+                        'slippage': response.get('slippage'),
+                        'warnings': response.get('warnings', [])
                     },
-                    'optimal_range': response.optimal_range.dict() if hasattr(response.optimal_range, 'dict') else response.optimal_range
+                    'optimal_range': response.get('optimal_range')
                 }
             return None
             
@@ -333,22 +332,22 @@ class StrategyOrchestrator:
             if hasattr(position, 'in_range') and not position.in_range:
                 exit_reason = "range_break"
             
-            request = ExitAnalysisRequest(
-                token_id=position.id,
-                exit_reason=exit_reason
-            )
+            request = {
+                "token_id": position.id,
+                "exit_reason": exit_reason
+            }
             
             response = await self.strategy_service.analyze_exit(request)
             
-            if response.should_exit:
+            if response.get('should_exit'):
                 return {
                     'token_id': position.id,
                     'pool_address': position.pool_address,
-                    'urgency': response.exit_strategy.get('urgency', 'low'),
+                    'urgency': response.get('exit_strategy', {}).get('urgency', 'low'),
                     'reason': exit_reason,
-                    'expected_proceeds': response.expected_proceeds,
-                    'roi_percentage': response.roi_percentage,
-                    'slippage_estimate': response.slippage_estimate
+                    'expected_proceeds': response.get('expected_proceeds'),
+                    'roi_percentage': response.get('roi_percentage'),
+                    'slippage_estimate': response.get('slippage_estimate')
                 }
             return None
             
