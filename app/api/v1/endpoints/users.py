@@ -590,6 +590,29 @@ async def get_transactions(
     db: AsyncSession = Depends(get_db)
 ):
     """Get user transactions with AERO swaps linked to position closures."""
+    # First check if user has a CDP wallet and fetch fresh data from CDP
+    from sqlalchemy import select
+    from app.database.models import User
+    from app.services.blockchain_data_service import BlockchainDataService
+    
+    stmt = select(User).where(User.user_id == user_id)
+    result = await db.execute(stmt)
+    user = result.scalar_one_or_none()
+    
+    if user and user.cdp_wallet_address:
+        try:
+            # Fetch fresh data from CDP SQL API
+            blockchain_service = BlockchainDataService()
+            await blockchain_service.fetch_wallet_data(
+                user_id=user_id,
+                wallet_address=user.cdp_wallet_address,
+                db_session=db
+            )
+            logger.info(f"Fetched fresh CDP data for user {user_id} wallet {user.cdp_wallet_address}")
+        except Exception as e:
+            logger.warning(f"Failed to fetch CDP data for user {user_id}: {e}")
+            # Continue with local data if CDP fetch fails
+    
     service = UserService(db)
     transactions = await service.get_user_transactions(
         user_id=user_id,
@@ -690,6 +713,29 @@ async def get_positions(
     During transition: Uses existing positions from public schema.
     Eventually: Will read from blockchain schema once watcher populates it.
     """
+    # First check if user has a CDP wallet and fetch fresh liquidity events from CDP
+    from sqlalchemy import select
+    from app.database.models import User
+    from app.services.blockchain_data_service import BlockchainDataService
+    
+    stmt = select(User).where(User.user_id == user_id)
+    result = await db.execute(stmt)
+    user = result.scalar_one_or_none()
+    
+    if user and user.cdp_wallet_address:
+        try:
+            # Fetch fresh liquidity events from CDP SQL API
+            blockchain_service = BlockchainDataService()
+            await blockchain_service.fetch_liquidity_events(
+                user_id=user_id,
+                wallet_address=user.cdp_wallet_address,
+                db_session=db
+            )
+            logger.info(f"Fetched fresh CDP liquidity events for user {user_id} wallet {user.cdp_wallet_address}")
+        except Exception as e:
+            logger.warning(f"Failed to fetch CDP liquidity events for user {user_id}: {e}")
+            # Continue with local data if CDP fetch fails
+    
     service = UserService(db)
     
     # For now, use the existing service method which reads from public.positions
