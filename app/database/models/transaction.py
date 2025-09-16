@@ -133,32 +133,41 @@ class Transaction(Base):
     
     @property
     def realized_pnl_usdc(self) -> Optional[float]:
-        """Get realized PnL from tx_metadata."""
-        if self.tx_metadata and 'realized_pnl_usdc' in self.tx_metadata:
-            return float(self.tx_metadata['realized_pnl_usdc'])
+        """Get realized PnL from event_data."""
+        if self.event_data and 'realized_pnl_usdc' in self.event_data:
+            return float(self.event_data['realized_pnl_usdc'])
         return None
     
     @property
     def gas_price(self) -> Optional[float]:
-        """Get gas price from tx_metadata."""
-        if self.tx_metadata and 'gas_price' in self.tx_metadata:
-            return float(self.tx_metadata['gas_price'])
+        """Get gas price from event_data."""
+        if self.event_data and 'gas_price' in self.event_data:
+            return float(self.event_data['gas_price'])
         return None
+    
+    @property
+    def gas_used(self) -> Optional[int]:
+        """Get gas used from event_data."""
+        if self.event_data and 'gas_used' in self.event_data:
+            return int(self.event_data['gas_used'])
+        return None
+    
+    @property
+    def tx_metadata(self) -> Optional[dict]:
+        """Alias for event_data for backward compatibility."""
+        return self.event_data
     
     @property
     def related_position_id(self) -> Optional[int]:
         """Alias for position_id for backward compatibility."""
         return self.position_id
     
-    @property
-    def confirmed_at(self) -> Optional[datetime]:
-        """Alias for processed_at for backward compatibility."""
-        return self.processed_at
+    # Removed conflicting property - confirmed_at is already a column
     
     @property
     def get_metadata(self) -> dict:
-        """Get tx_metadata for backward compatibility."""
-        return self.tx_metadata or {}
+        """Get event_data for backward compatibility."""
+        return self.event_data or {}
     
     def __repr__(self):
         return f"<Transaction(id={str(self.id)[:8]}..., type={self.tx_type}, status={self.status})>"

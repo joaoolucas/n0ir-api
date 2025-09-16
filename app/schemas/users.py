@@ -157,13 +157,13 @@ class TransactionResponse(BaseModel):
     tx_hash: Optional[str]
     block_number: Optional[int]
     block_timestamp: Optional[datetime] = Field(None, description="On-chain block timestamp")
-    gas_used: Optional[int]
-    gas_price: Optional[Decimal]
+    gas_used: Optional[int] = None
+    gas_price: Optional[Decimal] = None
     status: TransactionStatus
-    tx_metadata: Optional[Dict[str, Any]] = Field(None, description="Additional transaction metadata as JSON")
-    event_data: Optional[Dict[str, Any]] = Field(None, description="Event data from blockchain")
+    tx_metadata: Optional[Dict[str, Any]] = Field(default=None, description="Additional transaction metadata as JSON")
+    event_data: Optional[Dict[str, Any]] = Field(default=None, description="Event data from blockchain")
     created_at: datetime
-    confirmed_at: Optional[datetime]
+    confirmed_at: Optional[datetime] = None
     aero_swap_usdc: Optional[Decimal] = Field(None, description="AERO rewards swapped to USDC (for POSITION_CLOSED only)")
     total_amount_usdc: Optional[Decimal] = Field(None, description="Net amount: adds AERO for closes, subtracts returns for creates")
     
@@ -191,6 +191,10 @@ class TransactionResponse(BaseModel):
                     'POSITION_CREATED': 'POSITION_CREATED',
                     'position_closed': 'POSITION_CLOSED',
                     'POSITION_CLOSED': 'POSITION_CLOSED',
+                    'POSITION_OPENED': 'POSITION_CREATED',  # Map new type to existing enum
+                    'position_opened': 'POSITION_CREATED',
+                    'STAKING': 'POSITION_CREATED',  # Map staking to position created
+                    'staking': 'POSITION_CREATED',
                     'aero_swap': 'AERO_SWAP',
                     'AERO_SWAP': 'AERO_SWAP',
                     'fee_collection': 'FEE_COLLECTION',
