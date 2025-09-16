@@ -15,11 +15,9 @@ class UserStatus(str, enum.Enum):
 
 class TransactionType(str, enum.Enum):
     DEPOSIT = "DEPOSIT"
-    WITHDRAWAL = "WITHDRAWAL"
+    WITHDRAW = "WITHDRAW"
     POSITION_CREATED = "POSITION_CREATED"
     POSITION_CLOSED = "POSITION_CLOSED"
-    AERO_SWAP = "AERO_SWAP"
-    FEE_COLLECTION = "FEE_COLLECTION"  # Protocol fee collection transactions from historical data
 
 
 class TransactionStatus(str, enum.Enum):
@@ -182,9 +180,9 @@ class TransactionResponse(BaseModel):
             if 'tx_type' in values:
                 tx_type = values['tx_type']
                 type_mapping = {
-                    'withdraw': 'WITHDRAWAL',
-                    'WITHDRAW': 'WITHDRAWAL',
-                    'WITHDRAWAL': 'WITHDRAWAL',
+                    'withdraw': 'WITHDRAW',
+                    'WITHDRAW': 'WITHDRAW',
+                    'WITHDRAWAL': 'WITHDRAW',  # Map old WITHDRAWAL to new WITHDRAW
                     'deposit': 'DEPOSIT',
                     'DEPOSIT': 'DEPOSIT',
                     'position_created': 'POSITION_CREATED',
@@ -195,12 +193,13 @@ class TransactionResponse(BaseModel):
                     'position_opened': 'POSITION_CREATED',
                     'STAKING': 'POSITION_CREATED',  # Map staking to position created
                     'staking': 'POSITION_CREATED',
-                    'aero_swap': 'AERO_SWAP',
-                    'AERO_SWAP': 'AERO_SWAP',
-                    'fee_collection': 'FEE_COLLECTION',
-                    'FEE_COLLECTION': 'FEE_COLLECTION',
-                    'PROTOCOL_FEE': 'FEE_COLLECTION',  # Map PROTOCOL_FEE to FEE_COLLECTION
-                    'protocol_fee': 'FEE_COLLECTION'
+                    # Map internal types that aren't exposed in the public API
+                    'aero_swap': 'POSITION_CLOSED',  # AERO swaps are part of closing positions
+                    'AERO_SWAP': 'POSITION_CLOSED',
+                    'fee_collection': 'POSITION_CLOSED',  # Fees are collected when closing
+                    'FEE_COLLECTION': 'POSITION_CLOSED',
+                    'PROTOCOL_FEE': 'POSITION_CLOSED',
+                    'protocol_fee': 'POSITION_CLOSED'
                 }
                 normalized = type_mapping.get(tx_type, tx_type)
                 values['tx_type'] = normalized

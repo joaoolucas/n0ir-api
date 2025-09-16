@@ -27,15 +27,13 @@ class Transaction(Base):
     user_id = Column(String(42), ForeignKey("users.user_id"), nullable=False, index=True)
     position_id = Column(Integer, ForeignKey("positions.token_id"), nullable=True, index=True)
     
-    # Transaction type - comprehensive list
+    # Transaction type - simplified to 4 core types
     tx_type = Column(String(50), nullable=False, index=True)
     # Types:
-    # Position lifecycle: POSITION_CREATED, POSITION_MODIFIED, POSITION_CLOSED
-    # Liquidity: LIQUIDITY_ADDED, LIQUIDITY_REMOVED
-    # Financial: FEES_COLLECTED, SWAP_EXECUTED, REWARDS_CLAIMED
-    # Staking: STAKE_CREATED, STAKE_REMOVED
-    # User actions: DEPOSIT, WITHDRAWAL
-    # Protocol: PROTOCOL_FEE
+    # DEPOSIT: User deposits USDC to the platform
+    # WITHDRAW: User withdraws USDC from the platform
+    # POSITION_CREATED: New liquidity position created
+    # POSITION_CLOSED: Liquidity position closed (includes AERO swaps and fees)
     
     # Transaction status
     status = Column(String(20), nullable=False, default="PENDING", index=True)
@@ -93,11 +91,11 @@ class Transaction(Base):
             'WITHDRAW': 'withdraw',  # Handle both WITHDRAWAL and WITHDRAW
             'POSITION_CREATED': 'position_created',
             'POSITION_CLOSED': 'position_closed',
-            'POSITION_ENTRY': 'position_entry',  # Legacy support
-            'POSITION_EXIT': 'position_exit',    # Legacy support
-            'PROTOCOL_FEE': 'fee_collection',
-            'FEE_COLLECTION': 'fee_collection',
-            'AERO_SWAP': 'aero_swap'
+            'POSITION_ENTRY': 'position_created',  # Legacy support - map to position_created
+            'POSITION_EXIT': 'position_closed',    # Legacy support - map to position_closed
+            'PROTOCOL_FEE': 'position_closed',     # Fees are part of closing positions
+            'FEE_COLLECTION': 'position_closed',   # Fees are part of closing positions
+            'AERO_SWAP': 'position_closed'         # AERO swaps are part of closing positions
         }
         return mapping.get(self.tx_type, self.tx_type.lower())
     

@@ -484,7 +484,7 @@ async def get_balance(
     # Get all confirmed withdrawals to calculate net deposits
     all_withdrawals = await service.get_user_transactions(
         user_id=user_id,
-        transaction_type=DBTransactionType.WITHDRAWAL,
+        transaction_type=DBTransactionType.WITHDRAW,
         status=DBTransactionStatus.CONFIRMED
     )
     total_withdrawn = sum(t.amount_usdc for t in all_withdrawals)
@@ -554,7 +554,7 @@ async def get_balance(
     
     pending_withdrawals = await service.get_user_transactions(
         user_id=user_id,
-        transaction_type=DBTransactionType.WITHDRAWAL,
+        transaction_type=DBTransactionType.WITHDRAW,
         status=DBTransactionStatus.PENDING
     )
     pending_withdrawals_amount = sum(t.amount_usdc for t in pending_withdrawals)
@@ -598,7 +598,7 @@ async def get_transactions(
     
     Transactions are categorized as:
     - DEPOSIT: USDC from owner wallet to CDP wallet
-    - WITHDRAWAL: USDC from CDP wallet to owner wallet
+    - WITHDRAW: USDC from CDP wallet to owner wallet
     - POSITION_OPENED: Position opened via LiquidityManager
     - POSITION_CLOSED: Position closed via LiquidityManager
     """
@@ -851,7 +851,7 @@ async def get_pnl(
             withdrawal_stmt = select(Transaction).where(
                 and_(
                     Transaction.user_id == user_id,
-                    or_(Transaction.tx_type == 'WITHDRAWAL', Transaction.tx_type == 'WITHDRAW'),
+                    Transaction.tx_type == 'WITHDRAW',
                     Transaction.status == 'CONFIRMED'
                 )
             )
