@@ -14,7 +14,6 @@ from app.schemas.users import (
     UserResponse, TransactionResponse, TransactionListResponse,
     PositionResponse, PositionListResponse, CreatePositionRequest, ClosePositionRequest,
     BalanceResponse, PnLResponse, PerformanceResponse,
-    ProtocolFeeListResponse, ProtocolFeeResponse,
     UserStatus, TransactionType, TransactionStatus, PositionStatus, TimePeriod
 )
 # Enums are already imported from schemas above
