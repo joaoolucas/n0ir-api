@@ -541,12 +541,14 @@ class WalletTransactionService:
                 if details.get("aero_out") is not None:
                     event_data["aero_out"] = details["aero_out"]
             
+            # Store the USDC amount in event_data to avoid conflict with property
+            event_data["amount_usdc"] = float(amount_usdc)
+            
             transaction = Transaction(
                 tx_hash=details["tx_hash"],
                 user_id=user_id,
                 tx_type=tx_type,
                 status="CONFIRMED",
-                amount_usdc=amount_usdc,
                 block_number=details.get("block"),
                 block_timestamp=datetime.fromisoformat(details["timestamp"].replace("Z", "+00:00")) if details.get("timestamp") else None,
                 event_data=event_data
