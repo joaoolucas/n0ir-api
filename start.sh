@@ -5,7 +5,7 @@ echo "🚀 Starting n0ir API..."
 
 # Run database migrations
 echo "📦 Running database migrations..."
-python -m alembic upgrade head
+python run_migrations.py || echo "⚠️ Migration runner failed"
 
 # Start the application
 echo "✅ Starting server..."
