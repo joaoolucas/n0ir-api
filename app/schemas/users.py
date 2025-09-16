@@ -136,12 +136,9 @@ class UserResponse(BaseModel):
 class BalanceResponse(BaseModel):
     user_id: str
     wallet_balance_usdc: Decimal = Field(..., description="Current spendable balance in wallet")
-    available_balance_usdc: Decimal = Field(..., description="Available for withdrawal/trading")
     invested_amount_usdc: Decimal = Field(..., description="Total amount invested in active positions")
     current_positions_value_usdc: Decimal = Field(..., description="Real-time total value of all positions")
     total_portfolio_value_usdc: Decimal = Field(..., description="Wallet balance + positions value")
-    pending_deposits_usdc: Decimal
-    pending_withdrawals_usdc: Decimal
 
 
 class TransactionResponse(BaseModel):
@@ -151,87 +148,42 @@ class TransactionResponse(BaseModel):
     user_id: str
     transaction_type: TransactionType = Field(validation_alias='tx_type')
     amount_usdc: Decimal
-    pool_name: Optional[str] = Field(None, description="Pool name for position entry/exit transactions")
+    pool_name: Optional[str] = Field(None, description="Pool name for position transactions")
     tx_hash: Optional[str]
-    block_number: Optional[int]
-    block_timestamp: Optional[datetime] = Field(None, description="On-chain block timestamp")
-    gas_used: Optional[int] = None
-    gas_price: Optional[Decimal] = None
     status: TransactionStatus
-    tx_metadata: Optional[Dict[str, Any]] = Field(default=None, description="Additional transaction metadata as JSON")
     event_data: Optional[Dict[str, Any]] = Field(default=None, description="Event data from blockchain")
     created_at: datetime
-    confirmed_at: Optional[datetime] = None
-    aero_swap_usdc: Optional[Decimal] = Field(None, description="AERO rewards swapped to USDC (for POSITION_CLOSED only)")
-    total_amount_usdc: Optional[Decimal] = Field(None, description="Net amount: adds AERO for closes, subtracts returns for creates")
     
     @model_validator(mode='before')
     @classmethod
-    def extract_aero_swap(cls, values):
-        """Extract aero_swap_usdc from event_data if present and normalize transaction type."""
-        if isinstance(values, dict):
-            # Extract aero_swap_usdc from event_data if not already set
-            event_data = values.get('event_data', {})
-            if event_data and not values.get('aero_swap_usdc'):
-                values['aero_swap_usdc'] = event_data.get('aero_swap_usdc', 0)
-            
-            # Normalize transaction type from database to match enum
-            # Database has 'tx_type' field, we need to normalize it
-            if 'tx_type' in values:
-                tx_type = values['tx_type']
-                type_mapping = {
-                    'withdraw': 'WITHDRAW',
-                    'WITHDRAW': 'WITHDRAW',
-                    'WITHDRAWAL': 'WITHDRAW',  # Map old WITHDRAWAL to new WITHDRAW
-                    'deposit': 'DEPOSIT',
-                    'DEPOSIT': 'DEPOSIT',
-                    'position_created': 'POSITION_CREATED',
-                    'POSITION_CREATED': 'POSITION_CREATED',
-                    'position_closed': 'POSITION_CLOSED',
-                    'POSITION_CLOSED': 'POSITION_CLOSED',
-                    'POSITION_OPENED': 'POSITION_CREATED',  # Map new type to existing enum
-                    'position_opened': 'POSITION_CREATED',
-                    'STAKING': 'POSITION_CREATED',  # Map staking to position created
-                    'staking': 'POSITION_CREATED',
-                    # Map internal types that aren't exposed in the public API
-                    'aero_swap': 'POSITION_CLOSED',  # AERO swaps are part of closing positions
-                    'AERO_SWAP': 'POSITION_CLOSED',
-                    'fee_collection': 'POSITION_CLOSED',  # Fees are collected when closing
-                    'FEE_COLLECTION': 'POSITION_CLOSED',
-                    'PROTOCOL_FEE': 'POSITION_CLOSED',
-                    'protocol_fee': 'POSITION_CLOSED'
-                }
-                normalized = type_mapping.get(tx_type, tx_type)
-                values['tx_type'] = normalized
+    def normalize_transaction_type(cls, values):
+        """Normalize transaction type from database to match enum."""
+        if isinstance(values, dict) and 'tx_type' in values:
+            tx_type = values['tx_type']
+            type_mapping = {
+                'withdraw': 'WITHDRAW',
+                'WITHDRAW': 'WITHDRAW',
+                'WITHDRAWAL': 'WITHDRAW',  # Map old WITHDRAWAL to new WITHDRAW
+                'deposit': 'DEPOSIT',
+                'DEPOSIT': 'DEPOSIT',
+                'position_created': 'POSITION_CREATED',
+                'POSITION_CREATED': 'POSITION_CREATED',
+                'position_closed': 'POSITION_CLOSED',
+                'POSITION_CLOSED': 'POSITION_CLOSED',
+                'POSITION_OPENED': 'POSITION_CREATED',  # Map variations
+                'position_opened': 'POSITION_CREATED',
+                'STAKING': 'POSITION_CREATED',
+                'staking': 'POSITION_CREATED',
+                # Map internal types to closest public type
+                'aero_swap': 'POSITION_CLOSED',
+                'AERO_SWAP': 'POSITION_CLOSED',
+                'fee_collection': 'POSITION_CLOSED',
+                'FEE_COLLECTION': 'POSITION_CLOSED',
+                'PROTOCOL_FEE': 'POSITION_CLOSED',
+                'protocol_fee': 'POSITION_CLOSED'
+            }
+            values['tx_type'] = type_mapping.get(tx_type, tx_type)
         return values
-    
-    @model_validator(mode='after')
-    def calculate_total_amount(self):
-        """Calculate total_amount_usdc for different transaction types."""
-        # For POSITION_CLOSED transactions, add AERO swap amount
-        if self.transaction_type == TransactionType.POSITION_CLOSED or self.transaction_type == 'POSITION_CLOSED':
-            # Use aero_swap_usdc if available
-            aero_amount = Decimal(str(self.aero_swap_usdc or 0))
-            
-            # Calculate total
-            self.total_amount_usdc = self.amount_usdc + aero_amount
-        # For POSITION_CREATED transactions, subtract USDC returned (net amount spent)
-        elif self.transaction_type == TransactionType.POSITION_CREATED or self.transaction_type == 'POSITION_CREATED':
-            # Extract usdc_returned from event_data if available
-            usdc_returned = Decimal(0)
-            if self.event_data and 'usdc_returned' in self.event_data:
-                try:
-                    usdc_returned = Decimal(str(self.event_data['usdc_returned']))
-                except:
-                    usdc_returned = Decimal(0)
-            
-            # Calculate net amount (what was actually spent)
-            self.total_amount_usdc = self.amount_usdc - usdc_returned
-        else:
-            # For other transaction types, total is same as amount
-            self.total_amount_usdc = self.amount_usdc
-            
-        return self
 
 
 class PositionResponse(BaseModel):
@@ -243,57 +195,28 @@ class PositionResponse(BaseModel):
     pool_name: Optional[str] = Field(None, description="Pool name (e.g. ZORA/USDC)")
     token0_address: str
     token1_address: str
-    tick_lower: Optional[int] = None
-    tick_upper: Optional[int] = None
-    tick_spacing: Optional[int] = None
     liquidity: str
     staked: bool
     gauge_address: Optional[str]
     entry_amount_usdc: Decimal
     current_value_usdc: Optional[Decimal]
-    current_total_value: Optional[Decimal] = Field(None, description="Total value including position value + staked emissions")
     realized_pnl_usdc: Decimal
     unrealized_pnl_usdc: Decimal
     fees_earned_usdc: Decimal
     rewards_earned_usdc: Decimal
-    total_pnl_usdc: Optional[Decimal] = Field(None, description="Total PNL (unrealized + fees + rewards)")
-    pnl_percentage: Optional[Decimal] = Field(None, description="PNL as percentage of entry amount")
-    pool_base_apr: Optional[Decimal] = Field(None, description="Pool's base APR percentage")
-    effective_apr: Optional[Decimal] = Field(None, description="Effective APR based on position range")
-    protocol_fee_amount: Decimal  # 5% of profits
-    protocol_fee_collected: bool
-    protocol_fee_tx_hash: Optional[str]
+    total_pnl_usdc: Optional[Decimal] = Field(None, description="Total PNL")
     status: PositionStatus
-    entry_tx_hash: Optional[str]
-    exit_tx_hash: Optional[str]
-    # Some legacy rows may lack these timestamps; make them optional
     entry_date: Optional[datetime] = None
     exit_date: Optional[datetime] = None
-    last_updated: Optional[datetime] = None
-
-
-class ProtocolFeeResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    
-    nft_token_id: int  # Aerodrome NFT position ID
-    fee_amount_usdc: Decimal
-    collected: bool
-    collection_tx_hash: Optional[str]
 
 
 class PnLResponse(BaseModel):
     realized_pnl_usdc: Decimal
     unrealized_pnl_usdc: Decimal
-    unrealized_pnl_percentage: Decimal
-    unrealized_pnl_pct: Decimal  # Alias for unrealized_pnl_percentage
-    realized_pnl_percentage: Decimal
+    total_pnl_usdc: Decimal
+    total_pnl_percentage: Decimal
     fees_earned_usdc: Decimal
     rewards_earned_usdc: Decimal
-    total_pnl_usdc: Decimal
-    protocol_fees_pending_usdc: Decimal
-    net_pnl_usdc: Decimal
-    pnl_full: Decimal  # Total PnL (realized + unrealized)
-    pnl_full_pct: Decimal  # Total PnL percentage
 
 
 class PerformanceResponse(BaseModel):
@@ -316,9 +239,3 @@ class TransactionListResponse(BaseModel):
 class PositionListResponse(BaseModel):
     positions: List[PositionResponse]
     total: int
-
-
-class ProtocolFeeListResponse(BaseModel):
-    fees: List[ProtocolFeeResponse]
-    total_pending_usdc: Decimal
-    total_collected_usdc: Decimal
