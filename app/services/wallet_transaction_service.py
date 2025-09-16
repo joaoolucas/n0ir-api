@@ -7,10 +7,10 @@ from datetime import datetime
 from enum import Enum
 import requests
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
+from sqlalchemy import select
 from loguru import logger
 
-from app.database.models import User, Transaction
+from app.database.models import Transaction
 from app.core.config import settings
 
 
@@ -19,6 +19,8 @@ class TransactionType(Enum):
     DEPOSIT = "DEPOSIT"
     WITHDRAWAL = "WITHDRAWAL"
     STAKING = "STAKING"
+    POSITION_OPENED = "POSITION_OPENED"
+    POSITION_CLOSED = "POSITION_CLOSED"
     UNKNOWN = "UNKNOWN"
 
 
@@ -31,12 +33,22 @@ class WalletTransactionService:
         
         # Known token addresses on Base
         self.USDC_ADDRESS = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913".lower()
+        self.AERO_ADDRESS = settings.aero_token_address.lower()
+        
+        # LiquidityManager contract for position open/close detection
+        self.LIQUIDITY_MANAGER = settings.liquidity_manager_address.lower()
         
         # Position manager contracts (for staking detection)
         self.POSITION_MANAGERS = [
             "0x827922686190790b37229fd06084350e74485b72".lower(),  # Main position manager
             "0xf33a96b5932d9e9b9a0eda447abd8c9d48d2e0c8".lower(),  # Another position manager
         ]
+        
+        # Method signatures for LiquidityManager
+        self.POSITION_METHOD_SIGNATURES = {
+            "0x3a1e3569": "openPosition",
+            "0xe0891d91": "closePosition"
+        }
     
     async def fetch_and_sync_transactions(
         self,
@@ -93,6 +105,8 @@ class WalletTransactionService:
                 "deposits": result["deposits"],
                 "withdrawals": result["withdrawals"],
                 "stakings": result["stakings"],
+                "positions_opened": result["positions_opened"],
+                "positions_closed": result["positions_closed"],
                 "unknown": result["unknown"],
                 "total_deposited_usdc": float(result["total_deposited"]),
                 "total_withdrawn_usdc": float(result["total_withdrawn"])
@@ -213,6 +227,81 @@ class WalletTransactionService:
         
         return None
     
+    def _analyze_position_event(
+        self,
+        traces: List[Dict],
+        cdp_wallet: str
+    ) -> Optional[Dict[str, Any]]:
+        """Analyze traces to extract position event details.
+        
+        Returns dict with:
+        - method_sig: Method signature used
+        - method_name: openPosition or closePosition
+        - usdc_in: USDC amount going into position
+        - usdc_out: USDC amount coming out of position
+        - aero_in: AERO amount received
+        - aero_out: AERO amount sent
+        """
+        position_event = None
+        usdc_flows = {"in": 0, "out": 0}
+        aero_flows = {"in": 0, "out": 0}
+        
+        for trace in traces:
+            from_addr = trace.get("from", "").lower()
+            to_addr = trace.get("to", "").lower()
+            input_data = trace.get("input", "")
+            
+            # Check for LiquidityManager interaction
+            if to_addr == self.LIQUIDITY_MANAGER and from_addr == cdp_wallet:
+                if len(input_data) >= 10:
+                    method_sig = input_data[:10]
+                    if method_sig in self.POSITION_METHOD_SIGNATURES:
+                        position_event = {
+                            "method_sig": method_sig,
+                            "method_name": self.POSITION_METHOD_SIGNATURES[method_sig]
+                        }
+            
+            # Track USDC transfers
+            elif to_addr == self.USDC_ADDRESS:
+                decoded = self._decode_erc20_input(input_data)
+                if decoded:
+                    if decoded["method"] == "transfer":
+                        if from_addr == cdp_wallet:
+                            usdc_flows["out"] += decoded["amount"]
+                        elif decoded["to"].lower() == cdp_wallet:
+                            usdc_flows["in"] += decoded["amount"]
+                    elif decoded["method"] == "transferFrom":
+                        if decoded["from"].lower() == cdp_wallet:
+                            usdc_flows["out"] += decoded["amount"]
+                        elif decoded["to"].lower() == cdp_wallet:
+                            usdc_flows["in"] += decoded["amount"]
+            
+            # Track AERO transfers
+            elif to_addr == self.AERO_ADDRESS:
+                decoded = self._decode_erc20_input(input_data)
+                if decoded:
+                    if decoded["method"] == "transfer":
+                        if from_addr == cdp_wallet:
+                            aero_flows["out"] += decoded["amount"]
+                        elif decoded["to"].lower() == cdp_wallet:
+                            aero_flows["in"] += decoded["amount"]
+                    elif decoded["method"] == "transferFrom":
+                        if decoded["from"].lower() == cdp_wallet:
+                            aero_flows["out"] += decoded["amount"]
+                        elif decoded["to"].lower() == cdp_wallet:
+                            aero_flows["in"] += decoded["amount"]
+        
+        if position_event:
+            position_event.update({
+                "usdc_in": usdc_flows["in"],
+                "usdc_out": usdc_flows["out"],
+                "aero_in": aero_flows["in"],
+                "aero_out": aero_flows["out"]
+            })
+            return position_event
+        
+        return None
+    
     def _categorize_transaction(
         self,
         tx_data: Dict,
@@ -254,6 +343,31 @@ class WalletTransactionService:
         found_staking = False
         deposit_amount = 0
         withdrawal_amount = 0
+        
+        # Check for position events first (highest priority)
+        position_event = self._analyze_position_event(traces, cdp_wallet)
+        if position_event:
+            method_name = position_event["method_name"]
+            
+            if method_name == "openPosition":
+                details["amount"] = position_event["usdc_out"] if position_event["usdc_out"] > 0 else position_event["usdc_in"]
+                details["description"] = f"Position opened via LiquidityManager"
+                details["method_sig"] = position_event["method_sig"]
+                details["usdc_in"] = position_event["usdc_in"]
+                details["usdc_out"] = position_event["usdc_out"]
+                details["aero_in"] = position_event["aero_in"]
+                details["aero_out"] = position_event["aero_out"]
+                return TransactionType.POSITION_OPENED, details
+            
+            elif method_name == "closePosition":
+                details["amount"] = position_event["usdc_in"] if position_event["usdc_in"] > 0 else position_event["usdc_out"]
+                details["description"] = f"Position closed via LiquidityManager"
+                details["method_sig"] = position_event["method_sig"]
+                details["usdc_in"] = position_event["usdc_in"]
+                details["usdc_out"] = position_event["usdc_out"] 
+                details["aero_in"] = position_event["aero_in"]
+                details["aero_out"] = position_event["aero_out"]
+                return TransactionType.POSITION_CLOSED, details
         
         # Check all traces for patterns
         for trace in traces:
@@ -340,6 +454,8 @@ class WalletTransactionService:
             TransactionType.DEPOSIT: [],
             TransactionType.WITHDRAWAL: [],
             TransactionType.STAKING: [],
+            TransactionType.POSITION_OPENED: [],
+            TransactionType.POSITION_CLOSED: [],
             TransactionType.UNKNOWN: []
         }
         
@@ -362,8 +478,9 @@ class WalletTransactionService:
                 elif tx_type == TransactionType.WITHDRAWAL:
                     total_withdrawn += Decimal(details["amount"]) / Decimal(1_000_000)
                 
-                # Save to database if it's a financial transaction
-                if tx_type in [TransactionType.DEPOSIT, TransactionType.WITHDRAWAL]:
+                # Save to database if it's a financial or position transaction
+                if tx_type in [TransactionType.DEPOSIT, TransactionType.WITHDRAWAL, 
+                              TransactionType.POSITION_OPENED, TransactionType.POSITION_CLOSED]:
                     await self._save_transaction(
                         user_id=user_id,
                         tx_type=tx_type.value,
@@ -378,6 +495,8 @@ class WalletTransactionService:
             "deposits": len(categorized[TransactionType.DEPOSIT]),
             "withdrawals": len(categorized[TransactionType.WITHDRAWAL]),
             "stakings": len(categorized[TransactionType.STAKING]),
+            "positions_opened": len(categorized[TransactionType.POSITION_OPENED]),
+            "positions_closed": len(categorized[TransactionType.POSITION_CLOSED]),
             "unknown": len(categorized[TransactionType.UNKNOWN]),
             "total_deposited": total_deposited,
             "total_withdrawn": total_withdrawn
@@ -401,6 +520,27 @@ class WalletTransactionService:
             # Create new transaction
             amount_usdc = Decimal(details["amount"]) / Decimal(1_000_000) if details.get("amount") else Decimal(0)
             
+            # Build event data based on transaction type
+            event_data = {
+                "description": details.get("description", ""),
+                "categorized_by": "wallet_transaction_service",
+                "owner_wallet": user_id,
+                "cdp_wallet": details.get("cdp_wallet", "")
+            }
+            
+            # Add position-specific data if available
+            if tx_type in ["POSITION_OPENED", "POSITION_CLOSED"]:
+                if details.get("method_sig"):
+                    event_data["method_sig"] = details["method_sig"]
+                if details.get("usdc_in") is not None:
+                    event_data["usdc_in"] = details["usdc_in"]
+                if details.get("usdc_out") is not None:
+                    event_data["usdc_out"] = details["usdc_out"]
+                if details.get("aero_in") is not None:
+                    event_data["aero_in"] = details["aero_in"]
+                if details.get("aero_out") is not None:
+                    event_data["aero_out"] = details["aero_out"]
+            
             transaction = Transaction(
                 tx_hash=details["tx_hash"],
                 user_id=user_id,
@@ -409,12 +549,7 @@ class WalletTransactionService:
                 amount_usdc=amount_usdc,
                 block_number=details.get("block"),
                 block_timestamp=datetime.fromisoformat(details["timestamp"].replace("Z", "+00:00")) if details.get("timestamp") else None,
-                event_data={
-                    "description": details.get("description", ""),
-                    "categorized_by": "wallet_transaction_service",
-                    "owner_wallet": user_id,
-                    "cdp_wallet": details.get("cdp_wallet", "")
-                }
+                event_data=event_data
             )
             
             self.db.add(transaction)

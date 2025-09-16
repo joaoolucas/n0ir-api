@@ -1291,6 +1291,8 @@ async def sync_wallet_transactions(
             "deposits": result.get("deposits", 0),
             "withdrawals": result.get("withdrawals", 0),
             "stakings": result.get("stakings", 0),
+            "positions_opened": result.get("positions_opened", 0),
+            "positions_closed": result.get("positions_closed", 0),
             "unknown": result.get("unknown", 0)
         },
         "totals": {
