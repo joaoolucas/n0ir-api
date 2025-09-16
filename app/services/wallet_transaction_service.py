@@ -1,0 +1,429 @@
+"""Service for fetching and categorizing wallet transactions from CDP API."""
+
+import time
+from typing import List, Dict, Any, Optional, Tuple
+from decimal import Decimal
+from datetime import datetime
+from enum import Enum
+import requests
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, and_
+from loguru import logger
+
+from app.database.models import User, Transaction
+from app.core.config import settings
+
+
+class TransactionType(Enum):
+    """Transaction types for categorization."""
+    DEPOSIT = "DEPOSIT"
+    WITHDRAWAL = "WITHDRAWAL"
+    STAKING = "STAKING"
+    UNKNOWN = "UNKNOWN"
+
+
+class WalletTransactionService:
+    """Service for fetching and analyzing wallet transactions."""
+    
+    def __init__(self, db: AsyncSession):
+        self.db = db
+        self.base_url = "https://api.cdp.coinbase.com/platform"
+        
+        # Known token addresses on Base
+        self.USDC_ADDRESS = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913".lower()
+        
+        # Position manager contracts (for staking detection)
+        self.POSITION_MANAGERS = [
+            "0x827922686190790b37229fd06084350e74485b72".lower(),  # Main position manager
+            "0xf33a96b5932d9e9b9a0eda447abd8c9d48d2e0c8".lower(),  # Another position manager
+        ]
+    
+    async def fetch_and_sync_transactions(
+        self,
+        user_id: str,
+        cdp_wallet_address: str,
+        api_key: str,
+        limit: int = 100
+    ) -> Dict[str, Any]:
+        """Fetch transactions from CDP API and sync to database.
+        
+        Args:
+            user_id: The user's owner wallet address (EOA)
+            cdp_wallet_address: The user's CDP managed wallet address
+            api_key: CDP API key for authentication
+            limit: Maximum number of transactions to fetch
+            
+        Returns:
+            Summary of fetched and categorized transactions
+        """
+        if not cdp_wallet_address:
+            return {
+                "success": False,
+                "error": "No CDP wallet address provided",
+                "transactions_synced": 0
+            }
+        
+        try:
+            # Fetch all transactions with pagination
+            all_transactions = await self._fetch_all_transactions(
+                cdp_wallet_address, 
+                api_key,
+                limit
+            )
+            
+            if not all_transactions:
+                return {
+                    "success": True,
+                    "transactions_synced": 0,
+                    "deposits": 0,
+                    "withdrawals": 0,
+                    "stakings": 0
+                }
+            
+            # Categorize and save transactions
+            result = await self._process_and_save_transactions(
+                all_transactions,
+                user_id,
+                cdp_wallet_address
+            )
+            
+            return {
+                "success": True,
+                "transactions_synced": result["total"],
+                "deposits": result["deposits"],
+                "withdrawals": result["withdrawals"],
+                "stakings": result["stakings"],
+                "unknown": result["unknown"],
+                "total_deposited_usdc": float(result["total_deposited"]),
+                "total_withdrawn_usdc": float(result["total_withdrawn"])
+            }
+            
+        except Exception as e:
+            logger.error(f"Error syncing transactions for user {user_id}: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "transactions_synced": 0
+            }
+    
+    async def _fetch_all_transactions(
+        self, 
+        wallet_address: str, 
+        api_key: str,
+        max_transactions: int = 100
+    ) -> List[Dict]:
+        """Fetch all transactions using pagination with retry logic."""
+        endpoint = f"/v1/networks/base-mainnet/addresses/{wallet_address}/transactions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        all_transactions = []
+        page = None
+        page_count = 0
+        max_retries = 3
+        base_delay = 2.0
+        batch_size = 20  # Smaller batch size to avoid rate limits
+        
+        while len(all_transactions) < max_transactions:
+            retry_count = 0
+            success = False
+            
+            while retry_count < max_retries and not success:
+                logger.info(f"Fetching page {page_count + 1} for wallet {wallet_address}...")
+                
+                params = {"limit": min(batch_size, max_transactions - len(all_transactions))}
+                if page:
+                    params["page"] = page
+                
+                try:
+                    response = requests.get(
+                        f"{self.base_url}{endpoint}",
+                        headers=headers,
+                        params=params
+                    )
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        transactions = data.get("data", [])
+                        all_transactions.extend(transactions)
+                        page_count += 1
+                        success = True
+                        
+                        logger.info(f"  Found {len(transactions)} transactions (total: {len(all_transactions)})")
+                        
+                        # Check if there are more pages
+                        has_more = data.get("has_more", False)
+                        next_page = data.get("next_page")
+                        
+                        if not has_more or not next_page or len(all_transactions) >= max_transactions:
+                            return all_transactions
+                        
+                        page = next_page
+                        time.sleep(0.5)  # Delay between successful requests
+                        
+                    elif response.status_code == 429:
+                        # Rate limited - retry with exponential backoff
+                        retry_count += 1
+                        if retry_count < max_retries:
+                            delay = base_delay * (2 ** retry_count)
+                            logger.warning(f"  Rate limited, waiting {delay}s (attempt {retry_count + 1}/{max_retries})")
+                            time.sleep(delay)
+                    else:
+                        logger.error(f"  API error: {response.status_code}")
+                        return all_transactions
+                        
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"  Request failed: {e}")
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        delay = base_delay * (2 ** retry_count)
+                        time.sleep(delay)
+            
+            if not success:
+                logger.warning(f"  Failed to fetch page after {max_retries} retries")
+                break
+        
+        return all_transactions
+    
+    def _decode_erc20_input(self, input_data: str) -> Optional[Dict[str, Any]]:
+        """Decode ERC20 method calls from input data."""
+        if not input_data or len(input_data) < 10:
+            return None
+        
+        method_sig = input_data[:10]
+        
+        # transfer(address,uint256)
+        if method_sig == "0xa9059cbb" and len(input_data) >= 138:
+            return {
+                "method": "transfer",
+                "to": "0x" + input_data[34:74],
+                "amount": int(input_data[74:138], 16) if input_data[74:138] else 0
+            }
+        
+        # transferFrom(address,address,uint256)
+        elif method_sig == "0x23b872dd" and len(input_data) >= 202:
+            return {
+                "method": "transferFrom",
+                "from": "0x" + input_data[34:74],
+                "to": "0x" + input_data[98:138],
+                "amount": int(input_data[138:202], 16) if input_data[138:202] else 0
+            }
+        
+        return None
+    
+    def _categorize_transaction(
+        self,
+        tx_data: Dict,
+        owner_wallet: str,
+        cdp_wallet: str
+    ) -> Tuple[TransactionType, Dict[str, Any]]:
+        """Categorize transaction based on wallet relationships.
+        
+        Args:
+            tx_data: Raw transaction data from CDP API
+            owner_wallet: User's owner wallet address (user_id)
+            cdp_wallet: User's CDP managed wallet address
+            
+        Returns:
+            Tuple of (transaction_type, details)
+        """
+        content = tx_data.get("content", {})
+        traces = content.get("flattened_traces", [])
+        
+        if not traces:
+            return TransactionType.UNKNOWN, {}
+        
+        # Basic transaction info
+        details = {
+            "tx_hash": traces[0].get("transaction_hash", ""),
+            "block": traces[0].get("block_number", ""),
+            "timestamp": content.get("block_timestamp", ""),
+            "amount": 0,
+            "description": ""
+        }
+        
+        # Normalize addresses
+        owner_wallet = owner_wallet.lower()
+        cdp_wallet = cdp_wallet.lower()
+        
+        # Track what we find
+        found_deposit = False
+        found_withdrawal = False
+        found_staking = False
+        deposit_amount = 0
+        withdrawal_amount = 0
+        
+        # Check all traces for patterns
+        for trace in traces:
+            from_addr = trace.get("from", "").lower()
+            to_addr = trace.get("to", "").lower()
+            input_data = trace.get("input", "")
+            
+            # Decode ERC20 operations
+            decoded = self._decode_erc20_input(input_data)
+            
+            # Check for USDC transfers
+            if to_addr == self.USDC_ADDRESS and decoded:
+                recipient = decoded.get("to", "").lower() if decoded.get("to") else ""
+                amount = decoded.get("amount", 0)
+                
+                # For transfer method
+                if decoded.get("method") == "transfer":
+                    # DEPOSIT: Owner wallet sending USDC to CDP wallet
+                    if from_addr == owner_wallet and recipient == cdp_wallet:
+                        found_deposit = True
+                        deposit_amount += amount
+                    
+                    # WITHDRAWAL: CDP wallet sending USDC to owner wallet
+                    elif from_addr == cdp_wallet and recipient == owner_wallet:
+                        found_withdrawal = True
+                        withdrawal_amount += amount
+                
+                # For transferFrom method
+                elif decoded.get("method") == "transferFrom":
+                    transfer_from = decoded.get("from", "").lower() if decoded.get("from") else ""
+                    transfer_to = decoded.get("to", "").lower() if decoded.get("to") else ""
+                    
+                    # DEPOSIT: USDC from owner wallet to CDP wallet
+                    if transfer_from == owner_wallet and transfer_to == cdp_wallet:
+                        found_deposit = True
+                        deposit_amount += amount
+                    
+                    # WITHDRAWAL: USDC from CDP wallet to owner wallet
+                    elif transfer_from == cdp_wallet and transfer_to == owner_wallet:
+                        found_withdrawal = True
+                        withdrawal_amount += amount
+            
+            # STAKING: Check if CDP wallet is interacting with position managers
+            if from_addr == cdp_wallet:
+                for pm in self.POSITION_MANAGERS:
+                    if to_addr == pm:
+                        found_staking = True
+                        break
+        
+        # Return based on what we found (prioritize financial transactions)
+        if found_deposit:
+            details["amount"] = deposit_amount
+            details["description"] = f"USDC deposit from owner wallet"
+            return TransactionType.DEPOSIT, details
+        
+        if found_withdrawal:
+            details["amount"] = withdrawal_amount
+            details["description"] = f"USDC withdrawal to owner wallet"
+            return TransactionType.WITHDRAWAL, details
+        
+        if found_staking:
+            details["description"] = "Interaction with position manager (staking)"
+            return TransactionType.STAKING, details
+        
+        return TransactionType.UNKNOWN, details
+    
+    async def _process_and_save_transactions(
+        self,
+        transactions: List[Dict],
+        user_id: str,
+        cdp_wallet_address: str
+    ) -> Dict[str, Any]:
+        """Process transactions and save to database.
+        
+        Args:
+            transactions: List of raw transactions from CDP API
+            user_id: User's owner wallet address
+            cdp_wallet_address: User's CDP wallet address
+            
+        Returns:
+            Summary of processed transactions
+        """
+        categorized = {
+            TransactionType.DEPOSIT: [],
+            TransactionType.WITHDRAWAL: [],
+            TransactionType.STAKING: [],
+            TransactionType.UNKNOWN: []
+        }
+        
+        total_deposited = Decimal(0)
+        total_withdrawn = Decimal(0)
+        
+        for tx in transactions:
+            tx_type, details = self._categorize_transaction(
+                tx, 
+                user_id, 
+                cdp_wallet_address
+            )
+            
+            if details:
+                categorized[tx_type].append(details)
+                
+                # Track totals
+                if tx_type == TransactionType.DEPOSIT:
+                    total_deposited += Decimal(details["amount"]) / Decimal(1_000_000)
+                elif tx_type == TransactionType.WITHDRAWAL:
+                    total_withdrawn += Decimal(details["amount"]) / Decimal(1_000_000)
+                
+                # Save to database if it's a financial transaction
+                if tx_type in [TransactionType.DEPOSIT, TransactionType.WITHDRAWAL]:
+                    await self._save_transaction(
+                        user_id=user_id,
+                        tx_type=tx_type.value,
+                        details=details
+                    )
+        
+        # Commit all database changes
+        await self.db.commit()
+        
+        return {
+            "total": len(transactions),
+            "deposits": len(categorized[TransactionType.DEPOSIT]),
+            "withdrawals": len(categorized[TransactionType.WITHDRAWAL]),
+            "stakings": len(categorized[TransactionType.STAKING]),
+            "unknown": len(categorized[TransactionType.UNKNOWN]),
+            "total_deposited": total_deposited,
+            "total_withdrawn": total_withdrawn
+        }
+    
+    async def _save_transaction(
+        self,
+        user_id: str,
+        tx_type: str,
+        details: Dict[str, Any]
+    ) -> None:
+        """Save or update a transaction in the database."""
+        # Check if transaction already exists
+        stmt = select(Transaction).where(
+            Transaction.tx_hash == details["tx_hash"]
+        )
+        result = await self.db.execute(stmt)
+        existing_tx = result.scalar_one_or_none()
+        
+        if not existing_tx:
+            # Create new transaction
+            amount_usdc = Decimal(details["amount"]) / Decimal(1_000_000) if details.get("amount") else Decimal(0)
+            
+            transaction = Transaction(
+                tx_hash=details["tx_hash"],
+                user_id=user_id,
+                tx_type=tx_type,
+                status="CONFIRMED",
+                amount_usdc=amount_usdc,
+                block_number=details.get("block"),
+                block_timestamp=datetime.fromisoformat(details["timestamp"].replace("Z", "+00:00")) if details.get("timestamp") else None,
+                event_data={
+                    "description": details.get("description", ""),
+                    "categorized_by": "wallet_transaction_service",
+                    "owner_wallet": user_id,
+                    "cdp_wallet": details.get("cdp_wallet", "")
+                }
+            )
+            
+            self.db.add(transaction)
+            logger.info(f"Saved {tx_type} transaction: {details['tx_hash'][:10]}... Amount: {amount_usdc} USDC")
+        else:
+            # Update existing transaction if needed
+            if existing_tx.tx_type == "UNKNOWN" and tx_type != "UNKNOWN":
+                existing_tx.tx_type = tx_type
+                existing_tx.event_data = existing_tx.event_data or {}
+                existing_tx.event_data["recategorized"] = True
+                existing_tx.event_data["description"] = details.get("description", "")
+                logger.info(f"Recategorized transaction {details['tx_hash'][:10]}... as {tx_type}")
