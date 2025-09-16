@@ -427,17 +427,21 @@ class WalletTransactionService:
         if found_deposit:
             details["amount"] = deposit_amount
             details["description"] = f"USDC deposit from owner wallet"
+            details["cdp_wallet"] = cdp_wallet
             return TransactionType.DEPOSIT, details
         
         if found_withdrawal:
             details["amount"] = withdrawal_amount
             details["description"] = f"USDC withdrawal to owner wallet"
+            details["cdp_wallet"] = cdp_wallet
             return TransactionType.WITHDRAWAL, details
         
         if found_staking:
             details["description"] = "Interaction with position manager (staking)"
+            details["cdp_wallet"] = cdp_wallet
             return TransactionType.STAKING, details
         
+        details["cdp_wallet"] = cdp_wallet
         return TransactionType.UNKNOWN, details
     
     async def _process_and_save_transactions(
@@ -530,7 +534,6 @@ class WalletTransactionService:
             event_data = {
                 "description": details.get("description", ""),
                 "categorized_by": "wallet_transaction_service",
-                "owner_wallet": user_id,
                 "cdp_wallet": details.get("cdp_wallet", "")
             }
             

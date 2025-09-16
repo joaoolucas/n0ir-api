@@ -152,7 +152,7 @@ class TransactionResponse(BaseModel):
     tx_hash: Optional[str]
     status: TransactionStatus
     event_data: Optional[Dict[str, Any]] = Field(default=None, description="Event data from blockchain")
-    created_at: datetime
+    created_at: Optional[datetime] = Field(validation_alias='block_timestamp', description="Block timestamp of transaction")
     
     @model_validator(mode='before')
     @classmethod
