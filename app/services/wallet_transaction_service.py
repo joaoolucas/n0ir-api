@@ -54,7 +54,6 @@ class WalletTransactionService:
         self,
         user_id: str,
         cdp_wallet_address: str,
-        api_key: str,
         limit: int = 100
     ) -> Dict[str, Any]:
         """Fetch transactions from CDP API and sync to database.
@@ -62,7 +61,6 @@ class WalletTransactionService:
         Args:
             user_id: The user's owner wallet address (EOA)
             cdp_wallet_address: The user's CDP managed wallet address
-            api_key: CDP API key for authentication
             limit: Maximum number of transactions to fetch
             
         Returns:
@@ -75,11 +73,19 @@ class WalletTransactionService:
                 "transactions_synced": 0
             }
         
+        # Check if CDP API key is configured
+        if not settings.cdp_client_api_key:
+            return {
+                "success": False,
+                "error": "CDP API key not configured",
+                "transactions_synced": 0
+            }
+        
         try:
             # Fetch all transactions with pagination
             all_transactions = await self._fetch_all_transactions(
                 cdp_wallet_address, 
-                api_key,
+                settings.cdp_client_api_key,
                 limit
             )
             

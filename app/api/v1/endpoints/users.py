@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.user_service import UserService
 from app.core.pools_service import pools_service
 from app.core.positions_service import positions_service
+from app.core.config import settings
 from app.schemas.users import (
     CreateUserRequest, UpdateUserRequest, DepositRequest, WithdrawRequest, WithdrawResponse,
     UserResponse, TransactionResponse, TransactionListResponse,
@@ -587,21 +588,19 @@ async def get_transactions(
     offset: int = 0,
     transaction_type: Optional[DBTransactionType] = None,
     sort_order: str = "desc",  # "asc" for oldest first, "desc" for newest first
-    sync_fresh: bool = Query(True, description="Sync fresh transactions from CDP before returning"),
-    api_key: Optional[str] = Query(None, description="CDP API key for syncing (required if sync_fresh=True)"),
     db: AsyncSession = Depends(get_db)
 ):
     """Get user transactions with automatic sync from CDP.
     
-    This endpoint will automatically sync fresh transactions from CDP if:
-    - sync_fresh is True (default)
+    This endpoint automatically syncs fresh transactions from CDP if:
     - User has a CDP wallet address
-    - API key is provided
+    - CDP API key is configured in environment
     
     Transactions are categorized as:
     - DEPOSIT: USDC from owner wallet to CDP wallet
     - WITHDRAWAL: USDC from CDP wallet to owner wallet
-    - STAKING: CDP wallet interactions with position managers
+    - POSITION_OPENED: Position opened via LiquidityManager
+    - POSITION_CLOSED: Position closed via LiquidityManager
     """
     # First check if user has a CDP wallet and fetch fresh data
     from sqlalchemy import select
@@ -612,23 +611,19 @@ async def get_transactions(
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
     
-    if user and user.cdp_wallet_address and sync_fresh:
-        # Use WalletTransactionService for better categorization
-        if api_key:
-            try:
-                wallet_service = WalletTransactionService(db)
-                sync_result = await wallet_service.fetch_and_sync_transactions(
-                    user_id=user_id,
-                    cdp_wallet_address=user.cdp_wallet_address,
-                    api_key=api_key,
-                    limit=50  # Fetch recent transactions
-                )
-                logger.info(f"Synced {sync_result.get('transactions_synced', 0)} transactions for user {user_id}")
-            except Exception as e:
-                logger.warning(f"Failed to sync transactions for user {user_id}: {e}")
-                # Continue with local data if sync fails
-        else:
-            logger.info("No API key provided, using cached transactions only")
+    # Automatically sync if user has CDP wallet and API key is configured
+    if user and user.cdp_wallet_address and settings.cdp_client_api_key:
+        try:
+            wallet_service = WalletTransactionService(db)
+            sync_result = await wallet_service.fetch_and_sync_transactions(
+                user_id=user_id,
+                cdp_wallet_address=user.cdp_wallet_address,
+                limit=50  # Always sync recent transactions
+            )
+            logger.info(f"Auto-synced {sync_result.get('transactions_synced', 0)} transactions for user {user_id}")
+        except Exception as e:
+            logger.warning(f"Auto-sync failed for user {user_id}: {e}, using cached data")
+            # Continue with local data if sync fails
     
     service = UserService(db)
     transactions = await service.get_user_transactions(
@@ -1200,107 +1195,6 @@ async def get_performance(
         active_positions=active_positions_count if active_positions_count is not None else len(positions),
         blockchain_data=blockchain_data
     )
-
-
-@router.patch("/{user_id}/wallet-address", response_model=UserResponse)
-async def update_wallet_address(
-    user_id: str,
-    wallet_address: str,
-    db: AsyncSession = Depends(get_db)
-):
-    """Update user's CDP wallet address."""
-    from sqlalchemy import update
-    from app.database.models import User
-    
-    stmt = update(User).where(User.user_id == user_id).values(cdp_wallet_address=wallet_address)
-    await db.execute(stmt)
-    await db.commit()
-    
-    # Fetch and return updated user
-    service = UserService(db)
-    user = await service.get_user(user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return user
-
-
-@router.post("/{user_id}/sync-wallet-transactions")
-async def sync_wallet_transactions(
-    user_id: str,
-    api_key: str = Query(..., description="CDP API key for authentication"),
-    limit: int = Query(200, description="Maximum number of transactions to sync"),
-    db: AsyncSession = Depends(get_db)
-):
-    """Sync wallet transactions from CDP API.
-    
-    This endpoint fetches all transactions for the user's CDP wallet and categorizes them as:
-    - DEPOSIT: USDC transfers from owner wallet to CDP wallet
-    - WITHDRAWAL: USDC transfers from CDP wallet to owner wallet  
-    - STAKING: CDP wallet interactions with position managers
-    
-    The categorization is based on the wallet relationships:
-    - user_id is the owner's wallet address (EOA)
-    - cdp_wallet_address is the CDP managed wallet
-    
-    Args:
-        user_id: User's owner wallet address
-        api_key: CDP API key for authentication
-        limit: Maximum number of transactions to sync (default: 200)
-    
-    Returns:
-        Summary of synced transactions with counts and totals
-    """
-    from app.services.wallet_transaction_service import WalletTransactionService
-    
-    # Get user to find CDP wallet address
-    service = UserService(db)
-    user = await service.get_user(user_id)
-    
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    if not user.cdp_wallet_address:
-        raise HTTPException(
-            status_code=400, 
-            detail="User does not have a CDP wallet address"
-        )
-    
-    # Initialize wallet transaction service
-    wallet_service = WalletTransactionService(db)
-    
-    # Fetch and sync transactions
-    result = await wallet_service.fetch_and_sync_transactions(
-        user_id=user_id,
-        cdp_wallet_address=user.cdp_wallet_address,
-        api_key=api_key,
-        limit=limit
-    )
-    
-    if not result["success"]:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to sync transactions: {result.get('error', 'Unknown error')}"
-        )
-    
-    return {
-        "success": True,
-        "user_id": user_id,
-        "cdp_wallet": user.cdp_wallet_address,
-        "transactions_synced": result["transactions_synced"],
-        "breakdown": {
-            "deposits": result.get("deposits", 0),
-            "withdrawals": result.get("withdrawals", 0),
-            "stakings": result.get("stakings", 0),
-            "positions_opened": result.get("positions_opened", 0),
-            "positions_closed": result.get("positions_closed", 0),
-            "unknown": result.get("unknown", 0)
-        },
-        "totals": {
-            "total_deposited_usdc": result.get("total_deposited_usdc", 0),
-            "total_withdrawn_usdc": result.get("total_withdrawn_usdc", 0),
-            "net_flow_usdc": result.get("total_deposited_usdc", 0) - result.get("total_withdrawn_usdc", 0)
-        }
-    }
 
 
 # NOTE: Protocol fees endpoint removed - fees are included in other endpoints like /pnl
