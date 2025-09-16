@@ -894,56 +894,39 @@ async def get_pnl(
         )
     else:
         # Default to all-time (existing behavior)
-        # Recalculate PnL with real-time position values from blockchain
-        await service.recalculate_user_pnl(user_id)
+        # PnL is now calculated from positions directly, not stored on User model
         
         # Refresh user to get updated values
         await db.refresh(user)
         
-        # Get fees and rewards from positions for additional metrics
+        # Get positions to calculate PnL
         positions = await service.get_user_positions(user_id)
         
-        # Calculate total fees and rewards from all positions
+        # Calculate PnL from positions
+        realized_pnl = sum(p.realized_pnl_usdc or Decimal(0) for p in positions if p.status == 'CLOSED')
+        unrealized_pnl = sum(p.realized_pnl_usdc or Decimal(0) for p in positions if p.status == 'ACTIVE')
         total_fees_earned = sum(p.fees_earned_usdc or Decimal(0) for p in positions)
         total_rewards_earned = sum(p.rewards_earned_usdc or Decimal(0) for p in positions)
         
-        # Get protocol fees pending
-        protocol_fees_pending = sum(
-            p.protocol_fee_amount for p in positions 
-            if p.protocol_fee_amount and not p.protocol_fee_collected
-        )
+        # Calculate total PnL
+        total_pnl = realized_pnl + unrealized_pnl + total_fees_earned + total_rewards_earned
         
-        # Calculate total PnL (realized + unrealized)
-        total_pnl = user.realized_pnl_usdc + user.unrealized_pnl_usdc
-        
-        # Net PnL after protocol fees
-        net_pnl = total_pnl - protocol_fees_pending
-        
-        # Calculate pnl_full (realized + unrealized)
-        pnl_full = user.realized_pnl_usdc + user.unrealized_pnl_usdc
-        
-        # Get total deposits and withdrawals for all-time percentage calculation
+        # Get total deposits and withdrawals for percentage calculation
         total_deposits, total_withdrawals = await service.get_deposit_withdrawal_totals(user_id)
         net_deposits = total_deposits - total_withdrawals
         
-        # Calculate pnl_full_pct
-        pnl_full_pct = Decimal(0)
+        # Calculate percentages
+        total_pnl_pct = Decimal(0)
         if net_deposits > 0:
-            pnl_full_pct = (pnl_full / net_deposits) * 100
+            total_pnl_pct = (total_pnl / net_deposits) * 100
         
         return PnLResponse(
-            realized_pnl_usdc=user.realized_pnl_usdc,
-            unrealized_pnl_usdc=user.unrealized_pnl_usdc,
-            unrealized_pnl_percentage=user.unrealized_pnl_percentage,
-            unrealized_pnl_pct=user.unrealized_pnl_percentage,  # Same value with different name
-            realized_pnl_percentage=user.realized_pnl_percentage,
-            fees_earned_usdc=total_fees_earned,
-            rewards_earned_usdc=total_rewards_earned,
+            realized_pnl_usdc=realized_pnl,
+            unrealized_pnl_usdc=unrealized_pnl,
             total_pnl_usdc=total_pnl,
-            protocol_fees_pending_usdc=protocol_fees_pending,
-            net_pnl_usdc=net_pnl,
-            pnl_full=pnl_full,
-            pnl_full_pct=pnl_full_pct
+            total_pnl_percentage=total_pnl_pct,
+            fees_earned_usdc=total_fees_earned,
+            rewards_earned_usdc=total_rewards_earned
         )
 
 
@@ -1054,15 +1037,13 @@ async def get_performance(
         active_positions_count = pnl_data.get("active_positions_count", 0)
     else:
         # Default to all-time (existing behavior)
-        # Recalculate PnL with real-time position values from blockchain (same as /pnl endpoint)
-        await service.recalculate_user_pnl(user_id)
+        # Get positions to calculate PnL
+        all_positions = await service.get_user_positions(user_id)
         
-        # Refresh user to get updated values
-        await db.refresh(user)
-        
-        # Calculate pnl_full (realized + unrealized) for all-time
-        pnl_full = user.realized_pnl_usdc + user.unrealized_pnl_usdc
-        unrealized_pnl = user.unrealized_pnl_usdc
+        # Calculate PnL from positions
+        realized_pnl = sum(p.realized_pnl_usdc or Decimal(0) for p in all_positions if p.status == 'CLOSED')
+        unrealized_pnl = sum(p.realized_pnl_usdc or Decimal(0) for p in all_positions if p.status == 'ACTIVE')
+        pnl_full = realized_pnl + unrealized_pnl
         
         # Get total deposits and withdrawals for all-time percentage calculation
         total_deposits, total_withdrawals = await service.get_deposit_withdrawal_totals(user_id)
@@ -1073,7 +1054,7 @@ async def get_performance(
         if net_deposits > 0:
             pnl_full_pct = (pnl_full / net_deposits) * 100
         
-        active_positions_count = None  # Will be calculated later
+        active_positions_count = len([p for p in all_positions if p.status == 'ACTIVE'])
     
     # Get positions for APR calculation
     positions = await service.get_user_positions(user_id, status='ACTIVE')
