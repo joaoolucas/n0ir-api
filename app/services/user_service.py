@@ -9,7 +9,7 @@ from sqlalchemy import select, update, and_, or_, func, case, Numeric
 from sqlalchemy.orm import selectinload
 
 from app.database.models import User, Transaction, Position
-from app.database.models.blockchain_sync import WalletTransaction
+# WalletTransaction removed - using transactions table instead
 from app.schemas.users import TransactionType, TransactionStatus, PositionStatus, TimePeriod
 from app.core.logger import logger
 from app.core.positions_service import positions_service

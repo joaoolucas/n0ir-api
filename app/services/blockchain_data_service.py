@@ -23,11 +23,7 @@ from app.services.cdp.models import (
     TransferData,
     EventData
 )
-from app.database.models.blockchain_sync import (
-    BlockchainSync,
-    WalletTransaction,
-    LiquidityEvent
-)
+# Blockchain sync tables removed - using transactions table instead
 from app.core.cache import cache_manager as cache
 from app.core.config import settings
 from loguru import logger
