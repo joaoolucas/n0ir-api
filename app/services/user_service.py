@@ -327,55 +327,10 @@ class UserService:
         result = await self.db.execute(stmt)
         transactions = list(result.scalars().all())
         
-        # Also fetch CDP wallet transactions if no specific transaction type filter
-        # (CDP transactions are on-chain transfers, not specific app transaction types)
-        if not transaction_type:
-            wallet_stmt = select(WalletTransaction).where(
-                WalletTransaction.user_id == user_id
-            )
-            
-            # Apply sorting to wallet transactions
-            if sort_order.lower() == "asc":
-                wallet_stmt = wallet_stmt.order_by(WalletTransaction.timestamp.asc())
-            else:
-                wallet_stmt = wallet_stmt.order_by(WalletTransaction.timestamp.desc())
-            
-            wallet_result = await self.db.execute(wallet_stmt)
-            wallet_txs = wallet_result.scalars().all()
-            
-            # Convert WalletTransaction to Transaction objects for consistent response
-            for wtx in wallet_txs:
-                # Create a Transaction object from WalletTransaction data
-                tx = Transaction(
-                    id=str(uuid.uuid4()),  # Generate a unique ID
-                    user_id=user_id,
-                    tx_type='CDP_TRANSFER',  # Mark as CDP transfer
-                    tx_hash=wtx.transaction_hash,
-                    amount_usdc=Decimal(0),  # Will be calculated from value
-                    status=TransactionStatus.CONFIRMED,
-                    block_number=wtx.block_number,
-                    created_at=wtx.timestamp,
-                    confirmed_at=wtx.timestamp,
-                    event_data={
-                        'from_address': wtx.from_address,
-                        'to_address': wtx.to_address,
-                        'value': str(wtx.value) if wtx.value else '0',
-                        'gas': str(wtx.gas) if wtx.gas else '0',
-                        'gas_price': str(wtx.gas_price) if wtx.gas_price else '0',
-                        'gas_cost_eth': str(wtx.gas_cost_eth) if wtx.gas_cost_eth else '0',
-                        'is_agent_wallet': wtx.is_agent_wallet,
-                        'source': 'CDP'
-                    }
-                )
-                transactions.append(tx)
+        # Note: CDP wallet transactions are now stored directly in the transactions table
+        # with appropriate tx_type instead of a separate WalletTransaction table
         
-        # Sort combined results by block_number/timestamp
-        transactions.sort(
-            key=lambda t: (t.block_number or 0, t.created_at),
-            reverse=(sort_order.lower() == "desc")
-        )
-        
-        # Apply limit and offset to combined results
+        # Apply limit and offset to results
         return transactions[offset:offset + limit]
     
     async def deposit_usdc(
