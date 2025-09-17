@@ -115,14 +115,16 @@ class PositionStatus(BaseModel):
 
 class PoolOpportunity(BaseModel):
     """Complete pool opportunity analysis."""
-    pool: PoolInfo
+    pool_address: str
+    pair: str
     score: float = Field(..., ge=0, le=100)
     expected_apr: float
-    confidence_level: float = Field(..., ge=0, le=100)
-    optimal_range: RangeParameters
+    effective_apr: Optional[float] = None
+    apr_efficiency: Optional[float] = None
+    recommended_amount: float
+    recommended_range: RangeParameters
     risk_metrics: RiskMetrics
-    recommended_amount_usdc: float
-    reasoning: str
+    entry_conditions_met: bool = True
 
 
 # ============= Portfolio & Analysis Models =============
