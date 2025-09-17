@@ -19,6 +19,9 @@ class PositionsService:
     POOL_FACTORY_ADDRESS = "0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A"
     LIQUIDITY_MANAGER_ADDRESS = "0x00c1Bc0CA9F703919C2BA320e5f200865F778AaE"
     SUGAR_ADDRESS = "0x27fc745390d1f4BaF8D184FBd97748340f786634"
+
+    # Known legacy position IDs that should be ignored (deprecated contracts)
+    IGNORED_POSITION_IDS = {25494740}
     
     # Token addresses
     AERO_ADDRESS = "0x940181a94A35A4569E4529A3CDfB74e38FD98631"
@@ -599,6 +602,11 @@ class PositionsService:
                 for index in range(balance):
                     try:
                         token_id = position_manager.functions.tokenOfOwnerByIndex(owner_address, index).call()
+                        if token_id in self.IGNORED_POSITION_IDS:
+                            logger.info(
+                                f"Skipping legacy position {token_id} for owner {owner_address}"
+                            )
+                            continue
                         all_position_ids.append(token_id)
                     except Exception as e:
                         logger.error(f"Failed to get unstaked position at index {index}: {str(e)}")
@@ -609,7 +617,13 @@ class PositionsService:
             # 2. Get staked positions from LiquidityManager
             try:
                 staked_position_ids = liquidity_manager.functions.getUserPositions(owner_address).call()
-                all_position_ids.extend(staked_position_ids)
+                for token_id in staked_position_ids:
+                    if token_id in self.IGNORED_POSITION_IDS:
+                        logger.info(
+                            f"Skipping legacy staked position {token_id} for owner {owner_address}"
+                        )
+                        continue
+                    all_position_ids.append(token_id)
             except Exception as e:
                 logger.error(f"Failed to get staked positions: {str(e)}")
             

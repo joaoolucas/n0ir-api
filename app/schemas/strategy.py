@@ -231,7 +231,11 @@ class AnalyzeRequest(BaseModel):
 class ScreenRequest(BaseModel):
     """Enhanced screening request."""
     executor_address: str
-    available_capital: float = Field(..., gt=0)
+    available_capital: Optional[float] = Field(
+        default=None,
+        ge=0,
+        description="Optional available capital override; if omitted the API fetches on-chain balance."
+    )
 
 
 class ScreenResponse(BaseModel):
