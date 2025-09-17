@@ -305,12 +305,12 @@ async def monitor_positions(request: MonitorRequest) -> MonitorResponse:
                 except Exception as e:
                     logger.warning(f"Could not check whipsaw for token {position.token_id}: {e}")
         
-        # Apply token ID filter if provided
+        # Apply position ID filter if provided
         positions = v1_monitor_response.positions
-        if request.token_ids:
-            positions = [p for p in positions if p.token_id in request.token_ids]
-            range_breaks = [r for r in range_breaks if r.token_id in request.token_ids]
-            whipsaw_detections = [w for w in whipsaw_detections if w.token_id in request.token_ids]
+        if request.position_ids:
+            positions = [p for p in positions if p.token_id in request.position_ids]
+            range_breaks = [r for r in range_breaks if r.token_id in request.position_ids]
+            whipsaw_detections = [w for w in whipsaw_detections if w.token_id in request.position_ids]
         
         # Calculate summary metrics
         total_alerts = len(range_breaks) + len(whipsaw_detections)
