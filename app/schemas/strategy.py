@@ -493,11 +493,10 @@ class PortfolioImprovement(BaseModel):
 class OpportunitiesResponse(BaseModel):
     """Response containing filtered and ranked opportunities."""
     opportunities: List[PoolOpportunity]
-    total_opportunities_found: int
-    filters_applied: List[str]
-    portfolio_metrics: Optional[PortfolioMetrics] = None
-    recommended_allocation: Dict[str, float] = Field(default_factory=dict)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    optimal_position_count: int
+    minimum_position_size: float
+    cache_hit: bool = False
+    analysis_time_ms: Optional[int] = None
 
 
 class MonitorPositionsResponse(BaseModel):
