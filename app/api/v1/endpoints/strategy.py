@@ -248,7 +248,7 @@ async def monitor_positions(request: MonitorRequest) -> MonitorResponse:
     try:
         # Get basic position monitoring
         v1_monitor_request = MonitorPositionsRequest(
-            user_address=request.user_address
+            user_address=request.executor_address
         )
         v1_monitor_response = await strategy_service.monitor_positions(v1_monitor_request)
         
@@ -327,7 +327,7 @@ async def monitor_positions(request: MonitorRequest) -> MonitorResponse:
         
         try:
             # Fetch the actual position data which contains current_value_usd
-            positions_data = await positions_service.get_positions_by_owner(request.user_address)
+            positions_data = await positions_service.get_positions_by_owner(request.executor_address)
             
             # Calculate weighted average APR
             total_value = 0
