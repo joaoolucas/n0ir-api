@@ -55,13 +55,16 @@ class RangeStatus(BaseModel):
 
 class RiskMetrics(BaseModel):
     """Risk metrics for position/pool analysis."""
-    volatility_1d: float = Field(..., ge=0)
-    volatility_7d: float = Field(..., ge=0)
-    var_95_1d: float
-    var_95_7d: float
+    volatility_24h: Optional[float] = Field(None, ge=0)
+    volatility_7d: Optional[float] = Field(None, ge=0)
+    volatility_1d: Optional[float] = Field(None, ge=0)
+    var_95_1d: Optional[float] = None
+    var_95_7d: Optional[float] = None
+    volume_tvl_ratio: Optional[float] = None
+    slippage_estimate: Optional[float] = None
     sharpe_ratio: Optional[float] = None
     max_drawdown: Optional[float] = None
-    impermanent_loss_estimate: float
+    impermanent_loss_estimate: Optional[float] = None
 
 
 class SlippageInfo(BaseModel):
