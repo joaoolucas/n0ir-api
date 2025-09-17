@@ -594,10 +594,12 @@ class StrategyService:
             'enter'
         )
         
+        # Convert slippage percentages to basis points (1% = 100 bps)
         slippage_info = SlippageInfo(
-            estimated_percentage=slippage_breakdown['total_slippage'],
-            max_acceptable=slippage_breakdown['max_recommended'],
-            pair_volatility_class=slippage_breakdown['pair_classification']
+            estimated_slippage_bps=slippage_breakdown['total_slippage'] * 100,  # Convert percentage to bps
+            max_slippage_bps=slippage_breakdown['max_recommended'] * 100,  # Convert percentage to bps
+            price_impact=slippage_breakdown.get('size_impact', 0),  # Use size impact as price impact
+            execution_price=pool.get('current_price', 1.0)  # Use current pool price as execution price
         )
         
         # Calculate risk metrics
