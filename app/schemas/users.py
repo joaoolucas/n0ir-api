@@ -142,12 +142,10 @@ class UserListResponse(BaseModel):
     created_at: datetime
     
     # Financial metrics
-    wallet_balance: Decimal = Field(..., description="Current wallet balance in USDC")
     total_portfolio_value: Decimal = Field(..., description="Total value: wallet + all positions")
     
     # Position metrics
     active_positions_count: int = Field(0, description="Number of active positions")
-    closed_positions_count: int = Field(0, description="Number of closed positions")
     
     # Performance metrics
     total_pnl_usdc: Decimal = Field(Decimal(0), description="Total PnL in USDC")

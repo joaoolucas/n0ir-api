@@ -321,10 +321,8 @@ async def list_users(
             cdp_wallet_address=user.cdp_wallet_address,
             status=user.status,
             created_at=user.created_at,
-            wallet_balance=wallet_balance,
             total_portfolio_value=total_portfolio_value,
             active_positions_count=len(active_positions),
-            closed_positions_count=len(closed_positions),
             total_pnl_usdc=total_pnl,
             total_pnl_percentage=total_pnl_percentage,
             agent_active=bool(user.cdp_wallet_address and user.cdp_wallet_address != "pending")
