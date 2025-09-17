@@ -932,7 +932,7 @@ class StrategyService:
             concentration_risk=100 - risk_score if risk_score > 0 else 0,
             market_risk=min(30 + (len([a for a in alerts if a.get('type') == 'critical']) * 20), 100),
             liquidity_risk=20,  # Default moderate liquidity risk
-            warnings=[f"Alert: {alert['message']}" for alert in alerts if alert.get('type') == 'warning')],
+            warnings=[f"Alert: {alert['message']}" for alert in alerts if alert.get('type') == 'warning'],
             recommendations=recommended_actions if recommended_actions else []
         )
         
