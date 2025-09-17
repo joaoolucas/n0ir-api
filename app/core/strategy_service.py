@@ -697,11 +697,11 @@ class StrategyService:
             range_width_percentage = 0
         
         optimal_range = RangeParameters(
-            lower_tick=lower_tick,
-            upper_tick=upper_tick,
-            lower_price=lower_price,
-            upper_price=upper_price,
-            range_percentage=range_width_percentage,
+            tick_lower=lower_tick,
+            tick_upper=upper_tick,
+            price_lower=lower_price,
+            price_upper=upper_price,
+            width_percentage=range_width_percentage,
             lower_percentage=lower_percentage,
             upper_percentage=upper_percentage
         )
