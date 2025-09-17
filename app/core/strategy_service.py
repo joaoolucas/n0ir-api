@@ -904,9 +904,44 @@ class StrategyService:
             diversification_score=portfolio_analysis.get('risk_score', 50)
         )
         
+        # Generate alerts based on position statuses
+        alerts = []
+        recommended_actions = []
+        
+        for status in position_statuses:
+            # Generate alerts for critical positions
+            if status.status == 'critical':
+                alerts.append({
+                    'token_id': status.token_id,
+                    'type': 'critical',
+                    'message': f'Position {status.token_id} is critical - {status.action_details}'
+                })
+                if status.recommended_action:
+                    recommended_actions.append(f"Token {status.token_id}: {status.recommended_action}")
+            elif status.status == 'warning':
+                alerts.append({
+                    'token_id': status.token_id,
+                    'type': 'warning',
+                    'message': f'Position {status.token_id} needs attention - {status.action_details}'
+                })
+        
+        # Create risk analysis
+        risk_analysis = RiskAnalysis(
+            portfolio_health_score=portfolio_analysis.get('risk_score', 50),
+            risk_level='high' if portfolio_analysis.get('risk_score', 50) < 30 else 
+                       'medium' if portfolio_analysis.get('risk_score', 50) < 70 else 'low',
+            max_drawdown_risk=portfolio_analysis.get('max_drawdown', 0),
+            concentration_risk=100 - portfolio_analysis.get('risk_score', 50) if portfolio_analysis.get('risk_score', 50) > 0 else 0,
+            impermanent_loss_risk=portfolio_analysis.get('impermanent_loss_risk', 0),
+            alerts=alerts
+        )
+        
         return MonitorPositionsResponse(
             positions=position_statuses,
-            portfolio_metrics=portfolio_metrics
+            alerts=alerts,
+            portfolio_metrics=portfolio_metrics,
+            risk_analysis=risk_analysis,
+            recommended_actions=recommended_actions
         )
     
     async def handle_range_break(
