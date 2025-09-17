@@ -80,7 +80,8 @@ class StrategyOrchestrator:
             analyses = await self._run_parallel_analyses(
                 user_context,
                 valid_opportunities,
-                available_capital
+                available_capital,
+                executor_address
             )
             
             # Build decision matrix with NAV context
@@ -206,7 +207,8 @@ class StrategyOrchestrator:
         self,
         user_context: Dict,
         opportunities: List[Dict],
-        available_capital: float
+        available_capital: float,
+        executor_address: str
     ) -> Dict[str, List]:
         """
         Run all analyses in parallel with error isolation.
@@ -218,7 +220,7 @@ class StrategyOrchestrator:
         
         # Create analysis tasks
         entry_tasks = [
-            self._analyze_entry(opp, available_capital)
+            self._analyze_entry(opp, available_capital, executor_address)
             for opp in top_opportunities
         ]
         
@@ -275,7 +277,8 @@ class StrategyOrchestrator:
     async def _analyze_entry(
         self,
         opportunity: Any,
-        available_capital: float
+        available_capital: float,
+        executor_address: str
     ) -> Optional[Dict]:
         """Analyze entry opportunity for a single pool."""
         try:
@@ -306,6 +309,7 @@ class StrategyOrchestrator:
             
             request = AnalyzeRequest(
                 analyze_type="entry",
+                executor_address=executor_address,
                 entry={"pool_address": pool_address, "amount_usdc": amount}
             )
             
