@@ -133,6 +133,30 @@ class UserResponse(BaseModel):
     updated_at: datetime
 
 
+class UserListResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
+    user_id: str  # The user's EOA wallet address
+    cdp_wallet_address: Optional[str] = Field(None, description="CDP smart wallet managed by agent")
+    status: Optional[UserStatus] = Field(UserStatus.ACTIVE, description="User status")
+    created_at: datetime
+    
+    # Financial metrics
+    wallet_balance: Decimal = Field(..., description="Current wallet balance in USDC")
+    total_portfolio_value: Decimal = Field(..., description="Total value: wallet + all positions")
+    
+    # Position metrics
+    active_positions_count: int = Field(0, description="Number of active positions")
+    closed_positions_count: int = Field(0, description="Number of closed positions")
+    
+    # Performance metrics
+    total_pnl_usdc: Decimal = Field(Decimal(0), description="Total PnL in USDC")
+    total_pnl_percentage: Decimal = Field(Decimal(0), description="Total PnL as percentage")
+    
+    # Agent status
+    agent_active: bool = Field(False, description="Whether agent is active (has CDP wallet)")
+
+
 class BalanceResponse(BaseModel):
     user_id: str
     wallet_balance_usdc: Decimal = Field(..., description="Current spendable balance in wallet")

@@ -560,7 +560,10 @@ class BlockchainDataService:
         wallet_address: str,
         db_session: AsyncSession
     ):
-        """Save wallet transaction data to database."""
+        """Save wallet transaction data to database using Transaction table."""
+        # Import Transaction model
+        from app.database.models import Transaction
+        
         try:
             transactions = wallet_data.get('transactions', [])
             transfers = wallet_data.get('transfers', [])
@@ -573,27 +576,54 @@ class BlockchainDataService:
             for tx_data in all_txs:
                 # Check if transaction already exists
                 existing = await db_session.execute(
-                    select(WalletTransaction).where(
-                        WalletTransaction.transaction_hash == tx_data['transaction_hash']
+                    select(Transaction).where(
+                        Transaction.tx_hash == tx_data['transaction_hash']
                     )
                 )
                 if existing.scalar_one_or_none():
                     continue
                 
-                # Create new wallet transaction
-                wallet_tx = WalletTransaction(
-                    transaction_hash=tx_data['transaction_hash'],
-                    block_number=tx_data['block_number'],
-                    from_address=tx_data['from_address'],
-                    to_address=tx_data.get('to_address'),
-                    value=tx_data.get('value'),
-                    gas=tx_data.get('gas'),
-                    gas_price=tx_data.get('gas_price'),
-                    gas_cost_eth=Decimal(str(tx_data.get('gas_cost_eth', 0))),
-                    timestamp=datetime.fromisoformat(tx_data['timestamp'].replace('Z', '+00:00')),
-                    is_agent_wallet=(tx_data['from_address'].lower() == wallet_address.lower() or 
-                                   tx_data.get('to_address', '').lower() == wallet_address.lower()),
-                    user_id=user_id
+                # Determine transaction type
+                from_addr = tx_data['from_address'].lower()
+                to_addr = tx_data.get('to_address', '').lower()
+                wallet_addr = wallet_address.lower()
+                
+                # Determine if it's a deposit or withdrawal
+                if from_addr == user_id.lower() and to_addr == wallet_addr:
+                    tx_type = 'DEPOSIT'  # From owner to CDP wallet
+                elif from_addr == wallet_addr and to_addr == user_id.lower():
+                    tx_type = 'WITHDRAW'  # From CDP wallet to owner
+                else:
+                    # Skip other transactions for now
+                    continue
+                
+                # Parse value as USDC amount if it's a transfer
+                amount_usdc = Decimal(0)
+                if 'value' in tx_data and tx_data['value']:
+                    # If it's a USDC transfer, value is already in USDC
+                    # If it's ETH, we'll skip it for now
+                    if 'usdc' in str(tx_data.get('token_symbol', '')).lower():
+                        amount_usdc = Decimal(str(tx_data['value'])) / Decimal(10**6)  # Convert from base units
+                
+                # Create new transaction
+                wallet_tx = Transaction(
+                    user_id=user_id,
+                    tx_type=tx_type,
+                    amount_usdc=amount_usdc,
+                    tx_hash=tx_data['transaction_hash'],
+                    status='CONFIRMED',
+                    event_data={
+                        'type': 'wallet_transaction',
+                        'block_number': tx_data['block_number'],
+                        'from_address': tx_data['from_address'],
+                        'to_address': tx_data.get('to_address'),
+                        'value': tx_data.get('value'),
+                        'gas': tx_data.get('gas'),
+                        'gas_price': tx_data.get('gas_price'),
+                        'gas_cost_eth': str(tx_data.get('gas_cost_eth', 0)),
+                        'timestamp': tx_data['timestamp'],
+                        'is_agent_wallet': (from_addr == wallet_addr or to_addr == wallet_addr)
+                    }
                 )
                 db_session.add(wallet_tx)
                 saved_count += 1
@@ -611,14 +641,16 @@ class BlockchainDataService:
         user_id: str,
         db_session: AsyncSession
     ):
-        """Save liquidity events to database."""
+        """Save liquidity events to database using Transaction table."""
+        # Import Transaction model
+        from app.database.models import Transaction
+        
         try:
             for event_data in events:
-                # Check if event already exists
+                # Check if event already exists in transactions table
                 existing = await db_session.execute(
-                    select(LiquidityEvent).where(
-                        LiquidityEvent.transaction_hash == event_data['transaction_hash'],
-                        LiquidityEvent.log_index == event_data['log_index']
+                    select(Transaction).where(
+                        Transaction.tx_hash == event_data['transaction_hash']
                     )
                 )
                 if existing.scalar_one_or_none():
@@ -640,20 +672,35 @@ class BlockchainDataService:
                     token_id = decoded.get('token_id')
                     owner_address = decoded.get('owner')
                 
-                # Create new liquidity event
-                event = LiquidityEvent(
-                    transaction_hash=event_data['transaction_hash'],
-                    block_number=event_data['block_number'],
-                    log_index=event_data['log_index'],
-                    event_signature=event_data['event_signature'],
-                    event_name=event_data.get('event_name'),
-                    contract_address=event_data['address'],
-                    parameters=event_data.get('parameters'),
-                    topics=event_data.get('topics'),
-                    token_id=int(token_id) if token_id else None,
-                    owner_address=owner_address,
-                    timestamp=datetime.fromisoformat(event_data['timestamp'].replace('Z', '+00:00')),
-                    user_id=user_id
+                # Determine transaction type based on event
+                event_name = event_data.get('event_name', '').lower()
+                if 'mint' in event_name or 'increase' in event_name:
+                    tx_type = 'POSITION_CREATED'
+                elif 'burn' in event_name or 'decrease' in event_name:
+                    tx_type = 'POSITION_CLOSED'
+                else:
+                    tx_type = 'POSITION_CREATED'  # Default
+                
+                # Store liquidity event as transaction with event data in metadata
+                event = Transaction(
+                    user_id=user_id,
+                    tx_type=tx_type,
+                    amount_usdc=Decimal(0),  # Will be updated when we get more details
+                    tx_hash=event_data['transaction_hash'],
+                    status='CONFIRMED',
+                    event_data={
+                        'type': 'liquidity_event',
+                        'event_name': event_data.get('event_name'),
+                        'event_signature': event_data['event_signature'],
+                        'block_number': event_data['block_number'],
+                        'log_index': event_data['log_index'],
+                        'contract_address': event_data['address'],
+                        'parameters': event_data.get('parameters'),
+                        'topics': event_data.get('topics'),
+                        'tokenId': str(token_id) if token_id else None,
+                        'owner_address': owner_address,
+                        'timestamp': event_data['timestamp']
+                    }
                 )
                 db_session.add(event)
             

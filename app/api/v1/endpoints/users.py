@@ -11,7 +11,7 @@ from app.core.positions_service import positions_service
 from app.core.config import settings
 from app.schemas.users import (
     CreateUserRequest, UpdateUserRequest, DepositRequest, WithdrawRequest, WithdrawResponse,
-    UserResponse, TransactionResponse, TransactionListResponse,
+    UserResponse, UserListResponse, TransactionResponse, TransactionListResponse,
     PositionResponse, PositionListResponse, CreatePositionRequest, ClosePositionRequest,
     BalanceResponse, PnLResponse, PerformanceResponse,
     UserStatus, TransactionType, TransactionStatus, PositionStatus, TimePeriod
@@ -240,26 +240,98 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
 
 
 # User Management Endpoints
-@router.get("", response_model=List[UserResponse])
+@router.get("", response_model=List[UserListResponse])
 async def list_users(
     db: AsyncSession = Depends(get_db)
 ):
-    """List all users with their current balances.
+    """List all users with enhanced metrics including portfolio value and PnL.
     
-    This endpoint is used by the balance monitor to track which agents should be running.
+    Returns comprehensive user data including:
+    - Wallet balance and total portfolio value
+    - Position counts (active/closed)
+    - Total PnL metrics
+    - Agent status
     """
     service = UserService(db)
     users = await service.list_all_users()
     
-    # Get balance for each user
-    users_with_balance = []
-    for user in users:
-        balance = await service.get_user_balance(user.user_id)
-        user_dict = UserResponse.model_validate(user).model_dump()
-        user_dict['usdc_balance'] = float(balance)
-        users_with_balance.append(user_dict)
+    # Batch fetch all positions for performance
+    from sqlalchemy import select
+    from app.database.models import Position
+    stmt = select(Position)
+    result = await db.execute(stmt)
+    all_positions = result.scalars().all()
     
-    return users_with_balance
+    # Group positions by user
+    positions_by_user = {}
+    for position in all_positions:
+        if position.user_id not in positions_by_user:
+            positions_by_user[position.user_id] = []
+        positions_by_user[position.user_id].append(position)
+    
+    # Build enhanced response for each user
+    enhanced_users = []
+    for user in users:
+        # Get wallet balance
+        wallet_balance = await service.get_user_balance(user.user_id)
+        
+        # Get user's positions
+        user_positions = positions_by_user.get(user.user_id, [])
+        
+        # Count positions by status
+        active_positions = [p for p in user_positions if p.status == DBPositionStatus.ACTIVE]
+        closed_positions = [p for p in user_positions if p.status == DBPositionStatus.CLOSED]
+        
+        # Calculate current positions value (for active positions only)
+        current_positions_value = Decimal(0)
+        for position in active_positions:
+            try:
+                # Try to get real-time value from blockchain
+                position_info = await positions_service.get_position_by_id(position.nft_token_id)
+                current_value_usd = Decimal(str(position_info.current_value_usd or 0))
+                unclaimed_fees_usd = Decimal(str(position_info.unclaimed_fees_usd or 0))
+                current_positions_value += (current_value_usd + unclaimed_fees_usd)
+            except Exception:
+                # Fallback to database value if blockchain query fails
+                current_positions_value += (position.current_value_usdc or Decimal(0))
+        
+        # Calculate total portfolio value
+        total_portfolio_value = Decimal(str(wallet_balance)) + current_positions_value
+        
+        # Calculate total PnL from all positions
+        total_realized_pnl = sum(p.realized_pnl_usdc or Decimal(0) for p in closed_positions)
+        total_unrealized_pnl = sum(p.realized_pnl_usdc or Decimal(0) for p in active_positions)
+        total_fees = sum(p.fees_earned_usdc or Decimal(0) for p in user_positions)
+        total_rewards = sum(p.rewards_earned_usdc or Decimal(0) for p in user_positions)
+        
+        total_pnl = total_realized_pnl + total_unrealized_pnl + total_fees + total_rewards
+        
+        # Calculate PnL percentage based on total deposits
+        total_pnl_percentage = Decimal(0)
+        if len(user_positions) > 0:
+            # Get total deposits minus withdrawals
+            total_deposits, total_withdrawals = await service.get_deposit_withdrawal_totals(user.user_id)
+            net_deposits = total_deposits - total_withdrawals
+            if net_deposits > 0:
+                total_pnl_percentage = (total_pnl / net_deposits) * 100
+        
+        # Build enhanced response
+        enhanced_user = UserListResponse(
+            user_id=user.user_id,
+            cdp_wallet_address=user.cdp_wallet_address,
+            status=user.status,
+            created_at=user.created_at,
+            wallet_balance=wallet_balance,
+            total_portfolio_value=total_portfolio_value,
+            active_positions_count=len(active_positions),
+            closed_positions_count=len(closed_positions),
+            total_pnl_usdc=total_pnl,
+            total_pnl_percentage=total_pnl_percentage,
+            agent_active=bool(user.cdp_wallet_address and user.cdp_wallet_address != "pending")
+        )
+        enhanced_users.append(enhanced_user)
+    
+    return enhanced_users
 
 
 @router.post("", response_model=UserResponse, status_code=201)
