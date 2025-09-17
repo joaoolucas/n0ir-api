@@ -14,7 +14,8 @@ from app.core.pools_service import pools_service
 from app.core.rebalancing_config import RebalancingStrategy, RebalancingThresholds
 from app.schemas.strategy import (
     AnalyzeRequest,
-    OpportunitiesRequest
+    OpportunitiesRequest,
+    OpportunitiesResponse
 )
 # Schema imports will be handled in the endpoint to avoid circular imports
 
@@ -191,7 +192,14 @@ class StrategyOrchestrator:
             available_capital=available_capital
         )
         response = await self.strategy_service.find_opportunities(request)
-        return response.get('opportunities', [])
+
+        if isinstance(response, OpportunitiesResponse):
+            return [opp.dict() for opp in response.opportunities]
+
+        if isinstance(response, dict):
+            return response.get('opportunities', [])
+
+        return []
     
     
     async def _run_parallel_analyses(
