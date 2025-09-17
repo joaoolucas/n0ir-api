@@ -114,6 +114,13 @@ async def screen_opportunities(request: ScreenRequest):
         # Convert entry analyses
         entry_analyses = []
         for entry in result.get('entry_analyses', []):
+            # Convert optimal_range to dict if it's a RangeParameters object
+            optimal_range = entry.get('optimal_range', {})
+            if hasattr(optimal_range, 'model_dump'):
+                optimal_range = optimal_range.model_dump()
+            elif hasattr(optimal_range, 'dict'):
+                optimal_range = optimal_range.dict()
+
             entry_analyses.append(EntryAnalysis(
                 pool_address=entry['pool_address'],
                 pool_name=entry.get('pool_name', 'Unknown'),
@@ -121,7 +128,7 @@ async def screen_opportunities(request: ScreenRequest):
                 optimal_allocation=entry['optimal_allocation'],
                 expected_apr=entry['expected_apr'],
                 risk_metrics=entry.get('risk_metrics', {}),
-                optimal_range=entry.get('optimal_range', {})
+                optimal_range=optimal_range
             ))
         
         # Convert exit recommendations
