@@ -16,6 +16,7 @@ from app.schemas.strategy import (
     WhipsawAlert,
     ErrorResponse,
     ErrorDetail,
+    RangeStatus,
     # Legacy Models
     OpportunitiesRequest,
     MonitorPositionsRequest,

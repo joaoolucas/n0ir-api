@@ -35,6 +35,22 @@ class RangeParameters(BaseModel):
     width_percentage: float = Field(..., ge=0, le=100)
 
 
+class RangeStatus(BaseModel):
+    """Range status for a position."""
+    in_range: bool = Field(..., description="Whether the position is currently in range")
+    price_position: float = Field(..., description="Current price relative to range (0.0 = lower bound, 1.0 = upper bound)")
+    range_break_severity: float = Field(..., ge=0, le=100, description="Severity of range break (0-100)")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "in_range": True,
+                "price_position": 0.5,
+                "range_break_severity": 0
+            }
+        }
+
+
 class RiskMetrics(BaseModel):
     """Risk metrics for position/pool analysis."""
     volatility_1d: float = Field(..., ge=0)
@@ -82,16 +98,14 @@ class PositionStatus(BaseModel):
     """Status of an existing position."""
     token_id: int
     pool_address: str
-    is_active: bool
-    in_range: bool
-    current_price: float
-    range_parameters: RangeParameters
-    liquidity: float
-    unclaimed_fees_usd: float
-    current_value_usd: float
-    pnl_usd: float
-    pnl_percentage: float
-    time_held_hours: float
+    status: str = Field(..., description="Position status (active, inactive, etc.)")
+    health_score: float = Field(..., ge=0, le=100, description="Position health score")
+    current_apr: float = Field(..., description="Current effective APR")
+    accumulated_fees: float = Field(..., description="Accumulated fees in USD")
+    accumulated_rewards: float = Field(..., description="Accumulated rewards in USD")
+    range_status: RangeStatus = Field(..., description="Range status information")
+    recommended_action: str = Field(..., description="Recommended action (hold, rebalance, exit, monitor)")
+    action_details: Optional[Dict[str, Any]] = Field(None, description="Details about the recommended action")
 
 
 class PoolOpportunity(BaseModel):
@@ -247,34 +261,33 @@ class RangeBreakAlert(BaseModel):
     """Alert for range break detection."""
     token_id: int
     pool_address: str
-    break_type: Literal["upward", "downward"]
-    current_price: float
-    range_lower: float
-    range_upper: float
-    break_percentage: float
-    recommended_action: Literal["rebalance", "exit", "hold"]
-    urgency: Literal["low", "medium", "high", "critical"]
-    reasoning: str
+    severity: float = Field(..., description="Severity of the range break")
+    action: str = Field(..., description="Recommended action")
+    urgency: str = Field(..., description="Urgency level")
+    reversal_probability: float = Field(..., description="Probability of price reversal")
+    expected_loss_if_reversal: float = Field(..., description="Expected loss if reversal occurs")
 
 
 class WhipsawAlert(BaseModel):
     """Alert for whipsaw detection."""
     token_id: int
     pool_address: str
-    whipsaw_count: int
-    time_window_hours: float
-    false_signal_probability: float
-    recommended_action: Literal["wait", "widen_range", "exit"]
-    reasoning: str
+    whipsaw_detected: bool = Field(..., description="Whether whipsaw was detected")
+    severity: float = Field(..., description="Severity of the whipsaw pattern")
+    pattern: str = Field(..., description="Description of the whipsaw pattern")
+    recommended_action: str = Field(..., description="Recommended action")
 
 
 class MonitorResponse(BaseModel):
     """Response from position monitoring."""
-    positions_checked: int
+    positions: List[PositionStatus]
+    portfolio_metrics: PortfolioMetrics
     range_breaks: List[RangeBreakAlert]
-    whipsaw_alerts: List[WhipsawAlert]
-    portfolio_health: float = Field(..., ge=0, le=100)
+    whipsaw_detections: List[WhipsawAlert]
+    total_alerts: int
+    critical_alerts: int
     recommended_actions: List[str]
+    average_apr: float
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -519,6 +532,7 @@ __all__ = [
     'ErrorDetail',
     'ErrorResponse',
     'RangeParameters',
+    'RangeStatus',
     'RiskMetrics',
     'SlippageInfo',
     'ExecutionParams',

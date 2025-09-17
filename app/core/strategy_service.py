@@ -21,7 +21,7 @@ from app.schemas.strategy import (
     RangeBreakRequest, RangeBreakResponse,
     WhipsawDetectionRequest, WhipsawDetectionResponse,
     RiskMetrics, SlippageInfo, RiskAnalysis, RangeParameters,
-    PositionStatus, PortfolioMetrics,
+    PositionStatus, PortfolioMetrics, RangeStatus,
     ExecutionParams, AlternativeAction, RangeBreakMetrics,
     OptimalTiming, AlternativeStrategy, RebalanceRecommendation,
     PortfolioImprovement, SwitchRecommendation,
@@ -895,10 +895,13 @@ class StrategyService:
         portfolio_analysis = self.portfolio_analyzer.calculate_portfolio_metrics(portfolio_positions)
         
         portfolio_metrics = PortfolioMetrics(
-            total_value=portfolio_analysis['total_value'],
-            unrealized_pnl=portfolio_analysis['unrealized_pnl'],
-            current_apr=portfolio_analysis['current_apr'],
-            risk_score=portfolio_analysis['risk_score']
+            total_value_usd=portfolio_analysis['total_value'],
+            total_pnl_usd=portfolio_analysis['unrealized_pnl'],
+            total_pnl_percentage=portfolio_analysis.get('unrealized_pnl_percentage', 0),
+            active_positions=len(position_statuses),
+            average_apr=portfolio_analysis['current_apr'],
+            portfolio_volatility=portfolio_analysis.get('volatility', 0),
+            diversification_score=portfolio_analysis.get('risk_score', 50)
         )
         
         return MonitorPositionsResponse(
