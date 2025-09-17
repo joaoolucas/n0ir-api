@@ -925,15 +925,15 @@ class StrategyService:
                     'message': f'Position {status.token_id} needs attention - {status.action_details}'
                 })
         
-        # Create risk analysis
+        # Create risk analysis matching the RiskAnalysis model fields
+        risk_score = portfolio_analysis.get('risk_score', 50)
         risk_analysis = RiskAnalysis(
-            portfolio_health_score=portfolio_analysis.get('risk_score', 50),
-            risk_level='high' if portfolio_analysis.get('risk_score', 50) < 30 else 
-                       'medium' if portfolio_analysis.get('risk_score', 50) < 70 else 'low',
-            max_drawdown_risk=portfolio_analysis.get('max_drawdown', 0),
-            concentration_risk=100 - portfolio_analysis.get('risk_score', 50) if portfolio_analysis.get('risk_score', 50) > 0 else 0,
-            impermanent_loss_risk=portfolio_analysis.get('impermanent_loss_risk', 0),
-            alerts=alerts
+            overall_risk_score=100 - risk_score,  # Convert from portfolio health to risk
+            concentration_risk=100 - risk_score if risk_score > 0 else 0,
+            market_risk=min(30 + (len([a for a in alerts if a.get('type') == 'critical']) * 20), 100),
+            liquidity_risk=20,  # Default moderate liquidity risk
+            warnings=[f"Alert: {alert['message']}" for alert in alerts if alert.get('type') == 'warning')],
+            recommendations=recommended_actions if recommended_actions else []
         )
         
         return MonitorPositionsResponse(
