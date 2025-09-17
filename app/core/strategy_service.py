@@ -565,14 +565,21 @@ class StrategyService:
         """
         Analyze a potential position entry with detailed risk assessment.
         """
+        # Extract entry data
+        if not request.entry_data:
+            raise ValueError("entry_data is required for entry analysis")
+        
+        pool_address = request.entry_data.pool_address
+        amount_usdc = request.entry_data.amount_usdc
+        
         # Fetch pool data
-        pool = await pools_service.get_pool(request.pool_address)
+        pool = await pools_service.get_pool(pool_address)
         if not pool:
-            raise ValueError(f"Pool {request.pool_address} not found")
+            raise ValueError(f"Pool {pool_address} not found")
         
         # Check if pool is whitelisted (case-insensitive comparison)
         whitelisted_lower = {addr.lower() for addr in WHITELISTED_POOLS}
-        if request.pool_address.lower() not in whitelisted_lower:
+        if pool_address.lower() not in whitelisted_lower:
             warnings = ["Pool is not in the whitelist"]
         else:
             warnings = []
@@ -583,7 +590,7 @@ class StrategyService:
         # Calculate slippage
         slippage_breakdown = self.slippage_calc.calculate_slippage_breakdown(
             pool,
-            request.amount_usdc,
+            amount_usdc,
             'enter'
         )
         
@@ -595,9 +602,9 @@ class StrategyService:
         
         # Calculate risk metrics
         risk_metrics = self.calculator.calculate_risk_metrics(
-            {'invested_amount': request.amount_usdc},
+            {'invested_amount': amount_usdc},
             pool,
-            request.amount_usdc * 5  # Assume 5x portfolio size
+            amount_usdc * 5  # Assume 5x portfolio size
         )
         
         risk_analysis = RiskAnalysis(
@@ -697,7 +704,7 @@ class StrategyService:
         should_enter = (
             confidence_score >= 70 and
             slippage_breakdown['total_slippage'] <= 2.0 and
-            request.pool_address.lower() in whitelisted_lower and
+            pool_address.lower() in whitelisted_lower and
             effective_apr >= 50 and  # Minimum 50% effective APR for entry
             pool.get('tvl_usd', 0) >= 500_000 and
             pool.get('volume_24h', 0) >= 100_000

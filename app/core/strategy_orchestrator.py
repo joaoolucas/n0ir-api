@@ -307,10 +307,15 @@ class StrategyOrchestrator:
             else:
                 amount = min(recommended_allocation, available_capital)
             
+            from app.schemas.strategy import AnalyzeEntryData
+            
             request = AnalyzeRequest(
                 analyze_type="entry",
                 executor_address=executor_address,
-                entry={"pool_address": pool_address, "amount_usdc": amount}
+                entry_data=AnalyzeEntryData(
+                    pool_address=pool_address,
+                    amount_usdc=amount
+                )
             )
             
             response = await self.strategy_service.analyze_entry(request)
