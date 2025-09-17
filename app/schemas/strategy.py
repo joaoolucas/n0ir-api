@@ -33,6 +33,8 @@ class RangeParameters(BaseModel):
     price_lower: float
     price_upper: float
     width_percentage: float = Field(..., ge=0, le=100)
+    lower_percentage: Optional[float] = None
+    upper_percentage: Optional[float] = None
 
 
 class RangeStatus(BaseModel):
