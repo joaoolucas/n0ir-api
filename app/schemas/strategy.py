@@ -403,7 +403,8 @@ class OpportunitiesRequest(BaseModel):
 
 class MonitorPositionsRequest(BaseModel):
     """Request for monitoring positions (legacy)."""
-    executor_address: str
+    user_address: str  # This is what strategy_service expects
+    executor_address: Optional[str] = None  # Keep for compatibility
     check_all_positions: bool = True
     position_ids: Optional[List[int]] = None
 

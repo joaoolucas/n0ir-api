@@ -248,7 +248,8 @@ async def monitor_positions(request: MonitorRequest) -> MonitorResponse:
     try:
         # Get basic position monitoring
         v1_monitor_request = MonitorPositionsRequest(
-            executor_address=request.executor_address,
+            user_address=request.executor_address,  # Map executor_address to user_address
+            executor_address=request.executor_address,  # Keep for compatibility
             check_all_positions=request.check_all_positions,
             position_ids=request.position_ids
         )
