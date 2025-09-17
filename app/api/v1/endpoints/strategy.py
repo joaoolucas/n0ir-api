@@ -102,20 +102,6 @@ async def screen_opportunities(request: ScreenRequest):
             available_capital=available_capital
         )
         
-        # Import enhanced response model
-        from app.schemas.strategy_v2_enhanced import (
-            EnhancedScreenResponse,
-            UserContext,
-            EntryAnalysis,
-            ExitRecommendation,
-            SwitchRecommendation as EnhancedSwitchRecommendation,
-            DecisionMatrix,
-            ImmediateAction,
-            ScheduledAction,
-            CapitalAllocation,
-            RiskAlert
-        )
-        
         # Build user context
         user_context = UserContext(
             executor_address=result.get('user_context', {}).get('executor_address', request.executor_address),
