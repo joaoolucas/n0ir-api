@@ -17,6 +17,16 @@ from app.schemas.strategy import (
     ErrorResponse,
     ErrorDetail,
     RangeStatus,
+    EnhancedScreenResponse,
+    UserContext,
+    EntryAnalysis,
+    ExitRecommendation,
+    SwitchRecommendation,
+    DecisionMatrix,
+    ImmediateAction,
+    ScheduledAction,
+    CapitalAllocation,
+    RiskAlert,
     # Legacy Models
     OpportunitiesRequest,
     MonitorPositionsRequest,
@@ -144,13 +154,13 @@ async def screen_opportunities(request: ScreenRequest):
         # Convert switch recommendations
         switch_recommendations = []
         for switch in result.get('switch_recommendations', []):
-            switch_recommendations.append(EnhancedSwitchRecommendation(
+            switch_recommendations.append(SwitchRecommendation(
                 from_token_id=switch['from_token_id'],
                 from_pool=switch['from_pool'],
                 to_pool_address=switch['to_pool_address'],
                 to_pool_name=switch.get('to_pool_name', 'Unknown'),
-                apr_improvement=switch['apr_improvement'],
-                net_benefit_after_costs=switch['net_benefit_after_costs'],
+                apr_improvement=switch.get('apr_improvement', 0),
+                net_benefit_after_costs=switch.get('net_benefit_after_costs', 0),
                 confidence=switch.get('confidence', 0)
             ))
         
@@ -367,5 +377,3 @@ async def monitor_positions(request: MonitorRequest) -> MonitorResponse:
     except Exception as e:
         logger.error(f"Error monitoring positions: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
