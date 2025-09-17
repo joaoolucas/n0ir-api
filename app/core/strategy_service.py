@@ -609,10 +609,39 @@ class StrategyService:
             amount_usdc * 5  # Assume 5x portfolio size
         )
         
+        # Create risk analysis with proper schema fields
+        # Calculate risk scores based on available metrics
+        position_var_1d = risk_metrics.get('position_var_1d', 0)
+        portfolio_impact = risk_metrics.get('portfolio_impact', 0)
+        
+        # Calculate overall risk score (0-100 scale)
+        overall_risk = min(100, position_var_1d * 2)  # Scale VaR to 0-100
+        concentration_risk = min(100, portfolio_impact * 100) if portfolio_impact > 0.2 else portfolio_impact * 100
+        market_risk = min(100, position_var_1d * 3)  # Market volatility component
+        liquidity_risk = 20 if pool.get('tvl_usd', 0) < 1_000_000 else 10  # Based on TVL
+        
+        risk_warnings = []
+        risk_recommendations = []
+        
+        if position_var_1d > 20:
+            risk_warnings.append(f"High daily value at risk: {position_var_1d:.1f}%")
+            risk_recommendations.append("Consider reducing position size")
+        
+        if portfolio_impact > 0.3:
+            risk_warnings.append(f"High portfolio concentration: {portfolio_impact * 100:.1f}%")
+            risk_recommendations.append("Diversify across multiple pools")
+        
+        if pool.get('tvl_usd', 0) < 500_000:
+            risk_warnings.append("Low pool TVL may cause high slippage")
+            risk_recommendations.append("Use smaller position sizes")
+        
         risk_analysis = RiskAnalysis(
-            position_var_1d=risk_metrics['position_var_1d'],
-            portfolio_impact=risk_metrics['portfolio_impact'],
-            correlation_benefit=risk_metrics['correlation_benefit']
+            overall_risk_score=overall_risk,
+            concentration_risk=concentration_risk,
+            market_risk=market_risk,
+            liquidity_risk=liquidity_risk,
+            warnings=risk_warnings if risk_warnings else ["No significant risks identified"],
+            recommendations=risk_recommendations if risk_recommendations else ["Position parameters are within acceptable limits"]
         )
         
         # Always calculate optimal range - this is our proposal to the executor
@@ -715,7 +744,7 @@ class StrategyService:
         # Add warnings for risks
         if slippage_breakdown['total_slippage'] > 1.5:
             warnings.append(f"High slippage: {slippage_breakdown['total_slippage']:.2f}%")
-        if risk_metrics['concentration_risk']:
+        if risk_metrics.get('concentration_risk', False):
             warnings.append("Position would create concentration risk")
         if effective_apr is not None and effective_apr < 10:
             efficiency_str = f"{apr_efficiency:.1f}" if apr_efficiency is not None else "N/A"
