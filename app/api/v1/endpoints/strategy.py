@@ -248,7 +248,9 @@ async def monitor_positions(request: MonitorRequest) -> MonitorResponse:
     try:
         # Get basic position monitoring
         v1_monitor_request = MonitorPositionsRequest(
-            user_address=request.executor_address
+            executor_address=request.executor_address,
+            check_all_positions=request.check_all_positions,
+            position_ids=request.position_ids
         )
         v1_monitor_response = await strategy_service.monitor_positions(v1_monitor_request)
         

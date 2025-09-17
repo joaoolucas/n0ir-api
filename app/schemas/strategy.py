@@ -239,6 +239,8 @@ class MonitorRequest(BaseModel):
     executor_address: str
     check_all_positions: bool = True
     position_ids: Optional[List[int]] = None
+    check_range_breaks: bool = True
+    check_whipsaw: bool = True
 
 
 class RangeBreakAlert(BaseModel):
