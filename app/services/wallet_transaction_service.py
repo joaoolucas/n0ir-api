@@ -47,6 +47,7 @@ class WalletTransactionService:
         # Method signatures for LiquidityManager
         self.POSITION_METHOD_SIGNATURES = {
             "0x3a1e3569": "openPosition",
+            "0x2b17db59": "openPosition",  # Alternative openPosition signature
             "0xe0891d91": "closePosition"
         }
     
