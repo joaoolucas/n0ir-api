@@ -19,7 +19,7 @@ class TransactionType(Enum):
     DEPOSIT = "DEPOSIT"
     WITHDRAWAL = "WITHDRAWAL"
     STAKING = "STAKING"
-    POSITION_OPENED = "POSITION_OPENED"
+    POSITION_CREATED = "POSITION_CREATED"
     POSITION_CLOSED = "POSITION_CLOSED"
     UNKNOWN = "UNKNOWN"
 
@@ -363,7 +363,7 @@ class WalletTransactionService:
                 details["usdc_out"] = position_event["usdc_out"]
                 details["aero_in"] = position_event["aero_in"]
                 details["aero_out"] = position_event["aero_out"]
-                return TransactionType.POSITION_OPENED, details
+                return TransactionType.POSITION_CREATED, details
             
             elif method_name == "closePosition":
                 details["amount"] = position_event["usdc_in"] if position_event["usdc_in"] > 0 else position_event["usdc_out"]
@@ -464,7 +464,7 @@ class WalletTransactionService:
             TransactionType.DEPOSIT: [],
             TransactionType.WITHDRAWAL: [],
             TransactionType.STAKING: [],
-            TransactionType.POSITION_OPENED: [],
+            TransactionType.POSITION_CREATED: [],
             TransactionType.POSITION_CLOSED: [],
             TransactionType.UNKNOWN: []
         }
@@ -489,8 +489,8 @@ class WalletTransactionService:
                     total_withdrawn += Decimal(details["amount"]) / Decimal(1_000_000)
                 
                 # Save to database if it's a financial or position transaction
-                if tx_type in [TransactionType.DEPOSIT, TransactionType.WITHDRAWAL, 
-                              TransactionType.POSITION_OPENED, TransactionType.POSITION_CLOSED]:
+                if tx_type in [TransactionType.DEPOSIT, TransactionType.WITHDRAWAL,
+                              TransactionType.POSITION_CREATED, TransactionType.POSITION_CLOSED]:
                     await self._save_transaction(
                         user_id=user_id,
                         tx_type=tx_type.value,
@@ -505,7 +505,7 @@ class WalletTransactionService:
             "deposits": len(categorized[TransactionType.DEPOSIT]),
             "withdrawals": len(categorized[TransactionType.WITHDRAWAL]),
             "stakings": len(categorized[TransactionType.STAKING]),
-            "positions_opened": len(categorized[TransactionType.POSITION_OPENED]),
+            "positions_opened": len(categorized[TransactionType.POSITION_CREATED]),
             "positions_closed": len(categorized[TransactionType.POSITION_CLOSED]),
             "unknown": len(categorized[TransactionType.UNKNOWN]),
             "total_deposited": total_deposited,
@@ -538,7 +538,7 @@ class WalletTransactionService:
             }
             
             # Add position-specific data if available
-            if tx_type in ["POSITION_OPENED", "POSITION_CLOSED"]:
+            if tx_type in ["POSITION_CREATED", "POSITION_CLOSED"]:
                 if details.get("method_sig"):
                     event_data["method_sig"] = details["method_sig"]
                 if details.get("usdc_in") is not None:

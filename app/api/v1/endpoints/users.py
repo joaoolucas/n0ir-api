@@ -668,7 +668,7 @@ async def get_transactions(
     Transactions are categorized as:
     - DEPOSIT: USDC from owner wallet to CDP wallet
     - WITHDRAW: USDC from CDP wallet to owner wallet
-    - POSITION_OPENED: Position opened via LiquidityManager
+    - POSITION_CREATED: Position opened via LiquidityManager
     - POSITION_CLOSED: Position closed via LiquidityManager
     """
     # First check if user has a CDP wallet and fetch fresh data
