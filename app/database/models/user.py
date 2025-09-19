@@ -21,7 +21,8 @@ class User(Base):
     
     # CDP Wallet information
     cdp_wallet_address = Column(String(42), unique=True, nullable=True, index=True)
-    
+    owner_wallet_address = Column(String(42), nullable=True)  # Added missing column
+
     # Wallet balance tracking fields (watcher-owned) - these DO exist
     usdc_balance = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
     last_deposit_block = Column(Integer, nullable=True)
@@ -29,15 +30,27 @@ class User(Base):
     total_deposits_usdc = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
     total_withdrawals_usdc = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
     last_scanned_block = Column(Integer, nullable=True)
-    
+
+    # PnL tracking fields - these exist in database
+    unrealized_pnl_usd = Column(Numeric(precision=20, scale=2), default=0, nullable=False)
+    unrealized_pnl_pct = Column(Numeric(precision=20, scale=2), default=0, nullable=False)
+    realized_pnl_usd = Column(Numeric(precision=20, scale=2), default=0, nullable=False)
+    realized_pnl_pct = Column(Numeric(precision=20, scale=2), default=0, nullable=False)
+
     # Agent startup requirement tracking
     has_deposited_50_usdc = Column(Boolean, default=False, nullable=False)
-    
+
+    # Agent tracking timestamps
+    agent_started_at = Column(DateTime(timezone=True), nullable=True)
+    agent_stopped_at = Column(DateTime(timezone=True), nullable=True)
+    last_balance_check = Column(DateTime(timezone=True), nullable=True)
+
     # PnL is tracked in positions table, not here
     # Agent tracking moved to user_metadata JSONB field
-    
+
     # Flexible metadata storage
     user_metadata = Column(JSONB, default={}, nullable=False)
+    agent_metadata = Column(JSONB, nullable=True)
     # Expected user_metadata fields:
     # - agent_status: not_started, starting, running, stopping, stopped, failed
     # - agent_started_at: timestamp
@@ -117,6 +130,6 @@ class User(Base):
         self.user_metadata['cdp_wallet_name'] = value
 
     # PnL properties removed - calculated from positions instead
-    
+
     def __repr__(self):
-        return f"<User(user_id={self.user_id}, cdp_wallet={self.cdp_wallet_address}, balance={float(self.usdc_balance):.2f})>"
+        return f"<User(user_id={self.user_id}, cdp_wallet={self.cdp_wallet_address}, balance={float(self.usdc_balance):.2f}, realized_pnl={float(self.realized_pnl_usd):.2f})>"
