@@ -18,7 +18,7 @@ from app.core.pools_service import pools_service
 class TransactionType(Enum):
     """Transaction types for categorization."""
     DEPOSIT = "DEPOSIT"
-    WITHDRAWAL = "WITHDRAWAL"
+    WITHDRAW = "WITHDRAW"  # Changed from WITHDRAWAL to match schema
     STAKING = "STAKING"
     POSITION_CREATED = "POSITION_CREATED"
     POSITION_CLOSED = "POSITION_CLOSED"
@@ -460,7 +460,7 @@ class WalletTransactionService:
             details["amount"] = withdrawal_amount
             details["description"] = f"USDC withdrawal to owner wallet"
             details["cdp_wallet"] = cdp_wallet
-            return TransactionType.WITHDRAWAL, details
+            return TransactionType.WITHDRAW, details
         
         if found_staking:
             details["description"] = "Interaction with position manager (staking)"
@@ -488,7 +488,7 @@ class WalletTransactionService:
         """
         categorized = {
             TransactionType.DEPOSIT: [],
-            TransactionType.WITHDRAWAL: [],
+            TransactionType.WITHDRAW: [],
             TransactionType.STAKING: [],
             TransactionType.POSITION_CREATED: [],
             TransactionType.POSITION_CLOSED: [],
@@ -511,11 +511,11 @@ class WalletTransactionService:
                 # Track totals
                 if tx_type == TransactionType.DEPOSIT:
                     total_deposited += Decimal(details["amount"]) / Decimal(1_000_000)
-                elif tx_type == TransactionType.WITHDRAWAL:
+                elif tx_type == TransactionType.WITHDRAW:
                     total_withdrawn += Decimal(details["amount"]) / Decimal(1_000_000)
                 
                 # Save to database if it's a financial or position transaction
-                if tx_type in [TransactionType.DEPOSIT, TransactionType.WITHDRAWAL,
+                if tx_type in [TransactionType.DEPOSIT, TransactionType.WITHDRAW,
                               TransactionType.POSITION_CREATED, TransactionType.POSITION_CLOSED]:
                     await self._save_transaction(
                         user_id=user_id,
@@ -529,7 +529,7 @@ class WalletTransactionService:
         return {
             "total": len(transactions),
             "deposits": len(categorized[TransactionType.DEPOSIT]),
-            "withdrawals": len(categorized[TransactionType.WITHDRAWAL]),
+            "withdrawals": len(categorized[TransactionType.WITHDRAW]),
             "stakings": len(categorized[TransactionType.STAKING]),
             "positions_opened": len(categorized[TransactionType.POSITION_CREATED]),
             "positions_closed": len(categorized[TransactionType.POSITION_CLOSED]),

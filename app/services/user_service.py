@@ -495,7 +495,7 @@ class UserService:
         transaction = Transaction(
             id=uuid.uuid4(),
             user_id=user_id,
-            tx_type='WITHDRAWAL',
+            tx_type='WITHDRAW',  # Changed from WITHDRAWAL to match schema
             tx_hash=tx_hash,
             status='PENDING' if not tx_hash else 'CONFIRMED',
             event_data={
