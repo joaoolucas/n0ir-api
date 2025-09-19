@@ -778,6 +778,10 @@ class WalletTransactionService:
             
             self.db.add(transaction)
             logger.info(f"Saved {tx_type} transaction: {details['tx_hash'][:10]}... Amount: {amount_usdc} USDC")
+
+            # If this is a POSITION_CLOSED transaction, update the position status
+            if tx_type == "POSITION_CLOSED" and details.get("nft_token_id"):
+                await self._close_position_if_needed(user_id, details["nft_token_id"], details["tx_hash"], amount_usdc)
         else:
             # Update existing transaction if needed
             if existing_tx.tx_type == "UNKNOWN" and tx_type != "UNKNOWN":
@@ -786,3 +790,44 @@ class WalletTransactionService:
                 existing_tx.event_data["recategorized"] = True
                 existing_tx.event_data["description"] = details.get("description", "")
                 logger.info(f"Recategorized transaction {details['tx_hash'][:10]}... as {tx_type}")
+
+    async def _close_position_if_needed(
+        self,
+        user_id: str,
+        nft_token_id: int,
+        tx_hash: str,
+        final_value_usdc: Decimal
+    ) -> None:
+        """Close a position when a POSITION_CLOSED transaction is detected."""
+        from app.database.models import Position
+        from sqlalchemy import select, and_
+
+        try:
+            # Check if position exists and is active
+            stmt = select(Position).where(
+                and_(
+                    Position.token_id == nft_token_id,
+                    Position.user_id == user_id,
+                    Position.status == 'ACTIVE'
+                )
+            )
+            result = await self.db.execute(stmt)
+            position = result.scalar_one_or_none()
+
+            if position:
+                # Calculate realized PnL
+                realized_pnl = final_value_usdc - position.entry_amount_usdc
+
+                # Update position to CLOSED
+                position.status = 'CLOSED'
+                position.exit_date = datetime.utcnow()
+                position.exit_tx_hash = tx_hash
+                position.realized_pnl_usdc = realized_pnl
+                position.current_value_usdc = final_value_usdc
+                # unrealized_pnl_usdc is a computed property, not a column
+
+                logger.info(f"Closed position {nft_token_id} for user {user_id} with realized PnL: {realized_pnl} USDC")
+            else:
+                logger.warning(f"Position {nft_token_id} not found or already closed for user {user_id}")
+        except Exception as e:
+            logger.error(f"Error closing position {nft_token_id}: {e}")
