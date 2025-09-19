@@ -355,9 +355,28 @@ async def create_user(
     # Validate wallet address format
     if not request.user_id.startswith("0x") or len(request.user_id) != 42:
         raise HTTPException(status_code=400, detail="Invalid wallet address format")
-    
-    # Signature verification removed - not needed for CDP wallet generation
-    logger.info(f"Creating user {request.user_id} without signature verification")
+
+    # Verify signature to prove wallet ownership
+    from eth_account.messages import encode_defunct
+    from eth_account import Account
+
+    try:
+        # Recreate the message hash
+        message = encode_defunct(text=request.message)
+        # Recover the address from the signature
+        recovered_address = Account.recover_message(message, signature=request.signature)
+
+        # Check if recovered address matches the claimed user_id
+        if recovered_address.lower() != request.user_id.lower():
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid signature - does not match the claimed wallet address"
+            )
+
+        logger.info(f"Signature verified for user {request.user_id}")
+    except Exception as e:
+        logger.error(f"Signature verification failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid signature")
     
     user_service = UserService(db)
     
@@ -428,8 +447,27 @@ async def withdraw(
         request: Withdrawal request with amount and options
     """
     try:
-        # Signature verification removed - not needed for withdrawals
-        logger.info(f"Processing withdrawal for {user_id} without signature verification")
+        # Verify signature to prove wallet ownership
+        from eth_account.messages import encode_defunct
+        from eth_account import Account
+
+        try:
+            # Recreate the message hash
+            message = encode_defunct(text=request.message)
+            # Recover the address from the signature
+            recovered_address = Account.recover_message(message, signature=request.signature)
+
+            # Check if recovered address matches the user requesting withdrawal
+            if recovered_address.lower() != user_id.lower():
+                raise HTTPException(
+                    status_code=401,
+                    detail="Invalid signature - does not match the user's wallet address"
+                )
+
+            logger.info(f"Signature verified for withdrawal request from {user_id}")
+        except Exception as e:
+            logger.error(f"Signature verification failed for withdrawal: {e}")
+            raise HTTPException(status_code=401, detail="Invalid signature")
 
         service = UserService(db)
         

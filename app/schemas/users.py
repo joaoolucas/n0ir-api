@@ -44,6 +44,8 @@ class TimePeriod(str, enum.Enum):
 # Request Models
 class CreateUserRequest(BaseModel):
     user_id: str = Field(..., description="User's wallet address (EOA)")
+    signature: str = Field(..., description="Signature proving ownership of the wallet")
+    message: str = Field(..., description="Message that was signed")
     start_agent: bool = Field(True, description="Whether to start agent and create CDP wallet")
 
 
@@ -59,6 +61,8 @@ class DepositRequest(BaseModel):
 class WithdrawRequest(BaseModel):
     amount_usdc: Decimal = Field(..., gt=0, description="Amount to withdraw in USDC")
     destination_address: Optional[str] = Field(None, description="Destination wallet address (defaults to user's address)")
+    signature: str = Field(..., description="Signature proving ownership of the wallet")
+    message: str = Field(..., description="Message that was signed")
     tx_hash: Optional[str] = Field(None, description="Transaction hash if already executed")
     force_close_positions: bool = Field(True, description="Automatically close positions if needed for withdrawal")
     max_slippage_percent: Decimal = Field(Decimal("0.5"), description="Maximum acceptable slippage when closing positions (%)")
