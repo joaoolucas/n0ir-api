@@ -740,6 +740,14 @@ class WalletTransactionService:
                 # Add NFT token ID if available
                 if details.get("nft_token_id"):
                     event_data["nft_token_id"] = details["nft_token_id"]
+                elif tx_type in ["POSITION_CREATED", "POSITION_CLOSED"]:
+                    # Try to find the NFT token ID by matching position
+                    nft_token_id = await self._find_position_for_transaction(
+                        user_id, tx_type, amount_usdc, details
+                    )
+                    if nft_token_id:
+                        event_data["nft_token_id"] = nft_token_id
+                        logger.info(f"Found matching position {nft_token_id} for {tx_type} transaction")
 
                 # Use pool_name from details if available, otherwise try to fetch it
                 if details.get("pool_name"):
@@ -790,6 +798,103 @@ class WalletTransactionService:
                 existing_tx.event_data["recategorized"] = True
                 existing_tx.event_data["description"] = details.get("description", "")
                 logger.info(f"Recategorized transaction {details['tx_hash'][:10]}... as {tx_type}")
+
+    async def _find_position_for_transaction(
+        self,
+        user_id: str,
+        tx_type: str,
+        amount_usdc: Decimal,
+        details: Dict[str, Any]
+    ) -> Optional[int]:
+        """Find matching position for a transaction that's missing nft_token_id."""
+        from app.database.models import Position
+        from sqlalchemy import select, and_, func
+
+        try:
+            timestamp = datetime.fromisoformat(details["timestamp"].replace("Z", "+00:00")) if details.get("timestamp") else datetime.utcnow()
+
+            if tx_type == "POSITION_CREATED":
+                # Find position created around the same time with similar amount
+                stmt = select(Position).where(
+                    and_(
+                        Position.user_id == user_id,
+                        func.abs(Position.entry_amount_usdc - amount_usdc) < 0.01,
+                        # Position created within 5 minutes of transaction
+                        func.abs(
+                            func.extract('epoch', Position.created_at - timestamp)
+                        ) < 300
+                    )
+                ).order_by(
+                    func.abs(Position.entry_amount_usdc - amount_usdc),
+                    func.abs(func.extract('epoch', Position.created_at - timestamp))
+                )
+
+                result = await self.db.execute(stmt)
+                position = result.scalar_one_or_none()
+
+                if position:
+                    # Update position's entry_tx_hash if missing
+                    if not position.entry_tx_hash:
+                        position.entry_tx_hash = details["tx_hash"]
+                    return position.token_id
+
+            elif tx_type == "POSITION_CLOSED":
+                # Find active position or recently closed position
+                # First try to find an active position that should be closed
+                stmt = select(Position).where(
+                    and_(
+                        Position.user_id == user_id,
+                        Position.status == 'ACTIVE',
+                        Position.created_at < timestamp
+                    )
+                ).order_by(
+                    # Prefer positions created closer to the close time
+                    func.abs(func.extract('epoch', Position.created_at - timestamp))
+                )
+
+                result = await self.db.execute(stmt)
+                positions = result.scalars().all()
+
+                # Check if any of these positions don't have a POSITION_CLOSED transaction
+                from app.database.models import Transaction
+                for position in positions:
+                    # Check if this position already has a POSITION_CLOSED transaction
+                    tx_stmt = select(Transaction).where(
+                        and_(
+                            Transaction.tx_type == 'POSITION_CLOSED',
+                            Transaction.event_data['nft_token_id'].astext == str(position.token_id)
+                        )
+                    )
+                    tx_result = await self.db.execute(tx_stmt)
+                    if not tx_result.scalar_one_or_none():
+                        # This position doesn't have a POSITION_CLOSED transaction yet
+                        return position.token_id
+
+                # If no active position without close transaction, try recently closed positions
+                stmt = select(Position).where(
+                    and_(
+                        Position.user_id == user_id,
+                        Position.status == 'CLOSED',
+                        Position.exit_date != None,
+                        func.abs(
+                            func.extract('epoch', Position.exit_date - timestamp)
+                        ) < 300
+                    )
+                ).order_by(
+                    func.abs(func.extract('epoch', Position.exit_date - timestamp))
+                )
+
+                result = await self.db.execute(stmt)
+                position = result.scalar_one_or_none()
+
+                if position:
+                    return position.token_id
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error finding position for transaction: {e}")
+            return None
 
     async def _close_position_if_needed(
         self,
