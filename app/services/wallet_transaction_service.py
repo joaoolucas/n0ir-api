@@ -250,43 +250,133 @@ class WalletTransactionService:
         - aero_in: AERO amount received
         - aero_out: AERO amount sent
         - pool: Pool address if found
+        - nft_token_id: NFT position token ID if found
         """
         position_event = None
         usdc_flows = {"in": 0, "out": 0}
         aero_flows = {"in": 0, "out": 0}
         pool_addresses = set()  # Track all potential pool addresses
 
+        # PRIORITY 1: Check for PositionClosed or PositionOpened events in logs
+        # Events are the source of truth - they explicitly tell us what happened
+        for trace in traces:
+            # Check if trace has logs/events
+            if "logs" in trace:
+                for log in trace.get("logs", []):
+                    # Look for event signatures
+                    # PositionClosed event signature would be in topics[0]
+                    topics = log.get("topics", [])
+                    if topics:
+                        event_sig = topics[0] if topics else None
+                        # Event signatures for position management
+                        # These are standard Uniswap V3 NonfungiblePositionManager events
+                        DECREASE_LIQUIDITY_EVENT = "0x26f6a048ee9138f2c0ce266f322cb99228e8d619ae2bff30c67f8dcf9d2377b4"  # DecreaseLiquidity
+                        INCREASE_LIQUIDITY_EVENT = "0x3067048beee31b25b2f1681f88dac838c8bba36af25bfb2b7cf7473a5847e35f"  # IncreaseLiquidity
+                        COLLECT_EVENT = "0x40d0efd1a53d60ecbf40971b9daf7dc90178c3aadc7aab1765632738fa8b8f01"  # Collect
+
+                        if event_sig:
+                            # Normalize event signature for comparison
+                            event_sig_normalized = event_sig.lower() if isinstance(event_sig, str) else str(event_sig).lower()
+
+                            # Try to extract NFT token ID from the log
+                            # For DecreaseLiquidity and IncreaseLiquidity events, tokenId is usually the first topic after event signature
+                            nft_token_id = None
+                            if len(topics) > 1:
+                                # Topics[1] typically contains the indexed tokenId parameter
+                                try:
+                                    # Remove 0x prefix and convert hex to int
+                                    token_id_hex = topics[1].replace('0x', '') if isinstance(topics[1], str) else str(topics[1]).replace('0x', '')
+                                    nft_token_id = int(token_id_hex, 16) if token_id_hex else None
+                                except (ValueError, TypeError):
+                                    pass
+
+                            # Check for position closing events (DecreaseLiquidity to 0 or Collect after decrease)
+                            if event_sig_normalized == DECREASE_LIQUIDITY_EVENT.lower() or event_sig_normalized == COLLECT_EVENT.lower():
+                                # Check if this is a full close (liquidity decreased to 0)
+                                # For now, treat any decrease/collect as potential close
+                                # More sophisticated logic could check if liquidity went to 0
+                                position_event = {
+                                    "method_sig": "0xe0891d91",  # closePosition method signature
+                                    "method_name": "closePosition",
+                                    "event_detected": "DecreaseLiquidity/Collect",
+                                    "event_signature": event_sig_normalized
+                                }
+                                if nft_token_id:
+                                    position_event["nft_token_id"] = nft_token_id
+                                # Don't break - keep looking for more specific events
+
+                            # Check for position opening events (IncreaseLiquidity)
+                            elif event_sig_normalized == INCREASE_LIQUIDITY_EVENT.lower():
+                                position_event = {
+                                    "method_sig": trace.get("input", "")[:10] if trace.get("input") else "0x3a1e3569",
+                                    "method_name": "openPosition",
+                                    "event_detected": "IncreaseLiquidity",
+                                    "event_signature": event_sig_normalized
+                                }
+                                if nft_token_id:
+                                    position_event["nft_token_id"] = nft_token_id
+                                # Don't break - keep looking for more specific events
+
+                            # Also check for text-based event names in the log data
+                            log_str = str(log).lower()
+                            if "positionclosed" in log_str or "position closed" in log_str:
+                                position_event = {
+                                    "method_sig": "0xe0891d91",  # closePosition method signature
+                                    "method_name": "closePosition",
+                                    "event_detected": "PositionClosed",
+                                    "event_signature": event_sig_normalized
+                                }
+                                break  # This is definitive
+                            elif "positionopened" in log_str or "position opened" in log_str:
+                                position_event = {
+                                    "method_sig": trace.get("input", "")[:10] if trace.get("input") else "0x3a1e3569",
+                                    "method_name": "openPosition",
+                                    "event_detected": "PositionOpened",
+                                    "event_signature": event_sig_normalized
+                                }
+                                break  # This is definitive
+
+        # PRIORITY 2: If no events found, fall back to method signature analysis
+        # But only if we didn't already find a position event
+        if not position_event:
+            for trace in traces:
+                from_addr = trace.get("from", "").lower()
+                to_addr = trace.get("to", "").lower()
+                input_data = trace.get("input", "")
+
+                # Track interactions with contracts that might be pools
+                # Pools typically interact with token contracts and liquidity managers
+                # Look for contracts that aren't known token/protocol addresses
+                if to_addr and to_addr not in [
+                    self.USDC_ADDRESS,
+                    self.AERO_ADDRESS,
+                    self.LIQUIDITY_MANAGER,
+                    cdp_wallet
+                ] and not to_addr.startswith("0x000000"):  # Exclude zero addresses
+                    # Check if it looks like a pool contract (has certain patterns)
+                    # Pools typically receive calls from liquidity manager or interact with tokens
+                    if from_addr == self.LIQUIDITY_MANAGER or to_addr != from_addr:
+                        pool_addresses.add(to_addr)
+
+                # Check for LiquidityManager interaction (only if no event-based detection)
+                if not position_event and to_addr == self.LIQUIDITY_MANAGER and from_addr == cdp_wallet:
+                    if len(input_data) >= 10:
+                        method_sig = input_data[:10]
+                        if method_sig in self.POSITION_METHOD_SIGNATURES:
+                            position_event = {
+                                "method_sig": method_sig,
+                                "method_name": self.POSITION_METHOD_SIGNATURES[method_sig],
+                                "event_detected": "method_signature_fallback"
+                            }
+
+        # Always track USDC transfers regardless of position detection
         for trace in traces:
             from_addr = trace.get("from", "").lower()
             to_addr = trace.get("to", "").lower()
             input_data = trace.get("input", "")
 
-            # Track interactions with contracts that might be pools
-            # Pools typically interact with token contracts and liquidity managers
-            # Look for contracts that aren't known token/protocol addresses
-            if to_addr and to_addr not in [
-                self.USDC_ADDRESS,
-                self.AERO_ADDRESS,
-                self.LIQUIDITY_MANAGER,
-                cdp_wallet
-            ] and not to_addr.startswith("0x000000"):  # Exclude zero addresses
-                # Check if it looks like a pool contract (has certain patterns)
-                # Pools typically receive calls from liquidity manager or interact with tokens
-                if from_addr == self.LIQUIDITY_MANAGER or to_addr != from_addr:
-                    pool_addresses.add(to_addr)
-
-            # Check for LiquidityManager interaction
-            if to_addr == self.LIQUIDITY_MANAGER and from_addr == cdp_wallet:
-                if len(input_data) >= 10:
-                    method_sig = input_data[:10]
-                    if method_sig in self.POSITION_METHOD_SIGNATURES:
-                        position_event = {
-                            "method_sig": method_sig,
-                            "method_name": self.POSITION_METHOD_SIGNATURES[method_sig]
-                        }
-            
             # Track USDC transfers
-            elif to_addr == self.USDC_ADDRESS:
+            if to_addr == self.USDC_ADDRESS:
                 decoded = self._decode_erc20_input(input_data)
                 if decoded:
                     if decoded["method"] == "transfer":
@@ -299,9 +389,9 @@ class WalletTransactionService:
                             usdc_flows["out"] += decoded["amount"]
                         elif decoded["to"].lower() == cdp_wallet:
                             usdc_flows["in"] += decoded["amount"]
-            
+
             # Track AERO transfers
-            elif to_addr == self.AERO_ADDRESS:
+            if to_addr == self.AERO_ADDRESS:
                 decoded = self._decode_erc20_input(input_data)
                 if decoded:
                     if decoded["method"] == "transfer":
@@ -396,9 +486,11 @@ class WalletTransactionService:
                 details["description"] = f"Position closed via LiquidityManager"
                 details["method_sig"] = position_event["method_sig"]
                 details["usdc_in"] = position_event["usdc_in"]
-                details["usdc_out"] = position_event["usdc_out"] 
+                details["usdc_out"] = position_event["usdc_out"]
                 details["aero_in"] = position_event["aero_in"]
                 details["aero_out"] = position_event["aero_out"]
+                details["pool"] = position_event.get("pool")  # Include pool address
+                details["nft_token_id"] = position_event.get("nft_token_id")  # Include NFT token ID
                 return TransactionType.POSITION_CLOSED, details
         
         # Check all traces for patterns
@@ -578,7 +670,12 @@ class WalletTransactionService:
                 if details.get("pool"):
                     event_data["pool"] = details["pool"]
 
-                    # Try to fetch pool name from pools_service
+                # Add NFT token ID if available
+                if details.get("nft_token_id"):
+                    event_data["nft_token_id"] = details["nft_token_id"]
+
+                # Try to fetch pool name from pools_service (if pool address is available)
+                if details.get("pool"):
                     try:
                         pool_data = await pools_service.get_pool(details["pool"], include_effective_apr=False)
                         symbol = pool_data.get('symbol', '')
