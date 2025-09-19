@@ -18,6 +18,7 @@ class TransactionType(str, enum.Enum):
     WITHDRAW = "WITHDRAW"
     POSITION_CREATED = "POSITION_CREATED"
     POSITION_CLOSED = "POSITION_CLOSED"
+    AERO_SWAP = "AERO_SWAP"
 
 
 class TransactionStatus(str, enum.Enum):
@@ -196,9 +197,9 @@ class TransactionResponse(BaseModel):
                 'position_opened': 'POSITION_CREATED',
                 'STAKING': 'POSITION_CREATED',
                 'staking': 'POSITION_CREATED',
-                # Map internal types to closest public type
-                'aero_swap': 'POSITION_CLOSED',
-                'AERO_SWAP': 'POSITION_CLOSED',
+                # Map swap types
+                'aero_swap': 'AERO_SWAP',
+                'AERO_SWAP': 'AERO_SWAP',
                 'fee_collection': 'POSITION_CLOSED',
                 'FEE_COLLECTION': 'POSITION_CLOSED',
                 'PROTOCOL_FEE': 'POSITION_CLOSED',
