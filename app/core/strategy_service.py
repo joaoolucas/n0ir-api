@@ -771,6 +771,7 @@ class StrategyService:
         # Fetch positions for the user
         try:
             positions_data = await positions_service.get_positions_by_owner(request.user_address)
+            logger.info(f"Found {len(positions_data)} positions for {request.user_address}")
         except Exception as e:
             logger.error(f"Error fetching positions for {request.user_address}: {e}")
             positions_data = []
@@ -779,8 +780,49 @@ class StrategyService:
         
         for position_data in positions_data:
             # Fetch current pool data with APR
-            pool = await pools_service.get_pool(position_data.pool_address, include_effective_apr=True)
-            if not pool:
+            try:
+                pool = await pools_service.get_pool(position_data.pool_address, include_effective_apr=True)
+                if not pool:
+                    logger.warning(f"No pool data for position {position_data.id} at {position_data.pool_address}")
+                    # Create minimal position status even without pool data
+                    position_status = PositionStatus(
+                        token_id=position_data.id,
+                        pool_address=position_data.pool_address,
+                        status='unknown',
+                        health_score=0,
+                        current_apr=0,
+                        accumulated_fees=position_data.unclaimed_fees_usd or 0,
+                        accumulated_rewards=0,
+                        range_status=RangeStatus(
+                            in_range=position_data.in_range if hasattr(position_data, 'in_range') else False,
+                            price_position=0.5,
+                            range_break_severity=0
+                        ),
+                        recommended_action='monitor',
+                        action_details={'reason': 'Pool data unavailable'}
+                    )
+                    position_statuses.append(position_status)
+                    continue
+            except Exception as e:
+                logger.error(f"Error fetching pool data for position {position_data.id}: {e}")
+                # Create minimal position status on error
+                position_status = PositionStatus(
+                    token_id=position_data.id,
+                    pool_address=position_data.pool_address,
+                    status='error',
+                    health_score=0,
+                    current_apr=0,
+                    accumulated_fees=position_data.unclaimed_fees_usd or 0,
+                    accumulated_rewards=0,
+                    range_status=RangeStatus(
+                        in_range=False,
+                        price_position=0.5,
+                        range_break_severity=0
+                    ),
+                    recommended_action='review',
+                    action_details={'reason': f'Error fetching pool data: {str(e)}'}
+                )
+                position_statuses.append(position_status)
                 continue
             
             # Check range status using tick-based comparison for accuracy
