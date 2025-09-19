@@ -247,7 +247,6 @@ class PerformanceResponse(BaseModel):
     pnl_usdc: Decimal
     pnl_pct: Decimal
     active_positions: int
-    blockchain_data: Optional[Dict[str, Any]] = None  # CDP SQL API data
 
 
 # List Response Models

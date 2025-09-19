@@ -1011,7 +1011,6 @@ async def get_pnl(
 async def get_performance(
     user_id: str,
     period: Optional[TimePeriod] = Query(None, description="Time period for performance calculation (24h, 7d, 30d, all)"),
-    include_blockchain: bool = Query(False, description="Include on-chain data from CDP SQL API"),
     db: AsyncSession = Depends(get_db)
 ):
     """Get simplified user performance metrics.
@@ -1192,12 +1191,28 @@ async def get_performance(
                         apr = float(monitor_response.portfolio_summary.weighted_apr or 0)
         except Exception as e:
             logger.warning(f"Failed to get APR from strategy service: {e}")
-            # Fallback to 0 if strategy service fails
+            # Fallback - calculate simple average APR from positions
             apr = 0.0
+            active_count = 0
+            total_apr = 0.0
+
+            for position in positions:
+                if position.status == 'ACTIVE' and position.pool_address:
+                    try:
+                        pool_data = await pools_service.get_pool(position.pool_address)
+                        if pool_data and 'apr' in pool_data:
+                            pool_apr = float(pool_data.get('apr', 0))
+                            total_apr += pool_apr
+                            active_count += 1
+                    except Exception:
+                        pass
+
+            if active_count > 0:
+                apr = total_apr / active_count
     
-    # Add blockchain data if requested
-    blockchain_data = None
-    if include_blockchain and user.cdp_wallet_address:
+    # Note: blockchain_data parameter has been removed
+    # Gas costs and detailed blockchain metrics are now tracked via transaction events
+    if False:  # Removed blockchain data fetching
         from app.services.blockchain_data_service import BlockchainDataService
         blockchain_service = BlockchainDataService()
         
@@ -1244,9 +1259,8 @@ async def get_performance(
         apr=apr,
         balance=total_portfolio_value,
         pnl_usdc=pnl_full,  # Use pnl_full (realized + unrealized) matching /pnl endpoint
-        pnl_pct=pnl_full_pct,  # Use pnl_full_pct matching /pnl endpoint
-        active_positions=active_positions_count if active_positions_count is not None else len(positions),
-        blockchain_data=blockchain_data
+        pnl_pct=float(pnl_full_pct),  # Use pnl_full_pct matching /pnl endpoint, convert to float
+        active_positions=active_positions_count if active_positions_count is not None else len(positions)
     )
 
 
