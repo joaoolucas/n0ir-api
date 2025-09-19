@@ -291,7 +291,8 @@ async def monitor_positions(request: MonitorRequest) -> MonitorResponse:
                 try:
                     # Check for whipsaw
                     v1_whipsaw_request = WhipsawDetectionRequest(
-                        token_id=position.token_id
+                        token_id=position.token_id,
+                        executor_address=request.executor_address
                     )
                     v1_whipsaw_response = await strategy_service.detect_whipsaw(v1_whipsaw_request)
                     
