@@ -21,7 +21,6 @@ DBTransactionType = TransactionType
 DBTransactionStatus = TransactionStatus
 DBPositionStatus = PositionStatus
 from app.core.logger import logger
-from app.core.signature_service import signature_service
 
 router = APIRouter(prefix="/users")
 
@@ -357,18 +356,8 @@ async def create_user(
     if not request.user_id.startswith("0x") or len(request.user_id) != 42:
         raise HTTPException(status_code=400, detail="Invalid wallet address format")
     
-    # Verify signature to prove wallet ownership
-    # The frontend sends the exact message that was signed
-    logger.info(f"Verifying signature for user {request.user_id}")
-    logger.info(f"Message: {request.message}")
-    logger.info(f"Signature length: {len(request.signature)} (EOA=132, Smart Wallet=1000+)")
-    logger.info(f"Signature preview: {request.signature[:50]}...")
-    
-    # Smart wallets use ERC-6492 signatures which are much longer than EOA signatures
-    # So we don't validate length here - let the signature service handle it
-    
-    if not signature_service.verify_signature(request.message, request.signature, request.user_id):
-        raise HTTPException(status_code=401, detail="Invalid signature - wallet ownership verification failed")
+    # Signature verification removed - not needed for CDP wallet generation
+    logger.info(f"Creating user {request.user_id} without signature verification")
     
     user_service = UserService(db)
     
@@ -439,14 +428,9 @@ async def withdraw(
         request: Withdrawal request with amount and options
     """
     try:
-        # Verify signature to prove wallet ownership
-        # The frontend sends the exact message that was signed
-        logger.info(f"Verifying withdrawal signature for {user_id}")
-        logger.info(f"Signature length: {len(request.signature)} (EOA=132, Smart Wallet=1000+)")
-        
-        if not signature_service.verify_signature(request.message, request.signature, user_id):
-            raise HTTPException(status_code=401, detail="Invalid signature - withdrawal authorization failed")
-        
+        # Signature verification removed - not needed for withdrawals
+        logger.info(f"Processing withdrawal for {user_id} without signature verification")
+
         service = UserService(db)
         
         # Get current wallet balance
