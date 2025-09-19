@@ -77,11 +77,23 @@ class Position(Base):
     
     # Removed JSONB hybrid properties - not needed
     
-    # Removed backward compatibility properties - use actual column names
-    
-    # Simplified PnL properties removed - calculated in service layer
-    
-    # All hedge and compatibility properties removed - not needed
-    
+    # Backward compatibility properties for schema validation
+    @property
+    def nft_token_id(self) -> int:
+        """Alias for token_id to maintain compatibility with PositionResponse schema."""
+        return self.token_id
+
+    @property
+    def unrealized_pnl_usdc(self) -> Decimal:
+        """Calculate unrealized PnL from current value and entry amount."""
+        if self.current_value_usdc and self.entry_amount_usdc:
+            return self.current_value_usdc - self.entry_amount_usdc
+        return Decimal(0)
+
+    @property
+    def last_updated(self) -> datetime:
+        """Alias for updated_at to maintain compatibility."""
+        return self.updated_at
+
     def __repr__(self):
         return f"<Position(token_id={self.token_id}, user={self.user_id}, status={self.status})>"
