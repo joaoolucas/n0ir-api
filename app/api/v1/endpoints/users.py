@@ -551,7 +551,12 @@ async def get_balance(
         transaction_type=DBTransactionType.DEPOSIT,
         status=DBTransactionStatus.CONFIRMED
     )
-    total_deposited = sum(t.amount_usdc for t in all_deposits)
+    # Get amount from event_data (amount_usdc column is deprecated)
+    total_deposited = sum(
+        Decimal(str(t.event_data.get('amount_usdc', 0))) if t.event_data and 'amount_usdc' in t.event_data
+        else Decimal(0)
+        for t in all_deposits
+    )
     
     # Get all confirmed withdrawals to calculate net deposits
     all_withdrawals = await service.get_user_transactions(
@@ -559,7 +564,12 @@ async def get_balance(
         transaction_type=DBTransactionType.WITHDRAW,
         status=DBTransactionStatus.CONFIRMED
     )
-    total_withdrawn = sum(t.amount_usdc for t in all_withdrawals)
+    # Get amount from event_data (amount_usdc column is deprecated)
+    total_withdrawn = sum(
+        Decimal(str(t.event_data.get('amount_usdc', 0))) if t.event_data and 'amount_usdc' in t.event_data
+        else Decimal(0)
+        for t in all_withdrawals
+    )
     
     # Calculate net deposited (deposits minus withdrawals)
     net_deposited = total_deposited - total_withdrawn
@@ -622,14 +632,24 @@ async def get_balance(
         transaction_type=DBTransactionType.DEPOSIT,
         status=DBTransactionStatus.PENDING
     )
-    pending_deposits_amount = sum(t.amount_usdc for t in pending_deposits)
+    # Get amount from event_data (amount_usdc column is deprecated)
+    pending_deposits_amount = sum(
+        Decimal(str(t.event_data.get('amount_usdc', 0))) if t.event_data and 'amount_usdc' in t.event_data
+        else Decimal(0)
+        for t in pending_deposits
+    )
     
     pending_withdrawals = await service.get_user_transactions(
         user_id=user_id,
         transaction_type=DBTransactionType.WITHDRAW,
         status=DBTransactionStatus.PENDING
     )
-    pending_withdrawals_amount = sum(t.amount_usdc for t in pending_withdrawals)
+    # Get amount from event_data (amount_usdc column is deprecated)
+    pending_withdrawals_amount = sum(
+        Decimal(str(t.event_data.get('amount_usdc', 0))) if t.event_data and 'amount_usdc' in t.event_data
+        else Decimal(0)
+        for t in pending_withdrawals
+    )
     
     # Calculate available balance (wallet balance is all available since position funds are tracked separately)
     available_balance = wallet_balance - pending_withdrawals_amount
@@ -917,7 +937,12 @@ async def get_pnl(
                         created_at = created_at.replace(tzinfo=timezone.utc)
                     if created_at >= time_boundary:
                         filtered_deposits.append(t)
-            total_deposits = sum(Decimal(str(t.amount_usdc)) for t in filtered_deposits)
+            # Get amount from event_data (amount_usdc column is deprecated)
+            total_deposits = sum(
+                Decimal(str(t.event_data.get('amount_usdc', 0))) if t.event_data and 'amount_usdc' in t.event_data
+                else Decimal(0)
+                for t in filtered_deposits
+            )
             
             # Get withdrawals for the period
             withdrawal_stmt = select(Transaction).where(
@@ -939,7 +964,12 @@ async def get_pnl(
                         created_at = created_at.replace(tzinfo=timezone.utc)
                     if created_at >= time_boundary:
                         filtered_withdrawals.append(t)
-            total_withdrawals = sum(Decimal(str(t.amount_usdc)) for t in filtered_withdrawals)
+            # Get amount from event_data (amount_usdc column is deprecated)
+            total_withdrawals = sum(
+                Decimal(str(t.event_data.get('amount_usdc', 0))) if t.event_data and 'amount_usdc' in t.event_data
+                else Decimal(0)
+                for t in filtered_withdrawals
+            )
         else:
             # All time - get all deposits and withdrawals
             total_deposits, total_withdrawals = await service.get_deposit_withdrawal_totals(user_id)
@@ -1075,7 +1105,12 @@ async def get_performance(
                     created_at = created_at.replace(tzinfo=timezone.utc)
                 if created_at >= time_boundary:
                     filtered_deposits.append(t)
-        total_deposits = sum(Decimal(str(t.amount_usdc)) for t in filtered_deposits)
+        # Get amount from event_data (amount_usdc column is deprecated)
+        total_deposits = sum(
+            Decimal(str(t.event_data.get('amount_usdc', 0))) if t.event_data and 'amount_usdc' in t.event_data
+            else Decimal(0)
+            for t in filtered_deposits
+        )
         
         # Get withdrawals for the period
         withdrawal_stmt = select(Transaction).where(
@@ -1097,7 +1132,12 @@ async def get_performance(
                     created_at = created_at.replace(tzinfo=timezone.utc)
                 if created_at >= time_boundary:
                     filtered_withdrawals.append(t)
-        total_withdrawals = sum(Decimal(str(t.amount_usdc)) for t in filtered_withdrawals)
+        # Get amount from event_data (amount_usdc column is deprecated)
+        total_withdrawals = sum(
+            Decimal(str(t.event_data.get('amount_usdc', 0))) if t.event_data and 'amount_usdc' in t.event_data
+            else Decimal(0)
+            for t in filtered_withdrawals
+        )
         
         net_deposits = total_deposits - total_withdrawals
         

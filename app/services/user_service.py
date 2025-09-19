@@ -100,7 +100,8 @@ class UserService:
             if not tx.event_data:
                 continue
                 
-            amt = Decimal(str(tx.amount_usdc or 0))
+            # Get amount from event_data (amount_usdc column is deprecated)
+            amt = Decimal(str(tx.event_data.get('amount_usdc', 0)))
             from_addr = tx.event_data.get('from_address', '').lower()
             to_addr = tx.event_data.get('to_address', '').lower()
             
