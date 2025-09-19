@@ -778,8 +778,8 @@ class StrategyService:
         position_statuses = []
         
         for position_data in positions_data:
-            # Fetch current pool data
-            pool = await pools_service.get_pool(position_data.pool_address)
+            # Fetch current pool data with APR
+            pool = await pools_service.get_pool(position_data.pool_address, include_effective_apr=True)
             if not pool:
                 continue
             
