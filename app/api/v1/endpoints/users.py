@@ -194,24 +194,27 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
             if pool:
                 base_apr = Decimal(str(pool.get('apr', 0)))
                 position_dict['pool_base_apr'] = base_apr
-                
+
+                # Get tick_spacing from pool data
+                tick_spacing = pool.get('tick_spacing')
+
                 # Calculate effective APR based on position range
-                if position.tick_spacing and position_info.in_range:
+                if tick_spacing and position_info.in_range and position.tick_lower is not None and position.tick_upper is not None:
                     # Import the APR calculator
                     from app.core.effective_apr_calculator import EffectiveAPRCalculator
                     apr_calc = EffectiveAPRCalculator()
-                    
+
                     # Calculate range width in ticks
                     tick_range = position.tick_upper - position.tick_lower
-                    
+
                     # Convert tick range to percentage (approximate)
                     # For a rough approximation: each tick represents ~0.01% price change
                     # This is simplified and could be made more accurate
-                    range_percentage = tick_range / 10000  
-                    
+                    range_percentage = tick_range / 10000
+
                     effective_apr = apr_calc.calculate_effective_apr(
                         float(base_apr),
-                        position.tick_spacing,
+                        tick_spacing,
                         range_percentage
                     )
                     position_dict['effective_apr'] = Decimal(str(effective_apr))

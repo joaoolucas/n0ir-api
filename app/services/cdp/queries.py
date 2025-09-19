@@ -42,10 +42,10 @@ class CDPQueryBuilder:
         # Gas cost calculation (using 'gas' not 'gas_used')
         gas_calc = ""
         if include_gas_costs:
-            gas_calc = ", (gas * gas_price) / 1e18 as gas_cost_eth"
-        
+            gas_calc = ", (gas * gas_price) / 1e18"  # CDP SQL doesn't support AS for aliases
+
         return f"""
-        SELECT 
+        SELECT
             transaction_hash,
             block_number,
             timestamp,

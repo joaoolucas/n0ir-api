@@ -9,8 +9,11 @@ from pydantic import BaseModel, Field
 class CDPQueryResponse(BaseModel):
     """Response from CDP SQL API query."""
     result: List[Dict[str, Any]] = Field(default_factory=list)
-    schema: Optional[Dict[str, Any]] = None
+    result_schema: Optional[Dict[str, Any]] = Field(None, alias="schema")
     metadata: Optional[Dict[str, Any]] = None
+
+    class Config:
+        populate_by_name = True  # Allow both 'schema' and 'result_schema'
 
 
 class TransactionData(BaseModel):

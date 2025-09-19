@@ -210,6 +210,13 @@ class BlockchainDataService:
             # Add ETH transactions
             for row in eth_result.result:
                 row['tx_type'] = 'eth_transaction'
+                # Calculate gas_cost_eth manually since CDP SQL doesn't support AS aliases
+                if row.get('gas') and row.get('gas_price'):
+                    gas = int(row['gas']) if row['gas'] else 0
+                    gas_price = int(row['gas_price']) if row['gas_price'] else 0
+                    row['gas_cost_eth'] = (gas * gas_price) / 1e18
+                else:
+                    row['gas_cost_eth'] = 0
                 transactions.append(row)
             
             # Try to fetch USDC transfers

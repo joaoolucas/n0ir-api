@@ -66,6 +66,19 @@ class CacheManager:
         # User-specific cache TTLs
         self.USER_CONTEXT_TTL = 10  # 10 seconds for user context
         self.USER_ANALYSIS_TTL = 5   # 5 seconds for analysis results
+
+    # Generic cache methods for CDP and other services
+    async def get(self, key: str) -> Optional[Any]:
+        """Generic get method for cache."""
+        return await self.cache.get(key)
+
+    async def set(self, key: str, value: Any, ttl: int) -> None:
+        """Generic set method for cache."""
+        await self.cache.set(key, value, ttl)
+
+    async def delete(self, key: str) -> None:
+        """Generic delete method for cache."""
+        await self.cache.delete(key)
         
     async def get_pool(self, address: str) -> Optional[Any]:
         key = f"pool:{address.lower()}"
