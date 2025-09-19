@@ -493,25 +493,43 @@ class PositionsService:
             # If the NFT is owned by the gauge contract, it's staked
             # Otherwise it's unstaked (owned by the user directly)
             staked = False
+            actual_user = owner  # Default to NFT owner
             try:
                 nft_owner = position_manager.functions.ownerOf(token_id).call()
                 if gauge_address and nft_owner.lower() == gauge_address.lower():
                     staked = True
                     logger.info(f"Position {token_id} is staked (NFT owner: {nft_owner}, gauge: {gauge_address})")
+
+                    # When staked, we need to find the actual user from our database
+                    # because Sugar tracks positions by the original staker, not the gauge
+                    from app.database.session import get_db
+                    from app.database.models.position import Position as PositionModel
+                    from sqlalchemy import select
+
+                    async with get_db() as db:
+                        stmt = select(PositionModel).where(PositionModel.token_id == token_id)
+                        result = await db.execute(stmt)
+                        position_record = result.scalar_one_or_none()
+
+                        if position_record and position_record.user_id:
+                            actual_user = position_record.user_id
+                            logger.info(f"Position {token_id} - Found actual user from database: {actual_user}")
+                        else:
+                            logger.warning(f"Position {token_id} - No database record found, will try gauge as owner")
                 else:
                     staked = False
                     logger.info(f"Position {token_id} is unstaked (NFT owner: {nft_owner}, gauge: {gauge_address})")
             except Exception as e:
                 logger.warning(f"Failed to check staking status for position {token_id}: {e}")
                 staked = False
-            
+
             # Calculate USD values from Sugar contract
             current_value_usd = None
             unclaimed_fees_usd = None
             unclaimed_rewards_aero = None
-            
-            # Pass staking status to fetch the correct data
-            sugar_position = await self._fetch_position_from_sugar(token_id, owner, is_unstaked=not staked)
+
+            # Pass the actual user (not the gauge) to Sugar for staked positions
+            sugar_position = await self._fetch_position_from_sugar(token_id, actual_user, is_unstaked=not staked)
             logger.info(f"Position {token_id} - Sugar data: {sugar_position}")
             
             if sugar_position:
