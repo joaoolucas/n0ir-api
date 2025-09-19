@@ -12,6 +12,7 @@ from loguru import logger
 
 from app.database.models import Transaction
 from app.core.config import settings
+from app.core.pools_service import pools_service
 
 
 class TransactionType(Enum):
@@ -253,20 +254,26 @@ class WalletTransactionService:
         position_event = None
         usdc_flows = {"in": 0, "out": 0}
         aero_flows = {"in": 0, "out": 0}
-        pool_address = None
-
-        # Known pool contract that appears in traces
-        # Based on the debug output, this is the pool contract
-        POOL_CONTRACT = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59".lower()
+        pool_addresses = set()  # Track all potential pool addresses
 
         for trace in traces:
             from_addr = trace.get("from", "").lower()
             to_addr = trace.get("to", "").lower()
             input_data = trace.get("input", "")
 
-            # Track pool interactions
-            if to_addr == POOL_CONTRACT or from_addr == POOL_CONTRACT:
-                pool_address = POOL_CONTRACT
+            # Track interactions with contracts that might be pools
+            # Pools typically interact with token contracts and liquidity managers
+            # Look for contracts that aren't known token/protocol addresses
+            if to_addr and to_addr not in [
+                self.USDC_ADDRESS,
+                self.AERO_ADDRESS,
+                self.LIQUIDITY_MANAGER,
+                cdp_wallet
+            ] and not to_addr.startswith("0x000000"):  # Exclude zero addresses
+                # Check if it looks like a pool contract (has certain patterns)
+                # Pools typically receive calls from liquidity manager or interact with tokens
+                if from_addr == self.LIQUIDITY_MANAGER or to_addr != from_addr:
+                    pool_addresses.add(to_addr)
 
             # Check for LiquidityManager interaction
             if to_addr == self.LIQUIDITY_MANAGER and from_addr == cdp_wallet:
@@ -309,6 +316,9 @@ class WalletTransactionService:
                             aero_flows["in"] += decoded["amount"]
         
         if position_event:
+            # Use the first pool address found (usually there's only one)
+            pool_address = list(pool_addresses)[0] if pool_addresses else None
+
             position_event.update({
                 "usdc_in": usdc_flows["in"],
                 "usdc_out": usdc_flows["out"],
@@ -378,7 +388,7 @@ class WalletTransactionService:
                 details["usdc_out"] = position_event["usdc_out"]
                 details["aero_in"] = position_event["aero_in"]
                 details["aero_out"] = position_event["aero_out"]
-                details["pool"] = position_event.get("pool")  # Include pool information
+                details["pool"] = position_event.get("pool")  # Include pool address
                 return TransactionType.POSITION_CREATED, details
             
             elif method_name == "closePosition":
@@ -567,6 +577,24 @@ class WalletTransactionService:
                     event_data["aero_out"] = details["aero_out"]
                 if details.get("pool"):
                     event_data["pool"] = details["pool"]
+
+                    # Try to fetch pool name from pools_service
+                    try:
+                        pool_data = await pools_service.get_pool(details["pool"], include_effective_apr=False)
+                        symbol = pool_data.get('symbol', '')
+                        # Extract just the token pair (remove fee percentage)
+                        if symbol and '-' in symbol:
+                            # Get everything before the last dash (handles token pairs like WETH-USDC)
+                            parts = symbol.rsplit('-', 1)  # Split from right to remove fee percentage
+                            pool_name = parts[0]
+                        else:
+                            pool_name = symbol
+
+                        if pool_name:
+                            event_data["pool_name"] = pool_name
+                            logger.debug(f"Found pool name {pool_name} for pool {details['pool']}")
+                    except Exception as e:
+                        logger.warning(f"Could not fetch pool info for {details['pool']}: {e}")
             
             # Store the USDC amount in event_data to avoid conflict with property
             event_data["amount_usdc"] = float(amount_usdc)
