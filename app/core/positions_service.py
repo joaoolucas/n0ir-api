@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.core.cache import cache_manager
 from app.schemas.positions import PositionInfo
 from app.core.logger import logger
+from app.core.pool_constants import SUGAR_ABI
 
 
 class PositionsService:
@@ -46,44 +47,6 @@ class PositionsService:
                 raise Exception(f"Failed to connect to RPC endpoint: {settings.rpc_url}")
         return self._w3
     
-    def _get_sugar_abi(self) -> List[Dict]:
-        """Get Sugar contract ABI."""
-        return [
-            {
-                "inputs": [
-                    {"name": "_limit", "type": "uint256"},
-                    {"name": "_offset", "type": "uint256"},
-                    {"name": "_account", "type": "address"}
-                ],
-                "name": "positions",
-                "outputs": [
-                    {
-                        "components": [
-                            {"name": "id", "type": "uint256"},
-                            {"name": "lp", "type": "address"},
-                            {"name": "liquidity", "type": "uint256"},
-                            {"name": "staked", "type": "uint256"},
-                            {"name": "amount0", "type": "uint256"},
-                            {"name": "amount1", "type": "uint256"},
-                            {"name": "staked0", "type": "uint256"},
-                            {"name": "staked1", "type": "uint256"},
-                            {"name": "unstaked_earned0", "type": "uint256"},
-                            {"name": "unstaked_earned1", "type": "uint256"},
-                            {"name": "emissions_earned", "type": "uint256"},
-                            {"name": "tick_lower", "type": "int24"},
-                            {"name": "tick_upper", "type": "int24"},
-                            {"name": "sqrt_ratio_lower", "type": "uint160"},
-                            {"name": "sqrt_ratio_upper", "type": "uint160"},
-                            {"name": "alm", "type": "address"}
-                        ],
-                        "name": "",
-                        "type": "tuple[]"
-                    }
-                ],
-                "stateMutability": "view",
-                "type": "function"
-            }
-        ]
 
     def _get_position_manager_abi(self) -> List[Dict]:
         """Get position manager ABI."""
@@ -341,7 +304,7 @@ class PositionsService:
             w3 = self._get_w3()
             self._sugar = w3.eth.contract(
                 address=Web3.to_checksum_address(self.SUGAR_ADDRESS),
-                abi=self._get_sugar_abi()
+                abi=SUGAR_ABI
             )
         return self._sugar
     
@@ -634,7 +597,7 @@ class PositionsService:
                 w3 = self._get_w3()
                 self._sugar = w3.eth.contract(
                     address=Web3.to_checksum_address(self.SUGAR_ADDRESS),
-                    abi=self._get_sugar_abi()
+                    abi=SUGAR_ABI
                 )
 
             owner_address = Web3.to_checksum_address(owner_address)
