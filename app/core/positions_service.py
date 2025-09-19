@@ -500,21 +500,31 @@ class PositionsService:
                     staked = True
                     logger.info(f"Position {token_id} is staked (NFT owner: {nft_owner}, gauge: {gauge_address})")
 
-                    # When staked, we need to find the actual user from our database
-                    # because Sugar tracks positions by the original staker, not the gauge
+                    # When staked, we need to find the actual CDP wallet from our database
+                    # because Sugar tracks positions by the wallet address, not the gauge
                     from app.database.session import get_db
                     from app.database.models.position import Position as PositionModel
+                    from app.database.models.user import User
                     from sqlalchemy import select
 
                     async for db in get_db():
                         try:
+                            # Get the position to find the user_id
                             stmt = select(PositionModel).where(PositionModel.token_id == token_id)
                             result = await db.execute(stmt)
                             position_record = result.scalar_one_or_none()
 
                             if position_record and position_record.user_id:
-                                actual_user = position_record.user_id
-                                logger.info(f"Position {token_id} - Found actual user from database: {actual_user}")
+                                # Now get the user's CDP wallet address
+                                user_stmt = select(User).where(User.user_id == position_record.user_id)
+                                user_result = await db.execute(user_stmt)
+                                user_record = user_result.scalar_one_or_none()
+
+                                if user_record and user_record.cdp_wallet_address:
+                                    actual_user = user_record.cdp_wallet_address
+                                    logger.info(f"Position {token_id} - Found CDP wallet from database: {actual_user}")
+                                else:
+                                    logger.warning(f"Position {token_id} - No CDP wallet found for user {position_record.user_id}")
                             else:
                                 logger.warning(f"Position {token_id} - No database record found, will try gauge as owner")
                         finally:
