@@ -1181,14 +1181,25 @@ async def get_performance(
                 
                 # Check different possible APR fields in the response
                 if monitor_response:
-                    if hasattr(monitor_response, 'average_apr') and monitor_response.average_apr:
+                    # First check portfolio_metrics.average_apr (primary source)
+                    if hasattr(monitor_response, 'portfolio_metrics') and monitor_response.portfolio_metrics:
+                        if hasattr(monitor_response.portfolio_metrics, 'average_apr') and monitor_response.portfolio_metrics.average_apr:
+                            apr = float(monitor_response.portfolio_metrics.average_apr)
+                            logger.info(f"Got APR {apr} from portfolio_metrics.average_apr")
+                        elif hasattr(monitor_response.portfolio_metrics, 'current_apr') and monitor_response.portfolio_metrics.current_apr:
+                            apr = float(monitor_response.portfolio_metrics.current_apr)
+                            logger.info(f"Got APR {apr} from portfolio_metrics.current_apr")
+                    # Then check root level average_apr
+                    elif hasattr(monitor_response, 'average_apr') and monitor_response.average_apr:
                         apr = float(monitor_response.average_apr)
-                    elif hasattr(monitor_response, 'portfolio_metrics') and monitor_response.portfolio_metrics:
-                        # portfolio_metrics is an object, not a dict
-                        if hasattr(monitor_response.portfolio_metrics, 'current_apr'):
-                            apr = float(monitor_response.portfolio_metrics.current_apr or 0)
-                    elif monitor_response.portfolio_summary:
+                        logger.info(f"Got APR {apr} from root average_apr")
+                    # Finally check portfolio_summary
+                    elif hasattr(monitor_response, 'portfolio_summary') and monitor_response.portfolio_summary:
                         apr = float(monitor_response.portfolio_summary.weighted_apr or 0)
+                        logger.info(f"Got APR {apr} from portfolio_summary.weighted_apr")
+
+                    if apr == 0.0:
+                        logger.warning(f"APR is 0 despite getting monitor response. Debug: portfolio_metrics exists: {hasattr(monitor_response, 'portfolio_metrics')}")
         except Exception as e:
             logger.warning(f"Failed to get APR from strategy service: {e}")
             # Fallback - calculate simple average APR from positions
