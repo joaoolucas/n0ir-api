@@ -186,12 +186,12 @@ class PositionSyncService:
             # Get transaction receipt
             receipt = self.w3.eth.get_transaction_receipt(tx_hash)
 
-            # Look for IncreaseLiquidity event (topic0: 0x3067048beee31b25b2f1681f88dac838c8bba36af25bfb2b7cf7473a5847e35f)
-            increase_liquidity_topic = "0x3067048beee31b25b2f1681f88dac838c8bba36af25bfb2b7cf7473a5847e35f"
+            # Look for IncreaseLiquidity event (topic0 without 0x prefix)
+            increase_liquidity_topic = "3067048beee31b25b2f1681f88dac838c8bba36af25bfb2b7cf7473a5847e35f"
 
             # Also look for Transfer event from PositionManager (NFT mint)
-            # Transfer(address,address,uint256) topic
-            transfer_topic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+            # Transfer(address,address,uint256) topic (without 0x prefix)
+            transfer_topic = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 
             for log in receipt.logs:
                 log_address = log.address.lower()
@@ -199,7 +199,10 @@ class PositionSyncService:
                 # Check if log is from PositionManager
                 if log_address == self.position_manager_address:
                     if len(log.topics) > 0:
+                        # Get topic0 and remove 0x prefix if present
                         topic0 = log.topics[0].hex()
+                        if topic0.startswith("0x"):
+                            topic0 = topic0[2:]
 
                         # IncreaseLiquidity event
                         if topic0 == increase_liquidity_topic and len(log.topics) >= 2:
@@ -213,7 +216,7 @@ class PositionSyncService:
                             # For NFT Transfer, tokenId is topic[3]
                             # Check if it's a mint (from address is 0x0)
                             from_address = log.topics[1].hex()
-                            if from_address == "0x" + "0" * 64:  # Mint from zero address
+                            if from_address == "0" * 64:  # Mint from zero address (no 0x)
                                 token_id = int(log.topics[3].hex(), 16)
                                 logger.info(f"Found token_id {token_id} from Transfer (mint) event")
                                 return token_id
@@ -224,8 +227,12 @@ class PositionSyncService:
                 log_address = log.address.lower()
 
                 if log_address == self.position_manager_address:
-                    if len(log.topics) > 0 and log.topics[0].hex() == transfer_topic:
-                        if len(log.topics) >= 4:
+                    if len(log.topics) > 0:
+                        topic0 = log.topics[0].hex()
+                        if topic0.startswith("0x"):
+                            topic0 = topic0[2:]
+
+                        if topic0 == transfer_topic and len(log.topics) >= 4:
                             # Extract the token_id regardless of from/to addresses
                             token_id = int(log.topics[3].hex(), 16)
                             logger.info(f"Found token_id {token_id} from Transfer event (alternative method)")
