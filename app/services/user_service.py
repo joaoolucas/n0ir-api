@@ -1369,11 +1369,9 @@ class UserService:
         total_fees_earned = sum(p.fees_earned_usdc or Decimal(0) for p in all_filtered_positions)
         total_rewards_earned = sum(p.rewards_earned_usdc or Decimal(0) for p in all_filtered_positions)
         
-        # Get protocol fees pending from filtered positions
-        protocol_fees_pending = sum(
-            p.protocol_fee_amount for p in all_filtered_positions 
-            if p.protocol_fee_amount and not p.protocol_fee_collected
-        )
+        # Protocol fees are tracked in transactions table, not positions
+        # For now, set to 0 until we implement proper protocol fee tracking
+        protocol_fees_pending = Decimal(0)
         
         # Calculate total PnL (realized + unrealized)
         total_pnl = realized_pnl + total_unrealized_pnl
