@@ -46,11 +46,14 @@ class UserService:
             # Create new user
             user = User(
                 user_id=user_id,
-                cdp_wallet_address=cdp_wallet_address,
-                cdp_wallet_name=cdp_wallet_name
+                cdp_wallet_address=cdp_wallet_address
             )
-            # Set agent status through the property (stored in user_metadata)
+            # Set agent status and wallet name through user_metadata
             user.agent_status = 'not_started'
+            if cdp_wallet_name:
+                if not user.user_metadata:
+                    user.user_metadata = {}
+                user.user_metadata['cdp_wallet_name'] = cdp_wallet_name
             
             self.db.add(user)
             await self.db.commit()

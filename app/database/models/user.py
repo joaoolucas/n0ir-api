@@ -103,7 +103,19 @@ class User(Base):
             self.user_metadata = {}
         # Always store uppercase status for consistency
         self.user_metadata['status'] = value.upper() if isinstance(value, str) else 'ACTIVE'
-    
+
+    @property
+    def cdp_wallet_name(self) -> str:
+        """Get CDP wallet name from user_metadata."""
+        return self.user_metadata.get('cdp_wallet_name', None) if self.user_metadata else None
+
+    @cdp_wallet_name.setter
+    def cdp_wallet_name(self, value: str):
+        """Set CDP wallet name in user_metadata."""
+        if not self.user_metadata:
+            self.user_metadata = {}
+        self.user_metadata['cdp_wallet_name'] = value
+
     # PnL properties removed - calculated from positions instead
     
     def __repr__(self):
