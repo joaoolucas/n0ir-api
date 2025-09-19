@@ -8,6 +8,7 @@ from app.api.v1.api import api_router
 from app.core.logger import logger
 from app.services.agent_management_service import get_agent_service
 from app.services.blockchain_event_consumer import blockchain_consumer
+from app.services.position_sync_service import run_position_sync_task
 
 
 @asynccontextmanager
@@ -80,16 +81,28 @@ async def lifespan(app: FastAPI):
             logger.warning("Agent management service running without Redis")
     except Exception as e:
         logger.error(f"Failed to start agent management service listener: {e}")
-    
+
+    # Start position sync background task
+    logger.info("Starting position sync background task...")
+    position_sync_task = asyncio.create_task(run_position_sync_task())
+
     yield
     
     # Shutdown
     logger.info("Shutting down services...")
-    
+
+    # Cancel position sync task
+    position_sync_task.cancel()
+    try:
+        await position_sync_task
+    except asyncio.CancelledError:
+        pass
+    logger.info("Position sync task stopped")
+
     # Stop blockchain event consumer
     await blockchain_consumer.stop()
     logger.info("Blockchain event consumer stopped")
-    
+
     logger.info("Shutdown complete")
 
 # Create FastAPI application

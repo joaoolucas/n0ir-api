@@ -1248,3 +1248,52 @@ async def get_performance(
 
 
 # NOTE: Protocol fees endpoint removed - fees are included in other endpoints like /pnl
+
+
+@router.post("/{user_id}/sync-positions", response_model=dict)
+async def sync_user_positions(
+    user_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Manually trigger position sync for a user's POSITION_CREATED transactions.
+    This creates Position records for transactions that don't have corresponding positions yet.
+    """
+    from app.services.position_sync_service import PositionSyncService
+    from app.database.models import Transaction
+    from sqlalchemy import select, and_
+
+    # Verify user exists
+    service = UserService(db)
+    user = await service.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Check for unsynced POSITION_CREATED transactions for this user
+    stmt = select(Transaction).where(
+        and_(
+            Transaction.user_id == user_id,
+            Transaction.tx_type == "POSITION_CREATED",
+            Transaction.status == "CONFIRMED",
+            Transaction.position_id.is_(None)
+        )
+    )
+    result = await db.execute(stmt)
+    unsynced_txs = result.scalars().all()
+
+    logger.info(f"Found {len(unsynced_txs)} unsynced POSITION_CREATED transactions for user {user_id}")
+
+    # Run position sync
+    sync_service = PositionSyncService(db)
+    sync_result = await sync_service.sync_pending_positions()
+
+    # Get updated positions count
+    positions = await service.get_user_positions(user_id)
+
+    return {
+        "user_id": user_id,
+        "unsynced_transactions": len(unsynced_txs),
+        "sync_result": sync_result,
+        "total_positions": len(positions),
+        "message": f"Synced {sync_result['synced']} positions for user {user_id}"
+    }
