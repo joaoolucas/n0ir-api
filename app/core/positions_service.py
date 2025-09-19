@@ -506,16 +506,19 @@ class PositionsService:
                     from app.database.models.position import Position as PositionModel
                     from sqlalchemy import select
 
-                    async with get_db() as db:
-                        stmt = select(PositionModel).where(PositionModel.token_id == token_id)
-                        result = await db.execute(stmt)
-                        position_record = result.scalar_one_or_none()
+                    async for db in get_db():
+                        try:
+                            stmt = select(PositionModel).where(PositionModel.token_id == token_id)
+                            result = await db.execute(stmt)
+                            position_record = result.scalar_one_or_none()
 
-                        if position_record and position_record.user_id:
-                            actual_user = position_record.user_id
-                            logger.info(f"Position {token_id} - Found actual user from database: {actual_user}")
-                        else:
-                            logger.warning(f"Position {token_id} - No database record found, will try gauge as owner")
+                            if position_record and position_record.user_id:
+                                actual_user = position_record.user_id
+                                logger.info(f"Position {token_id} - Found actual user from database: {actual_user}")
+                            else:
+                                logger.warning(f"Position {token_id} - No database record found, will try gauge as owner")
+                        finally:
+                            break  # Only need one iteration
                 else:
                     staked = False
                     logger.info(f"Position {token_id} is unstaked (NFT owner: {nft_owner}, gauge: {gauge_address})")
