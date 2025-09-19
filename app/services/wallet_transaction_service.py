@@ -209,6 +209,23 @@ class WalletTransactionService:
         
         return all_transactions
     
+    async def _get_pool_name(self, pool_address: str) -> Optional[str]:
+        """Get pool name from pools service."""
+        try:
+            pool_data = await pools_service.get_pool(pool_address, include_effective_apr=False)
+            symbol = pool_data.get('symbol', '')
+            # Extract just the token pair (remove fee percentage)
+            if symbol and '-' in symbol:
+                # Get everything before the last dash (handles token pairs like WETH-USDC)
+                parts = symbol.rsplit('-', 1)  # Split from right to remove fee percentage
+                pool_name = parts[0]
+            else:
+                pool_name = symbol
+            return pool_name if pool_name else None
+        except Exception as e:
+            logger.warning(f"Could not fetch pool info for {pool_address}: {e}")
+            return None
+
     def _decode_erc20_input(self, input_data: str) -> Optional[Dict[str, Any]]:
         """Decode ERC20 method calls from input data."""
         if not input_data or len(input_data) < 10:
@@ -420,7 +437,7 @@ class WalletTransactionService:
         
         return None
     
-    def _categorize_transaction(
+    async def _categorize_transaction(
         self,
         tx_data: Dict,
         owner_wallet: str,
@@ -466,12 +483,25 @@ class WalletTransactionService:
         position_event = self._analyze_position_event(traces, cdp_wallet)
         if position_event:
             method_name = position_event["method_name"]
-            
+
+            # Additional logic: if both USDC and AERO are coming IN, it's likely a close
+            # When closing a position, you get both tokens back
+            if position_event["usdc_in"] > 0 and position_event["aero_in"] > 0:
+                # This is actually a position close, not an open
+                method_name = "closePosition"
+                position_event["method_name"] = "closePosition"
+
             if method_name == "openPosition":
                 # For position creation, the net amount is what the user actually invested (usdc_out - usdc_in)
                 # usdc_out is what left the wallet, usdc_in is what came back (if any)
                 net_amount = position_event["usdc_out"] - position_event["usdc_in"]
-                details["amount"] = max(0, net_amount)  # Ensure non-negative
+
+                # Skip if net amount is 0 or negative (not a real position creation)
+                if net_amount <= 0:
+                    logger.warning(f"Skipping position event with zero/negative net amount: {details['tx_hash'][:10]}...")
+                    return TransactionType.UNKNOWN, details
+
+                details["amount"] = net_amount
                 details["description"] = f"Position opened via LiquidityManager"
                 details["method_sig"] = position_event["method_sig"]
                 details["usdc_in"] = position_event["usdc_in"]
@@ -479,6 +509,11 @@ class WalletTransactionService:
                 details["aero_in"] = position_event["aero_in"]
                 details["aero_out"] = position_event["aero_out"]
                 details["pool"] = position_event.get("pool")  # Include pool address
+
+                # Try to get pool name
+                if position_event.get("pool"):
+                    details["pool_name"] = await self._get_pool_name(position_event["pool"])
+
                 return TransactionType.POSITION_CREATED, details
             
             elif method_name == "closePosition":
@@ -491,6 +526,11 @@ class WalletTransactionService:
                 details["aero_out"] = position_event["aero_out"]
                 details["pool"] = position_event.get("pool")  # Include pool address
                 details["nft_token_id"] = position_event.get("nft_token_id")  # Include NFT token ID
+
+                # Try to get pool name
+                if position_event.get("pool"):
+                    details["pool_name"] = await self._get_pool_name(position_event["pool"])
+
                 return TransactionType.POSITION_CLOSED, details
         
         # Check all traces for patterns
@@ -591,9 +631,9 @@ class WalletTransactionService:
         total_withdrawn = Decimal(0)
         
         for tx in transactions:
-            tx_type, details = self._categorize_transaction(
-                tx, 
-                user_id, 
+            tx_type, details = await self._categorize_transaction(
+                tx,
+                user_id,
                 cdp_wallet_address
             )
             
@@ -674,8 +714,11 @@ class WalletTransactionService:
                 if details.get("nft_token_id"):
                     event_data["nft_token_id"] = details["nft_token_id"]
 
-                # Try to fetch pool name from pools_service (if pool address is available)
-                if details.get("pool"):
+                # Use pool_name from details if available, otherwise try to fetch it
+                if details.get("pool_name"):
+                    event_data["pool_name"] = details["pool_name"]
+                elif details.get("pool"):
+                    # Fallback: try to fetch pool name from pools_service
                     try:
                         pool_data = await pools_service.get_pool(details["pool"], include_effective_apr=False)
                         symbol = pool_data.get('symbol', '')
