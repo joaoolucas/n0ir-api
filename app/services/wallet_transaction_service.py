@@ -240,7 +240,7 @@ class WalletTransactionService:
         cdp_wallet: str
     ) -> Optional[Dict[str, Any]]:
         """Analyze traces to extract position event details.
-        
+
         Returns dict with:
         - method_sig: Method signature used
         - method_name: openPosition or closePosition
@@ -248,16 +248,26 @@ class WalletTransactionService:
         - usdc_out: USDC amount coming out of position
         - aero_in: AERO amount received
         - aero_out: AERO amount sent
+        - pool: Pool address if found
         """
         position_event = None
         usdc_flows = {"in": 0, "out": 0}
         aero_flows = {"in": 0, "out": 0}
-        
+        pool_address = None
+
+        # Known pool contract that appears in traces
+        # Based on the debug output, this is the pool contract
+        POOL_CONTRACT = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59".lower()
+
         for trace in traces:
             from_addr = trace.get("from", "").lower()
             to_addr = trace.get("to", "").lower()
             input_data = trace.get("input", "")
-            
+
+            # Track pool interactions
+            if to_addr == POOL_CONTRACT or from_addr == POOL_CONTRACT:
+                pool_address = POOL_CONTRACT
+
             # Check for LiquidityManager interaction
             if to_addr == self.LIQUIDITY_MANAGER and from_addr == cdp_wallet:
                 if len(input_data) >= 10:
@@ -303,7 +313,8 @@ class WalletTransactionService:
                 "usdc_in": usdc_flows["in"],
                 "usdc_out": usdc_flows["out"],
                 "aero_in": aero_flows["in"],
-                "aero_out": aero_flows["out"]
+                "aero_out": aero_flows["out"],
+                "pool": pool_address
             })
             return position_event
         
@@ -357,13 +368,17 @@ class WalletTransactionService:
             method_name = position_event["method_name"]
             
             if method_name == "openPosition":
-                details["amount"] = position_event["usdc_out"] if position_event["usdc_out"] > 0 else position_event["usdc_in"]
+                # For position creation, the net amount is what the user actually invested (usdc_out - usdc_in)
+                # usdc_out is what left the wallet, usdc_in is what came back (if any)
+                net_amount = position_event["usdc_out"] - position_event["usdc_in"]
+                details["amount"] = max(0, net_amount)  # Ensure non-negative
                 details["description"] = f"Position opened via LiquidityManager"
                 details["method_sig"] = position_event["method_sig"]
                 details["usdc_in"] = position_event["usdc_in"]
                 details["usdc_out"] = position_event["usdc_out"]
                 details["aero_in"] = position_event["aero_in"]
                 details["aero_out"] = position_event["aero_out"]
+                details["pool"] = position_event.get("pool")  # Include pool information
                 return TransactionType.POSITION_CREATED, details
             
             elif method_name == "closePosition":
@@ -550,6 +565,8 @@ class WalletTransactionService:
                     event_data["aero_in"] = details["aero_in"]
                 if details.get("aero_out") is not None:
                     event_data["aero_out"] = details["aero_out"]
+                if details.get("pool"):
+                    event_data["pool"] = details["pool"]
             
             # Store the USDC amount in event_data to avoid conflict with property
             event_data["amount_usdc"] = float(amount_usdc)
