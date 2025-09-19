@@ -576,7 +576,18 @@ class PositionsService:
                 logger.info(f"Position {token_id} - Emissions: {emissions_amount} AERO = ${unclaimed_fees_usd}")
             else:
                 logger.warning(f"Position {token_id} - No Sugar data found")
-            
+
+            # Fetch pool APR from pools_service
+            pool_apr = None
+            try:
+                from app.core.pools_service import pools_service
+                pool_data = await pools_service.get_pool(pool_address, include_effective_apr=False)
+                pool_apr = pool_data.get('apr', 0)
+                logger.info(f"Position {token_id} - Pool APR: {pool_apr}%")
+            except Exception as e:
+                logger.warning(f"Could not fetch pool APR for position {token_id}: {e}")
+                pool_apr = 0
+
             position_info = PositionInfo(
                 id=token_id,
                 owner=actual_user,  # Use actual_user instead of owner (which might be the gauge)
@@ -593,7 +604,8 @@ class PositionsService:
                 gauge_address=gauge_address,
                 token0=token0,
                 token1=token1,
-                tick_spacing=tick_spacing
+                tick_spacing=tick_spacing,
+                apr=pool_apr  # Add APR to position info
             )
             
             # Cache the result
