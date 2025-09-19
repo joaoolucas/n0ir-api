@@ -1225,12 +1225,12 @@ class UserService:
             # For closed positions: include if closed within the period
             closed_positions = []
             for p in all_positions:
-                if p.status == 'CLOSED' and p.closed_at:
-                    # Ensure closed_at is timezone-aware
-                    closed_at = p.closed_at
-                    if closed_at.tzinfo is None:
-                        closed_at = closed_at.replace(tzinfo=timezone.utc)
-                    if closed_at >= time_boundary:
+                if p.status == 'CLOSED' and p.exit_date:
+                    # Ensure exit_date is timezone-aware
+                    exit_date = p.exit_date
+                    if exit_date.tzinfo is None:
+                        exit_date = exit_date.replace(tzinfo=timezone.utc)
+                    if exit_date >= time_boundary:
                         closed_positions.append(p)
             
             # For active positions: include if created within the period
