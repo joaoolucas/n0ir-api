@@ -486,10 +486,21 @@ class WalletTransactionService:
             method_name = position_event["method_name"]
 
             # Additional logic: detect swaps and position closes
-            # AERO_SWAP: AERO (or other token) goes OUT and USDC comes IN
-            if position_event["aero_out"] > 0 and position_event["usdc_in"] > 0 and position_event["usdc_out"] == 0:
+
+            # POSITION_CLOSED: if both USDC and AERO are coming IN (highest priority)
+            # When closing a position, you get both tokens back
+            if position_event["usdc_in"] > 0 and position_event["aero_in"] > 0:
+                # This is a position close
+                method_name = "closePosition"
+                position_event["method_name"] = "closePosition"
+
+            # AERO_SWAP: AERO (and possibly USDC) goes OUT and net USDC comes IN
+            # This happens when swapping tokens, potentially with some USDC out too
+            elif position_event["aero_out"] > 0 and position_event["usdc_in"] > 0:
                 # This is a swap: selling AERO for USDC
-                details["amount"] = position_event["usdc_in"]
+                # Net amount is USDC received minus USDC sent
+                net_usdc = position_event["usdc_in"] - position_event["usdc_out"]
+                details["amount"] = net_usdc  # Can be negative if more USDC went out
                 details["description"] = f"Swapped AERO for USDC"
                 details["method_sig"] = position_event["method_sig"]
                 details["usdc_in"] = position_event["usdc_in"]
@@ -503,13 +514,6 @@ class WalletTransactionService:
                     details["pool_name"] = await self._get_pool_name(position_event["pool"])
 
                 return TransactionType.AERO_SWAP, details
-
-            # POSITION_CLOSED: if both USDC and AERO are coming IN
-            # When closing a position, you get both tokens back
-            elif position_event["usdc_in"] > 0 and position_event["aero_in"] > 0:
-                # This is actually a position close, not an open
-                method_name = "closePosition"
-                position_event["method_name"] = "closePosition"
 
             if method_name == "openPosition":
                 # For position creation, the net amount is what the user actually invested (usdc_out - usdc_in)
