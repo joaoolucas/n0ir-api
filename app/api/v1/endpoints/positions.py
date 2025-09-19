@@ -200,19 +200,26 @@ async def get_positions(
             result = await db.execute(stmt)
             positions_db = result.scalars().all()
 
-            # Convert to response format
+            # Convert to response format matching PositionInfo schema
             positions = []
             for pos in positions_db:
-                positions.append({
-                    "position_id": pos.token_id,
-                    "user_id": pos.user_id,
-                    "wallet_address": pos.user_id,  # user_id is the wallet address
-                    "pool_address": pos.pool_address,
-                    "pool_name": pos.pool_name,
-                    "entry_amount_usdc": float(pos.entry_amount_usdc) if pos.entry_amount_usdc else 0,
-                    "current_value_usdc": float(pos.current_value_usdc) if pos.current_value_usdc else 0,
-                    "status": pos.status
-                })
+                position_info = PositionInfo(
+                    id=pos.token_id,
+                    owner=pos.user_id,  # user_id is the wallet address
+                    pool_address=pos.pool_address,
+                    tick_lower=pos.tick_lower or 0,
+                    tick_upper=pos.tick_upper or 0,
+                    current_tick=0,  # Would need to fetch from blockchain
+                    liquidity=pos.liquidity or "0",
+                    in_range=True,  # Would need to check from blockchain
+                    staked=pos.staked,
+                    current_value_usd=float(pos.current_value_usdc) if pos.current_value_usdc else None,
+                    gauge_address=pos.gauge_address,
+                    pool_name=pos.pool_name,
+                    user_id=pos.user_id,  # Add user_id for agent-manager compatibility
+                    wallet_address=pos.user_id  # Add wallet_address for agent-manager
+                )
+                positions.append(position_info)
 
             logger.info(f"Successfully fetched {len(positions)} active positions for agent-manager")
             return PositionListResponse(
