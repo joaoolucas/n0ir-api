@@ -99,20 +99,17 @@ class UserService:
         for tx in txs:
             if not tx.event_data:
                 continue
-                
+
             # Get amount from event_data (amount_usdc column is deprecated)
             amt = Decimal(str(tx.event_data.get('amount_usdc', 0)))
-            from_addr = tx.event_data.get('from_address', '').lower()
-            to_addr = tx.event_data.get('to_address', '').lower()
-            
+
+            # The event_data doesn't have from_address/to_address fields
+            # For deposits and withdrawals categorized by wallet_transaction_service,
+            # we can trust the tx_type since it's already validated
             if tx.tx_type == 'DEPOSIT':
-                # Only count if from user wallet to CDP wallet
-                if from_addr == user_wallet and to_addr == cdp_wallet:
-                    deposits += amt
+                deposits += amt
             elif tx.tx_type in ['WITHDRAWAL', 'WITHDRAW']:
-                # Only count if from CDP wallet to user wallet
-                if from_addr == cdp_wallet and to_addr == user_wallet:
-                    withdrawals += amt
+                withdrawals += amt
 
         return deposits, withdrawals
     

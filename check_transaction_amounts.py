@@ -36,8 +36,7 @@ async def check_transactions():
             if event_data:
                 print(f"  Event Data:")
                 for key, value in event_data.items():
-                    if 'amount' in key.lower() or 'usdc' in key.lower():
-                        print(f"    {key}: {value}")
+                    print(f"    {key}: {value}")
 
         return True
 

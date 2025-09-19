@@ -16,7 +16,7 @@ async def check_user_pnl():
 
         # Get deposits
         deposits_query = """
-        SELECT tx_hash, amount_usdc, created_at
+        SELECT tx_hash, amount_usdc, event_data, created_at
         FROM transactions
         WHERE user_id = $1
         AND tx_type = 'DEPOSIT'
@@ -25,14 +25,30 @@ async def check_user_pnl():
         """
         deposits = await conn.fetch(deposits_query, user_id)
 
-        total_deposits = sum(Decimal(str(row['amount_usdc'])) if row['amount_usdc'] is not None else Decimal(0) for row in deposits)
+        # Get amounts from event_data
+        total_deposits = Decimal(0)
+        for row in deposits:
+            event_data = row['event_data']
+            if event_data:
+                if isinstance(event_data, str):
+                    import json
+                    event_data = json.loads(event_data)
+                amt = Decimal(str(event_data.get('amount_usdc', 0)))
+                total_deposits += amt
+
         print(f"Total Deposits: ${total_deposits}")
         for row in deposits[:5]:  # Show first 5
-            print(f"  - ${row['amount_usdc']} on {row['created_at']}")
+            event_data = row['event_data']
+            if event_data:
+                if isinstance(event_data, str):
+                    import json
+                    event_data = json.loads(event_data)
+                amt = event_data.get('amount_usdc', 0)
+                print(f"  - ${amt} on {row['created_at']}")
 
         # Get withdrawals
         withdrawals_query = """
-        SELECT tx_hash, amount_usdc, created_at
+        SELECT tx_hash, amount_usdc, event_data, created_at
         FROM transactions
         WHERE user_id = $1
         AND tx_type IN ('WITHDRAW', 'WITHDRAWAL')
@@ -41,10 +57,26 @@ async def check_user_pnl():
         """
         withdrawals = await conn.fetch(withdrawals_query, user_id)
 
-        total_withdrawals = sum(Decimal(str(row['amount_usdc'])) if row['amount_usdc'] is not None else Decimal(0) for row in withdrawals)
+        # Get amounts from event_data
+        total_withdrawals = Decimal(0)
+        for row in withdrawals:
+            event_data = row['event_data']
+            if event_data:
+                if isinstance(event_data, str):
+                    import json
+                    event_data = json.loads(event_data)
+                amt = Decimal(str(event_data.get('amount_usdc', 0)))
+                total_withdrawals += amt
+
         print(f"\nTotal Withdrawals: ${total_withdrawals}")
         for row in withdrawals[:5]:  # Show first 5
-            print(f"  - ${row['amount_usdc']} on {row['created_at']}")
+            event_data = row['event_data']
+            if event_data:
+                if isinstance(event_data, str):
+                    import json
+                    event_data = json.loads(event_data)
+                amt = event_data.get('amount_usdc', 0)
+                print(f"  - ${amt} on {row['created_at']}")
 
         net_deposits = total_deposits - total_withdrawals
         print(f"\nNet Deposits: ${net_deposits}")
