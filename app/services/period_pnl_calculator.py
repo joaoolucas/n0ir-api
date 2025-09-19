@@ -577,8 +577,12 @@ class SimplePeriodPnLCalculator:
             return True  # All-time
 
         # Position created after period end
-        if position.created_at and position.created_at > period_end:
-            return False
+        if position.created_at:
+            created_at = position.created_at
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            if created_at > period_end:
+                return False
 
         # Position closed before period start
         if position.exit_date:
