@@ -46,6 +46,45 @@ class PositionsService:
                 raise Exception(f"Failed to connect to RPC endpoint: {settings.rpc_url}")
         return self._w3
     
+    def _get_sugar_abi(self) -> List[Dict]:
+        """Get Sugar contract ABI."""
+        return [
+            {
+                "inputs": [
+                    {"name": "_limit", "type": "uint256"},
+                    {"name": "_offset", "type": "uint256"},
+                    {"name": "_account", "type": "address"}
+                ],
+                "name": "positions",
+                "outputs": [
+                    {
+                        "components": [
+                            {"name": "id", "type": "uint256"},
+                            {"name": "lp", "type": "address"},
+                            {"name": "liquidity", "type": "uint256"},
+                            {"name": "staked", "type": "uint256"},
+                            {"name": "amount0", "type": "uint256"},
+                            {"name": "amount1", "type": "uint256"},
+                            {"name": "staked0", "type": "uint256"},
+                            {"name": "staked1", "type": "uint256"},
+                            {"name": "unstaked_earned0", "type": "uint256"},
+                            {"name": "unstaked_earned1", "type": "uint256"},
+                            {"name": "emissions_earned", "type": "uint256"},
+                            {"name": "tick_lower", "type": "int24"},
+                            {"name": "tick_upper", "type": "int24"},
+                            {"name": "sqrt_ratio_lower", "type": "uint160"},
+                            {"name": "sqrt_ratio_upper", "type": "uint160"},
+                            {"name": "alm", "type": "address"}
+                        ],
+                        "name": "",
+                        "type": "tuple[]"
+                    }
+                ],
+                "stateMutability": "view",
+                "type": "function"
+            }
+        ]
+
     def _get_position_manager_abi(self) -> List[Dict]:
         """Get position manager ABI."""
         # Simplified ABI with only the functions we need
@@ -573,12 +612,12 @@ class PositionsService:
     
     async def get_positions_by_owner(self, owner_address: str, skip_cache: bool = False) -> List[PositionInfo]:
         """
-        Get all positions owned by an address (both unstaked and staked).
-        
+        Get all positions owned by an address (both unstaked and staked) using Sugar contract.
+
         Args:
             owner_address: Owner's wallet address
             skip_cache: If True, bypass cache and fetch directly from blockchain
-            
+
         Returns:
             List of PositionInfo objects
         """
@@ -588,69 +627,105 @@ class PositionsService:
             cached_positions = await cache_manager.get_custom(cache_key, ttl=60)
             if cached_positions:
                 return [PositionInfo(**p) for p in cached_positions]
-        
+
         try:
-            position_manager = await self._get_position_manager()
-            liquidity_manager = await self._get_liquidity_manager()
+            # Get Sugar contract
+            if self._sugar is None:
+                w3 = self._get_w3()
+                self._sugar = w3.eth.contract(
+                    address=Web3.to_checksum_address(self.SUGAR_ADDRESS),
+                    abi=self._get_sugar_abi()
+                )
+
             owner_address = Web3.to_checksum_address(owner_address)
-            
-            all_position_ids = []
-            
-            # 1. Get unstaked positions (NFTs held directly by the owner)
-            try:
-                balance = position_manager.functions.balanceOf(owner_address).call()
-                for index in range(balance):
-                    try:
-                        token_id = position_manager.functions.tokenOfOwnerByIndex(owner_address, index).call()
-                        if token_id in self.IGNORED_POSITION_IDS:
-                            logger.info(
-                                f"Skipping legacy position {token_id} for owner {owner_address}"
-                            )
-                            continue
-                        all_position_ids.append(token_id)
-                    except Exception as e:
-                        logger.error(f"Failed to get unstaked position at index {index}: {str(e)}")
-                        continue
-            except Exception as e:
-                logger.error(f"Failed to get unstaked positions: {str(e)}")
-            
-            # 2. Get staked positions from LiquidityManager
-            try:
-                staked_position_ids = liquidity_manager.functions.getUserPositions(owner_address).call()
-                for token_id in staked_position_ids:
-                    if token_id in self.IGNORED_POSITION_IDS:
-                        logger.info(
-                            f"Skipping legacy staked position {token_id} for owner {owner_address}"
-                        )
-                        continue
-                    all_position_ids.append(token_id)
-            except Exception as e:
-                logger.error(f"Failed to get staked positions: {str(e)}")
-            
-            # Remove duplicates (shouldn't happen, but just in case)
-            all_position_ids = list(set(all_position_ids))
-            
-            if not all_position_ids:
+
+            # Call Sugar contract to get all positions (both staked and unstaked)
+            # Using limit=9000 and offset=0 to get all positions
+            sugar_positions = self._sugar.functions.positions(
+                9000,  # _limit
+                0,     # _offset
+                owner_address  # _account
+            ).call()
+
+            if not sugar_positions:
+                logger.info(f"No positions found for {owner_address}")
                 return []
-            
+
             positions = []
-            
-            # Fetch details for each position
-            for token_id in all_position_ids:
+
+            # Parse Sugar response and fetch additional details for each position
+            for pos_data in sugar_positions:
                 try:
+                    token_id = pos_data[0]  # id field
+
+                    # Skip ignored positions
+                    if token_id in self.IGNORED_POSITION_IDS:
+                        logger.info(f"Skipping legacy position {token_id}")
+                        continue
+
+                    # Get additional position details using existing method
                     position_info = await self.get_position_by_id(token_id)
+
+                    # Override staked status based on Sugar data
+                    # If staked liquidity > 0, position is staked
+                    if pos_data[3] > 0:  # staked field
+                        position_info.staked = True
+
                     positions.append(position_info)
+
                 except Exception as e:
-                    logger.error(f"Failed to load position {token_id}: {str(e)}")
+                    logger.error(f"Failed to process position {token_id}: {str(e)}")
                     continue
-            
+
             # Cache the result
-            await cache_manager.set_custom(cache_key, [p.dict() for p in positions], ttl=60)
-            
+            if positions:
+                await cache_manager.set_custom(cache_key, [p.dict() for p in positions], ttl=60)
+
+            logger.info(f"Found {len(positions)} positions for {owner_address} via Sugar contract")
             return positions
-            
+
         except Exception as e:
-            raise Exception(f"Failed to fetch positions for {owner_address}: {str(e)}")
+            logger.error(f"Sugar contract failed, falling back to direct NFT query: {str(e)}")
+
+            # Fallback to the old method if Sugar fails
+            try:
+                position_manager = await self._get_position_manager()
+                owner_address = Web3.to_checksum_address(owner_address)
+
+                all_position_ids = []
+
+                # Get unstaked positions only (NFTs held directly by the owner)
+                try:
+                    balance = position_manager.functions.balanceOf(owner_address).call()
+                    for index in range(balance):
+                        try:
+                            token_id = position_manager.functions.tokenOfOwnerByIndex(owner_address, index).call()
+                            if token_id in self.IGNORED_POSITION_IDS:
+                                continue
+                            all_position_ids.append(token_id)
+                        except Exception as e:
+                            logger.error(f"Failed to get position at index {index}: {str(e)}")
+                            continue
+                except Exception as e:
+                    logger.error(f"Failed to get positions via NFT: {str(e)}")
+
+                if not all_position_ids:
+                    return []
+
+                positions = []
+                for token_id in all_position_ids:
+                    try:
+                        position_info = await self.get_position_by_id(token_id)
+                        positions.append(position_info)
+                    except Exception as e:
+                        logger.error(f"Failed to load position {token_id}: {str(e)}")
+                        continue
+
+                return positions
+
+            except Exception as e2:
+                logger.error(f"Both Sugar and NFT methods failed: {str(e2)}")
+                raise Exception(f"Failed to fetch positions for {owner_address}: {str(e)}")
 
 
 # Create singleton instance
