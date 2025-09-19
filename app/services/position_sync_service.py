@@ -135,7 +135,7 @@ class PositionSyncService:
             # Get pool address from event data or position info
             pool_address = event_data.get("pool") or position_info.pool_address
 
-            # Create Position record
+            # Create Position record (no tick_spacing field in model)
             position = Position(
                 user_id=tx.user_id,
                 token_id=token_id,
@@ -145,7 +145,6 @@ class PositionSyncService:
                 token1_address=position_info.token1,
                 tick_lower=position_info.tick_lower,
                 tick_upper=position_info.tick_upper,
-                tick_spacing=position_info.tick_spacing if hasattr(position_info, 'tick_spacing') else 1,
                 liquidity=str(position_info.liquidity),
                 entry_amount_usdc=amount_usdc,
                 current_value_usdc=amount_usdc,  # Initialize with entry amount
@@ -154,7 +153,7 @@ class PositionSyncService:
                 gauge_address=position_info.gauge_address if hasattr(position_info, 'gauge_address') else None,
                 status='ACTIVE',
                 entry_date=tx.block_timestamp or datetime.utcnow(),
-                last_updated=datetime.utcnow()
+                updated_at=datetime.utcnow()
             )
 
             # Add position to database
