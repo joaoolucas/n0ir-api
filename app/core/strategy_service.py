@@ -1313,11 +1313,34 @@ class StrategyService:
         raw_action = whipsaw_result.get('recommended_action', 'monitor')
         recommended_action = action_map.get(raw_action, 'monitor')
         
+        # Map recommended_action to valid enum values
+        if recommended_action not in ['wait', 'widen_range', 'exit']:
+            # Map 'monitor' and 'reduce' to valid values
+            if recommended_action in ['monitor', 'reduce']:
+                recommended_action = 'wait'
+            else:
+                recommended_action = 'wait'  # Default to 'wait'
+
         return WhipsawDetectionResponse(
             whipsaw_detected=whipsaw_result.get('whipsaw_detected', False),
+            whipsaw_count=whipsaw_result.get('whipsaw_count', 0),
+            false_signals=whipsaw_result.get('false_signals', 0),
+            time_window_hours=request.time_window_hours if hasattr(request, 'time_window_hours') else 24.0,
+            confidence_score=min(100.0, max(0.0, whipsaw_result.get('confidence', 50.0))),
+            price_oscillations=whipsaw_result.get('oscillations', []),
+            recommended_action=recommended_action,
+            alternative_actions=[
+                AlternativeAction(
+                    action=alt.type if hasattr(alt, 'type') else 'monitor',
+                    confidence=80.0,
+                    expected_improvement=0.0,
+                    reasoning=f"Alternative strategy based on severity"
+                ) for alt in alternatives
+            ],
+            reasoning=whipsaw_result.get('reasoning', f"Whipsaw analysis for position {request.token_id}"),
+            # Legacy fields for backward compatibility
             severity=whipsaw_result.get('severity', 0),
             pattern=pattern,
-            recommended_action=recommended_action,
             alternative_strategies=alternatives
         )
     

@@ -533,6 +533,11 @@ class WhipsawDetectionResponse(BaseModel):
     reasoning: str
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
+    # Additional fields for compatibility
+    severity: Optional[float] = Field(None, description="Severity of whipsaw pattern (0-100)")
+    pattern: Optional[str] = Field(None, description="Pattern type detected")
+    alternative_strategies: Optional[List[AlternativeStrategy]] = Field(None, description="Alternative strategies")
+
 
 # ============= Backwards Compatibility Exports =============
 # These allow importing from this module directly for backwards compatibility
