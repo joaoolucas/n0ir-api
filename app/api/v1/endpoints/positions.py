@@ -156,23 +156,83 @@ async def get_positions(
     request: Request,
     owner: Optional[str] = Query(None, description="Filter by owner wallet address", pattern="^0x[a-fA-F0-9]{40}$"),
     pool: Optional[str] = Query(None, description="Filter by pool address", pattern="^0x[a-fA-F0-9]{40}$"),
-    in_range: Optional[bool] = Query(None, description="Filter by in-range status")
+    in_range: Optional[bool] = Query(None, description="Filter by in-range status"),
+    all_active: bool = Query(False, description="Get all active positions (requires authorization)"),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Get positions with optional filters.
-    
+
     Returns both staked and unstaked positions.
-    
+
     Supports filtering by:
     - owner: Wallet address that owns the positions (includes both staked and unstaked)
     - pool: Pool address (future implementation)
     - in_range: Whether positions are in range (future implementation)
-    
-    At least one filter must be provided.
+    - all_active: Get all active positions across all users (requires authorization)
+
+    At least one filter must be provided unless all_active is true.
     """
-    logger.info(f"GET /positions - IP: {request.client.host} - Filters: owner={owner}, pool={pool}, in_range={in_range}")
-    
-    # Require at least one filter
+    logger.info(f"GET /positions - IP: {request.client.host} - Filters: owner={owner}, pool={pool}, in_range={in_range}, all_active={all_active}")
+
+    # Check if requesting all active positions
+    if all_active:
+        # Check authorization (Bearer token should be present for agent-manager)
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            logger.warning("Unauthorized attempt to get all active positions")
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": {
+                        "code": "UNAUTHORIZED",
+                        "message": "Authorization required to fetch all positions"
+                    }
+                }
+            )
+
+        # Get all active positions from database
+        try:
+            from sqlalchemy import select
+            from app.database.models import Position
+
+            stmt = select(Position).where(Position.status == "ACTIVE")
+            result = await db.execute(stmt)
+            positions_db = result.scalars().all()
+
+            # Convert to response format
+            positions = []
+            for pos in positions_db:
+                positions.append({
+                    "position_id": pos.token_id,
+                    "user_id": pos.user_id,
+                    "wallet_address": pos.user_id,  # user_id is the wallet address
+                    "pool_address": pos.pool_address,
+                    "pool_name": pos.pool_name,
+                    "entry_amount_usdc": float(pos.entry_amount_usdc) if pos.entry_amount_usdc else 0,
+                    "current_value_usdc": float(pos.current_value_usdc) if pos.current_value_usdc else 0,
+                    "status": pos.status
+                })
+
+            logger.info(f"Successfully fetched {len(positions)} active positions for agent-manager")
+            return PositionListResponse(
+                positions=positions,
+                total=len(positions)
+            )
+        except Exception as e:
+            logger.error(f"Error fetching all active positions: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": {
+                        "code": "INTERNAL_ERROR",
+                        "message": "Failed to fetch positions",
+                        "details": {"error": str(e)}
+                    }
+                }
+            )
+
+    # Require at least one filter for normal queries
     if not any([owner, pool, in_range is not None]):
         logger.warning("Missing filter parameters for /positions")
         raise HTTPException(
@@ -181,7 +241,7 @@ async def get_positions(
                 "error": {
                     "code": "MISSING_PARAMETERS",
                     "message": "At least one filter parameter is required",
-                    "details": {"available_filters": ["owner", "pool", "in_range"]}
+                    "details": {"available_filters": ["owner", "pool", "in_range", "all_active"]}
                 }
             }
         )
