@@ -234,6 +234,7 @@ class PositionResponse(BaseModel):
 
 
 class PnLResponse(BaseModel):
+    """DEPRECATED: Use PerformanceResponse instead which includes all PnL data."""
     realized_pnl_usdc: Decimal
     unrealized_pnl_usdc: Decimal
     total_pnl_usdc: Decimal
@@ -243,11 +244,24 @@ class PnLResponse(BaseModel):
 
 
 class PerformanceResponse(BaseModel):
+    # Core metrics
     apr: float
     balance: Decimal
-    pnl_usdc: Decimal
-    pnl_pct: Decimal
     active_positions: int
+
+    # PnL breakdown
+    realized_pnl_usdc: Decimal
+    unrealized_pnl_usdc: Decimal
+    total_pnl_usdc: Decimal  # realized + unrealized + fees + rewards
+    total_pnl_percentage: Decimal
+
+    # Earnings
+    fees_earned_usdc: Decimal
+    rewards_earned_usdc: Decimal
+
+    # Legacy fields for backwards compatibility
+    pnl_usdc: Decimal  # Same as total_pnl_usdc
+    pnl_pct: Decimal  # Same as total_pnl_percentage
 
 
 # List Response Models

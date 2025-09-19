@@ -13,7 +13,7 @@ from app.schemas.users import (
     CreateUserRequest, UpdateUserRequest, DepositRequest, WithdrawRequest, WithdrawResponse,
     UserResponse, UserListResponse, TransactionResponse, TransactionListResponse,
     PositionResponse, PositionListResponse, CreatePositionRequest, ClosePositionRequest,
-    BalanceResponse, PnLResponse, PerformanceResponse,
+    BalanceResponse, PerformanceResponse,
     UserStatus, TransactionType, TransactionStatus, PositionStatus, TimePeriod
 )
 # Enums are already imported from schemas above
@@ -890,172 +890,7 @@ async def get_positions(
 
 
 # Analytics
-@router.get("/{user_id}/pnl", response_model=PnLResponse)
-async def get_pnl(
-    user_id: str,
-    period: Optional[TimePeriod] = Query(None, description="Time period for PnL calculation (24h, 7d, 30d, all)"),
-    db: AsyncSession = Depends(get_db)
-):
-    """Get user P&L summary with real-time position values.
-    
-    This endpoint recalculates PnL using current blockchain position values
-    to ensure accurate unrealized PnL based on market conditions.
-    
-    Time periods:
-    - 24h: Last 24 hours
-    - 7d: Last 7 days  
-    - 30d: Last 30 days
-    - all: All time (default)
-    """
-    service = UserService(db)
-    
-    # Verify user exists
-    user = await service.get_user(user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # Use period-specific calculation if period is provided
-    if period:
-        pnl_data = await service.recalculate_user_pnl_for_period(user_id, period)
-        
-        # Calculate pnl_full (realized + unrealized)
-        realized_pnl = pnl_data.get("realized_pnl_usdc", Decimal(0))
-        unrealized_pnl = pnl_data.get("unrealized_pnl_usdc", Decimal(0))
-        pnl_full = realized_pnl + unrealized_pnl
-        
-        # Calculate pnl_full_pct based on deposits for the period
-        # Get deposits/withdrawals for the period from the service calculation
-        from datetime import datetime, timedelta, timezone
-        time_boundary = datetime.now(timezone.utc)
-        if period == TimePeriod.DAY_1:
-            time_boundary = datetime.now(timezone.utc) - timedelta(days=1)
-        elif period == TimePeriod.DAY_7:
-            time_boundary = datetime.now(timezone.utc) - timedelta(days=7)
-        elif period == TimePeriod.DAY_30:
-            time_boundary = datetime.now(timezone.utc) - timedelta(days=30)
-        
-        # Get deposit/withdrawal totals for period
-        from app.database.models import Transaction
-        from sqlalchemy import select, and_, or_
-        
-        if period != TimePeriod.ALL_TIME:
-            # Get deposits for the period
-            deposit_stmt = select(Transaction).where(
-                and_(
-                    Transaction.user_id == user_id,
-                    Transaction.tx_type == 'DEPOSIT',
-                    Transaction.status == 'CONFIRMED'
-                )
-            )
-            deposit_result = await db.execute(deposit_stmt)
-            deposits = deposit_result.scalars().all()
-            
-            # Filter deposits by period
-            filtered_deposits = []
-            for t in deposits:
-                if t.created_at:
-                    created_at = t.created_at
-                    if created_at.tzinfo is None:
-                        created_at = created_at.replace(tzinfo=timezone.utc)
-                    if created_at >= time_boundary:
-                        filtered_deposits.append(t)
-            # Get amount from event_data (amount_usdc column is deprecated)
-            total_deposits = sum(
-                Decimal(str(t.event_data.get('amount_usdc', 0))) if t.event_data and 'amount_usdc' in t.event_data
-                else Decimal(0)
-                for t in filtered_deposits
-            )
-            
-            # Get withdrawals for the period
-            withdrawal_stmt = select(Transaction).where(
-                and_(
-                    Transaction.user_id == user_id,
-                    Transaction.tx_type == 'WITHDRAW',
-                    Transaction.status == 'CONFIRMED'
-                )
-            )
-            withdrawal_result = await db.execute(withdrawal_stmt)
-            withdrawals = withdrawal_result.scalars().all()
-            
-            # Filter withdrawals by period
-            filtered_withdrawals = []
-            for t in withdrawals:
-                if t.created_at:
-                    created_at = t.created_at
-                    if created_at.tzinfo is None:
-                        created_at = created_at.replace(tzinfo=timezone.utc)
-                    if created_at >= time_boundary:
-                        filtered_withdrawals.append(t)
-            # Get amount from event_data (amount_usdc column is deprecated)
-            total_withdrawals = sum(
-                Decimal(str(t.event_data.get('amount_usdc', 0))) if t.event_data and 'amount_usdc' in t.event_data
-                else Decimal(0)
-                for t in filtered_withdrawals
-            )
-        else:
-            # All time - get all deposits and withdrawals
-            total_deposits, total_withdrawals = await service.get_deposit_withdrawal_totals(user_id)
-        
-        net_deposits = total_deposits - total_withdrawals
-        
-        # Calculate pnl_full_pct
-        pnl_full_pct = Decimal(0)
-        if net_deposits > 0:
-            pnl_full_pct = (pnl_full / net_deposits) * 100
-        
-        return PnLResponse(
-            realized_pnl_usdc=realized_pnl,
-            unrealized_pnl_usdc=unrealized_pnl,
-            unrealized_pnl_percentage=pnl_data.get("unrealized_pnl_percentage", Decimal(0)),
-            unrealized_pnl_pct=pnl_data.get("unrealized_pnl_pct", Decimal(0)),
-            realized_pnl_percentage=pnl_data.get("realized_pnl_percentage", Decimal(0)),
-            fees_earned_usdc=pnl_data.get("fees_earned_usdc", Decimal(0)),
-            rewards_earned_usdc=pnl_data.get("rewards_earned_usdc", Decimal(0)),
-            total_pnl_usdc=pnl_data.get("total_pnl_usdc", Decimal(0)),
-            protocol_fees_pending_usdc=pnl_data.get("protocol_fees_pending_usdc", Decimal(0)),
-            net_pnl_usdc=pnl_data.get("net_pnl_usdc", Decimal(0)),
-            pnl_full=pnl_full,
-            pnl_full_pct=pnl_full_pct
-        )
-    else:
-        # Default to all-time (existing behavior)
-        # PnL is now calculated from positions directly, not stored on User model
-        
-        # Refresh user to get updated values
-        await db.refresh(user)
-        
-        # Get positions to calculate PnL
-        positions = await service.get_user_positions(user_id)
-        
-        # Calculate PnL from positions
-        realized_pnl = sum(p.realized_pnl_usdc or Decimal(0) for p in positions if p.status == 'CLOSED')
-        unrealized_pnl = sum(p.realized_pnl_usdc or Decimal(0) for p in positions if p.status == 'ACTIVE')
-        total_fees_earned = sum(p.fees_earned_usdc or Decimal(0) for p in positions)
-        total_rewards_earned = sum(p.rewards_earned_usdc or Decimal(0) for p in positions)
-        
-        # Calculate total PnL
-        total_pnl = realized_pnl + unrealized_pnl + total_fees_earned + total_rewards_earned
-        
-        # Get total deposits and withdrawals for percentage calculation
-        total_deposits, total_withdrawals = await service.get_deposit_withdrawal_totals(user_id)
-        net_deposits = total_deposits - total_withdrawals
-        
-        # Calculate percentages
-        total_pnl_pct = Decimal(0)
-        if net_deposits > 0:
-            total_pnl_pct = (total_pnl / net_deposits) * 100
-        
-        return PnLResponse(
-            realized_pnl_usdc=realized_pnl,
-            unrealized_pnl_usdc=unrealized_pnl,
-            total_pnl_usdc=total_pnl,
-            total_pnl_percentage=total_pnl_pct,
-            fees_earned_usdc=total_fees_earned,
-            rewards_earned_usdc=total_rewards_earned
-        )
-
-
-# NOTE: pnl-details endpoint removed - use /pnl endpoint instead which provides all the same data plus more
+# NOTE: pnl endpoint removed - use /performance endpoint instead which provides all PnL data
 
 # NOTE: Sync PnL endpoint removed - PnL is calculated automatically by the watcher on every transaction
 
@@ -1065,14 +900,18 @@ async def get_performance(
     period: Optional[TimePeriod] = Query(None, description="Time period for performance calculation (24h, 7d, 30d, all)"),
     db: AsyncSession = Depends(get_db)
 ):
-    """Get simplified user performance metrics.
-    
-    Returns key metrics:
+    """Get comprehensive user performance metrics including PnL breakdown.
+
+    Returns all performance metrics:
     - balance: wallet + current positions (real-time when possible)
-    - pnl_usdc: unrealized PnL from active positions
-    - pnl_pct: unrealized PnL percentage
+    - realized_pnl_usdc: PnL from closed positions
+    - unrealized_pnl_usdc: PnL from active positions
+    - total_pnl_usdc: total PnL (realized + unrealized + fees + rewards)
+    - total_pnl_percentage: total PnL as percentage of net deposits
+    - fees_earned_usdc: fees earned from positions
+    - rewards_earned_usdc: rewards earned from staking
     - apr and active positions count
-    
+
     Time periods:
     - 24h: Last 24 hours
     - 7d: Last 7 days
@@ -1089,10 +928,12 @@ async def get_performance(
     # Get PnL data based on period
     if period:
         pnl_data = await service.recalculate_user_pnl_for_period(user_id, period)
-        # Calculate pnl_full (realized + unrealized) for period
+        # Extract PnL components
         realized_pnl = pnl_data.get("realized_pnl_usdc", Decimal(0))
         unrealized_pnl = pnl_data.get("unrealized_pnl_usdc", Decimal(0))
-        pnl_full = realized_pnl + unrealized_pnl
+        fees_earned = pnl_data.get("fees_earned_usdc", Decimal(0))
+        rewards_earned = pnl_data.get("rewards_earned_usdc", Decimal(0))
+        total_pnl = pnl_data.get("total_pnl_usdc", Decimal(0))
         
         # Calculate pnl_full_pct for the period (same logic as PnL endpoint)
         from datetime import datetime, timedelta, timezone
@@ -1162,32 +1003,34 @@ async def get_performance(
         )
         
         net_deposits = total_deposits - total_withdrawals
-        
-        # Calculate pnl_full_pct
-        pnl_full_pct = Decimal(0)
+
+        # Calculate total_pnl_percentage
+        total_pnl_percentage = Decimal(0)
         if net_deposits > 0:
-            pnl_full_pct = (pnl_full / net_deposits) * 100
-        
+            total_pnl_percentage = (total_pnl / net_deposits) * 100
+
         active_positions_count = pnl_data.get("active_positions_count", 0)
     else:
         # Default to all-time (existing behavior)
         # Get positions to calculate PnL
         all_positions = await service.get_user_positions(user_id)
-        
-        # Calculate PnL from positions
+
+        # Calculate PnL components from positions
         realized_pnl = sum(p.realized_pnl_usdc or Decimal(0) for p in all_positions if p.status == 'CLOSED')
         unrealized_pnl = sum(p.realized_pnl_usdc or Decimal(0) for p in all_positions if p.status == 'ACTIVE')
-        pnl_full = realized_pnl + unrealized_pnl
+        fees_earned = sum(p.fees_earned_usdc or Decimal(0) for p in all_positions)
+        rewards_earned = sum(p.rewards_earned_usdc or Decimal(0) for p in all_positions)
+        total_pnl = realized_pnl + unrealized_pnl + fees_earned + rewards_earned
         
         # Get total deposits and withdrawals for all-time percentage calculation
         total_deposits, total_withdrawals = await service.get_deposit_withdrawal_totals(user_id)
         net_deposits = total_deposits - total_withdrawals
-        
-        # Calculate pnl_full_pct
-        pnl_full_pct = Decimal(0)
+
+        # Calculate total_pnl_percentage
+        total_pnl_percentage = Decimal(0)
         if net_deposits > 0:
-            pnl_full_pct = (pnl_full / net_deposits) * 100
-        
+            total_pnl_percentage = (total_pnl / net_deposits) * 100
+
         active_positions_count = len([p for p in all_positions if p.status == 'ACTIVE'])
     
     # Get positions for APR calculation
@@ -1326,64 +1169,29 @@ async def get_performance(
             logger.error(f"Failed to fetch blockchain data from CDP: {e}")
             # Continue without blockchain data
     
-    # Use pnl_full (realized + unrealized) to match /pnl endpoint's pnl_full field
-    # This ensures consistency between /performance and /pnl endpoints
+    # Return comprehensive performance data including full PnL breakdown
     return PerformanceResponse(
+        # Core metrics
         apr=apr,
         balance=total_portfolio_value,
-        pnl_usdc=pnl_full,  # Use pnl_full (realized + unrealized) matching /pnl endpoint
-        pnl_pct=float(pnl_full_pct),  # Use pnl_full_pct matching /pnl endpoint, convert to float
-        active_positions=active_positions_count if active_positions_count is not None else len(positions)
+        active_positions=active_positions_count if active_positions_count is not None else len(positions),
+
+        # PnL breakdown
+        realized_pnl_usdc=realized_pnl,
+        unrealized_pnl_usdc=unrealized_pnl,
+        total_pnl_usdc=total_pnl,
+        total_pnl_percentage=total_pnl_percentage,
+
+        # Earnings
+        fees_earned_usdc=fees_earned,
+        rewards_earned_usdc=rewards_earned,
+
+        # Legacy fields for backwards compatibility
+        pnl_usdc=total_pnl,  # Same as total_pnl_usdc
+        pnl_pct=total_pnl_percentage  # Same as total_pnl_percentage
     )
 
 
-# NOTE: Protocol fees endpoint removed - fees are included in other endpoints like /pnl
+# NOTE: Protocol fees endpoint removed - fees are included in performance endpoint
 
-
-@router.post("/{user_id}/sync-positions", response_model=dict)
-async def sync_user_positions(
-    user_id: str,
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Manually trigger position sync for a user's POSITION_CREATED transactions.
-    This creates Position records for transactions that don't have corresponding positions yet.
-    """
-    from app.services.position_sync_service import PositionSyncService
-    from app.database.models import Transaction
-    from sqlalchemy import select, and_
-
-    # Verify user exists
-    service = UserService(db)
-    user = await service.get_user(user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    # Check for unsynced POSITION_CREATED transactions for this user
-    stmt = select(Transaction).where(
-        and_(
-            Transaction.user_id == user_id,
-            Transaction.tx_type == "POSITION_CREATED",
-            Transaction.status == "CONFIRMED",
-            Transaction.position_id.is_(None)
-        )
-    )
-    result = await db.execute(stmt)
-    unsynced_txs = result.scalars().all()
-
-    logger.info(f"Found {len(unsynced_txs)} unsynced POSITION_CREATED transactions for user {user_id}")
-
-    # Run position sync
-    sync_service = PositionSyncService(db)
-    sync_result = await sync_service.sync_pending_positions()
-
-    # Get updated positions count
-    positions = await service.get_user_positions(user_id)
-
-    return {
-        "user_id": user_id,
-        "unsynced_transactions": len(unsynced_txs),
-        "sync_result": sync_result,
-        "total_positions": len(positions),
-        "message": f"Synced {sync_result['synced']} positions for user {user_id}"
-    }
+# NOTE: sync-positions endpoint removed - position syncing happens automatically via blockchain events
