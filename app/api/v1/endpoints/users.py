@@ -694,7 +694,7 @@ async def get_transactions(
             sync_result = await wallet_service.fetch_and_sync_transactions(
                 user_id=user_id,
                 cdp_wallet_address=user.cdp_wallet_address,
-                limit=50  # Always sync recent transactions
+                limit=100  # Sync more transactions to catch stake events
             )
             logger.info(f"Auto-synced {sync_result.get('transactions_synced', 0)} transactions for user {user_id}")
         except Exception as e:
