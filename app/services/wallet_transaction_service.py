@@ -806,6 +806,8 @@ class WalletTransactionService:
         details: Dict[str, Any]
     ) -> None:
         """Save or update a transaction in the database."""
+        from sqlalchemy import select
+
         # Check if transaction already exists
         stmt = select(Transaction).where(
             Transaction.tx_hash == details["tx_hash"]
