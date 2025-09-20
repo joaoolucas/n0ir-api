@@ -386,22 +386,24 @@ class UserService:
         user_id: str,
         amount: Decimal,
         tx_hash: Optional[str] = None,
-        to_address: Optional[str] = None,
-        force_close_positions: bool = True,
-        max_slippage_percent: Decimal = Decimal("0.5"),
         withdraw_all: bool = False
     ) -> Transaction:
         """Process USDC withdrawal for user.
-        
+
+        Withdrawals always:
+        - Go to the user_id address (no destination_address parameter)
+        - Force close positions if needed (hardcoded to True)
+        - Use 0.1% max slippage (hardcoded)
+
         Args:
-            user_id: The user's wallet address (used as ID)
+            user_id: The user's wallet address (used as both ID and destination)
             amount: Amount of USDC to withdraw
             tx_hash: Optional transaction hash if already executed
-            to_address: Optional destination address (defaults to user_id)
-            force_close_positions: Whether to close positions if needed
-            max_slippage_percent: Maximum acceptable slippage when closing positions
             withdraw_all: Whether to withdraw entire available balance
         """
+        # Hardcoded parameters
+        FORCE_CLOSE_POSITIONS = True
+        MAX_SLIPPAGE_PERCENT = Decimal("0.1")
         # Verify user exists
         user = await self.get_user(user_id)
         if not user:
@@ -418,11 +420,8 @@ class UserService:
             logger.info(f"Withdraw all: using actual wallet balance {wallet_balance} instead of requested {amount}")
             amount = wallet_balance
         
-        # If wallet balance is insufficient, check if we should close positions
+        # If wallet balance is insufficient, always try to close positions (force_close_positions is always True)
         if wallet_balance < amount:
-            if not force_close_positions:
-                raise ValueError(f"Insufficient wallet balance. Available: {wallet_balance}, Requested: {amount}")
-            
             # Get active positions
             active_positions = await self.get_user_positions(user_id, status='ACTIVE')
             
@@ -463,11 +462,10 @@ class UserService:
                     # Use a high amount to ensure everything is withdrawn
                     amount = expected_total * Decimal("1.1")  # Add 10% buffer to ensure all funds are withdrawn
                 
-                # Request withdrawal through agent (it will close positions on-chain if needed)
+                # Request withdrawal through agent (destination is always user_id)
                 result = await agent_service.withdraw_usdc(
                     user_id=user_id,
                     amount=float(amount),
-                    to_address=to_address,
                     positions_to_close=[int(p.nft_token_id) for p in positions_to_close if p.nft_token_id],  # Ensure NFT IDs are integers
                     withdraw_all=withdraw_all
                 )
@@ -501,7 +499,7 @@ class UserService:
             status='PENDING' if not tx_hash else 'CONFIRMED',
             event_data={
                 'amount_usdc': float(amount),
-                'to_address': to_address or user_id
+                'to_address': user_id  # Always withdraw to user's own address
             },
             created_at=datetime.now(timezone.utc)
         )

@@ -473,14 +473,17 @@ class AgentManagementService:
             logger.error(f"Error requesting agent restart: {e}")
             return {'success': False, 'error': str(e)}
     
-    async def withdraw_usdc(self, user_id: str, amount: float, to_address: str = None, positions_to_close: List[int] = None, withdraw_all: bool = False) -> Dict:
+    async def withdraw_usdc(self, user_id: str, amount: float, positions_to_close: List[int] = None, withdraw_all: bool = False) -> Dict:
         """Request USDC withdrawal through agent manager.
-        
+
+        Withdrawals always go to the user_id address (no separate destination).
+
         Args:
-            user_id: The user's wallet address (used as ID)
+            user_id: The user's wallet address (used as both ID and destination)
             amount: Amount of USDC to withdraw
-            to_address: Optional destination address (defaults to user_id if not provided)
-        
+            positions_to_close: List of position NFT IDs to close if needed
+            withdraw_all: Whether to withdraw entire balance
+
         Returns:
             Dict with success status and transaction info
         """
@@ -488,17 +491,13 @@ class AgentManagementService:
         if not self.redis_client:
             logger.warning("Redis not available, cannot process withdrawal")
             return {'success': False, 'error': 'Redis not available'}
-        
-        # Default to user's own address if not specified
-        if not to_address:
-            to_address = user_id
-        
-        # Create withdrawal command
+
+        # Create withdrawal command (destination is always user_id)
         command = {
             'action': 'withdraw',  # Agent-manager expects 'action' not 'type'
             'user_id': user_id,
             'amount_usdc': amount,
-            'to_address': to_address,
+            'to_address': user_id,  # Always withdraw to user's own address
             'positions_to_close': json.dumps(positions_to_close or []),  # Serialize list to JSON string
             'withdraw_all': str(withdraw_all),  # Convert bool to string for Redis
             'timestamp': datetime.utcnow().isoformat()
@@ -520,7 +519,7 @@ class AgentManagementService:
                 'success': result.get('success', False),
                 'tx_hash': result.get('tx_hash'),
                 'amount': amount,
-                'to_address': to_address,
+                'to_address': user_id,  # Always the user's own address
                 'error': result.get('error')
             }
             

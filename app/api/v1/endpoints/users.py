@@ -416,15 +416,17 @@ async def withdraw(
     db: AsyncSession = Depends(get_db)
 ):
     """Withdraw USDC from user account with smart/best-effort logic.
-    
+
     This endpoint will:
     - Withdraw the requested amount if available
     - Withdraw the maximum available if requested amount exceeds balance
-    - Automatically close positions if needed and allowed
+    - Automatically close positions if needed (always enabled)
     - Always succeed (withdrawing 0 if nothing is available)
-    
+    - Withdrawals always go to the user_id address
+    - Max slippage is hardcoded to 0.1%
+
     Args:
-        user_id: User's wallet address
+        user_id: User's wallet address (also the destination address)
         request: Withdrawal request with amount and options
     """
     try:
@@ -439,31 +441,32 @@ async def withdraw(
         # Smart withdrawal: use min(requested, available)
         actual_amount = min(request.amount_usdc, wallet_balance)
         
-        # If balance insufficient and force_close_positions is true, check positions
+        # Always check positions if balance insufficient (force_close_positions is always true now)
         positions_closed = 0
-        if actual_amount < request.amount_usdc and request.force_close_positions:
+        if actual_amount < request.amount_usdc:
             active_positions = await service.get_user_positions(user_id, status='ACTIVE')
             if active_positions:
                 # Calculate potential balance after closing positions
                 potential_balance = wallet_balance
                 for position in active_positions:
                     potential_balance += (position.current_value_usdc or position.entry_amount_usdc)
-                
+
                 # Update actual amount to min(requested, potential)
                 actual_amount = min(request.amount_usdc, potential_balance)
                 positions_closed = len(active_positions)
-        
+
         # Execute withdrawal (will close positions if needed)
+        # Hardcoded parameters:
+        # - destination: always user_id
+        # - force_close_positions: always True
+        # - max_slippage_percent: always 0.1%
         transaction = None
         if actual_amount > 0:
             transaction = await service.withdraw_usdc(
                 user_id=user_id,
                 amount=actual_amount,  # Use the smart amount
                 tx_hash=request.tx_hash,
-                to_address=request.destination_address,
-                force_close_positions=request.force_close_positions,
-                max_slippage_percent=request.max_slippage_percent,
-                withdraw_all=False  # We handle the logic here
+                withdraw_all=request.withdraw_all
             )
         
         # Get updated balance
