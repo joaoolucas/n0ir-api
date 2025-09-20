@@ -215,6 +215,15 @@ class WalletTransactionService:
     
     async def _get_pool_name(self, pool_address: str) -> Optional[str]:
         """Get pool name from pools service."""
+        # Skip addresses that are clearly not pools
+        if not pool_address or len(pool_address) != 42:
+            return None
+
+        # Skip addresses that look like special/system contracts (e.g., start with many zeros)
+        if pool_address.lower().startswith('0x0000') or pool_address.lower().startswith('0x0001'):
+            logger.debug(f"Skipping non-pool address: {pool_address}")
+            return None
+
         try:
             pool_data = await pools_service.get_pool(pool_address, include_effective_apr=False)
             symbol = pool_data.get('symbol', '')
@@ -227,7 +236,11 @@ class WalletTransactionService:
                 pool_name = symbol
             return pool_name if pool_name else None
         except Exception as e:
-            logger.warning(f"Could not fetch pool info for {pool_address}: {e}")
+            # Only log as debug for execution reverted errors (common for non-pool contracts)
+            if "execution reverted" in str(e).lower():
+                logger.debug(f"Address {pool_address} is not a valid pool contract")
+            else:
+                logger.warning(f"Could not fetch pool info for {pool_address}: {e}")
             return None
 
     def _decode_erc20_input(self, input_data: str) -> Optional[Dict[str, Any]]:
