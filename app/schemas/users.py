@@ -182,6 +182,14 @@ class TransactionResponse(BaseModel):
         if isinstance(values, dict):
             event_data = values.get('event_data', {})
 
+            # Parse event_data if it's a string (JSON)
+            if isinstance(event_data, str):
+                import json
+                try:
+                    event_data = json.loads(event_data)
+                except (json.JSONDecodeError, TypeError):
+                    event_data = {}
+
             # Extract pool_name from event_data if not directly available
             if 'pool_name' not in values or values.get('pool_name') is None:
                 if event_data and isinstance(event_data, dict):
