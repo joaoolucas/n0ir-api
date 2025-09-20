@@ -730,11 +730,90 @@ async def get_performance(
     - all: All time (default)
     """
     service = UserService(db)
-    
+
     # Verify user exists
     user = await service.get_user(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    # Sync user balance with on-chain state before returning performance
+    # This ensures we detect deposits immediately when performance is checked
+    if user.cdp_wallet_address:
+        try:
+            from web3 import Web3
+            from app.database.models import User
+            from sqlalchemy import select
+            from app.core.redis_client import publish_balance_change_event
+            from app.core.redis_client import redis_client
+            import time
+
+            # Check cache first (60 second TTL to prevent excessive chain calls)
+            cache_key = f"balance_sync:{user_id}"
+            last_sync = await redis_client.get(cache_key)
+
+            # Skip sync if we synced within last 60 seconds
+            if last_sync:
+                last_sync_time = float(last_sync)
+                if time.time() - last_sync_time < 60:
+                    logger.debug(f"Skipping balance sync for {user_id} - synced {int(time.time() - last_sync_time)}s ago")
+                else:
+                    # Clear expired cache entry
+                    await redis_client.delete(cache_key)
+                    last_sync = None
+
+            # Only sync if not recently cached
+            if not last_sync:
+                # Initialize Web3 and USDC contract
+                w3 = Web3(Web3.HTTPProvider(settings.BASE_RPC_URL))
+                usdc_address = Web3.to_checksum_address("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
+                usdc_abi = [{"constant":True,"inputs":[{"name":"_owner","type":"address"}],"name":"balanceOf","outputs":[{"name":"balance","type":"uint256"}],"type":"function"}]
+                usdc_contract = w3.eth.contract(address=usdc_address, abi=usdc_abi)
+
+                # Get on-chain balance
+                checksum_address = Web3.to_checksum_address(user.cdp_wallet_address)
+                balance_wei = usdc_contract.functions.balanceOf(checksum_address).call()
+                onchain_balance = Decimal(balance_wei) / Decimal(10 ** 6)  # USDC has 6 decimals
+
+                # Cache the sync timestamp
+                await redis_client.setex(cache_key, 60, str(time.time()))
+
+                # Get current database balance
+                db_balance = Decimal(str(user.usdc_balance or 0))
+
+                # Check if balance changed
+                if onchain_balance != db_balance:
+                    # Determine event type
+                    event_type = 'DEPOSIT' if onchain_balance > db_balance else 'WITHDRAWAL'
+
+                    if onchain_balance > db_balance:
+                        logger.info(f"Deposit detected for {user_id} via performance endpoint: {db_balance} -> {onchain_balance} USDC")
+                    else:
+                        logger.info(f"Withdrawal detected for {user_id} via performance endpoint: {db_balance} -> {onchain_balance} USDC")
+
+                    # Update user balance in database
+                    user.usdc_balance = onchain_balance
+
+                    # Check if this is first 50+ USDC deposit
+                    if not user.has_deposited_50_usdc and onchain_balance >= Decimal('50'):
+                        user.has_deposited_50_usdc = True
+
+                    await db.commit()
+
+                    # Publish balance change event for agent manager
+                    await publish_balance_change_event(
+                        user_id=user_id,
+                        old_balance=db_balance,
+                        new_balance=onchain_balance,
+                        event_type=event_type,
+                        has_deposited_50_usdc=user.has_deposited_50_usdc
+                    )
+
+                    # Refresh user data after update
+                    await db.refresh(user)
+
+        except Exception as e:
+            logger.warning(f"Failed to sync balance for {user_id} in performance endpoint: {e}")
+            # Continue without syncing - don't fail the entire request
     
     # Get PnL data based on period
     if period:
