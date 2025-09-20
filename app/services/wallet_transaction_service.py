@@ -482,15 +482,15 @@ class WalletTransactionService:
                             aero_flows["in"] += decoded["amount"]
         
         if position_event:
-            # Use the first pool address found (usually there's only one)
-            pool_address = list(pool_addresses)[0] if pool_addresses else None
-
+            # Don't use pool addresses from traces - they're often wrong
+            # The actual pool address should be looked up from the position NFT
+            # Only include pool if we're confident it's correct
             position_event.update({
                 "usdc_in": usdc_flows["in"],
                 "usdc_out": usdc_flows["out"],
                 "aero_in": aero_flows["in"],
                 "aero_out": aero_flows["out"],
-                "pool": pool_address
+                "pool": None  # Will be fetched from position data later
             })
             return position_event
         
