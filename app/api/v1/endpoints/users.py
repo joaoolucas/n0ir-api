@@ -828,14 +828,36 @@ async def get_performance(
 
         # Calculate PnL components from positions
         realized_pnl = sum(p.realized_pnl_usdc or Decimal(0) for p in all_positions if p.status == 'CLOSED')
-        unrealized_pnl = sum(p.unrealized_pnl_usdc or Decimal(0) for p in all_positions if p.status == 'ACTIVE')
 
-        # Debug logging
+        # Calculate unrealized PnL using real-time values for active positions
+        unrealized_pnl = Decimal(0)
         active_positions = [p for p in all_positions if p.status == 'ACTIVE']
-        logger.info(f"Active positions count: {len(active_positions)}")
+
+        from app.core.positions_service import positions_service
         for pos in active_positions:
-            logger.info(f"Position {pos.token_id}: current={pos.current_value_usdc}, entry={pos.entry_amount_usdc}, unrealized={pos.unrealized_pnl_usdc}")
-        logger.info(f"Total unrealized PnL: {unrealized_pnl}")
+            try:
+                # Fetch real-time position data from blockchain
+                position_info = await positions_service.get_position_by_id(pos.token_id)
+                if position_info and position_info.current_value_usd:
+                    current_value = Decimal(str(position_info.current_value_usd))
+                    entry_value = pos.entry_amount_usdc or Decimal(0)
+                    pos_unrealized = current_value - entry_value
+                    unrealized_pnl += pos_unrealized
+
+                    # Update database with real-time value for future queries
+                    if abs((pos.current_value_usdc or Decimal(0)) - current_value) > Decimal("0.01"):
+                        pos.current_value_usdc = current_value
+                        await db.commit()
+                        logger.debug(f"Updated position {pos.token_id} current value to {current_value}")
+
+                    logger.debug(f"Position {pos.token_id}: real-time value={current_value}, entry={entry_value}, unrealized={pos_unrealized}")
+                else:
+                    # Fallback to database values
+                    unrealized_pnl += (pos.unrealized_pnl_usdc or Decimal(0))
+            except Exception as e:
+                logger.warning(f"Failed to fetch real-time data for position {pos.token_id}: {e}")
+                # Fallback to database values
+                unrealized_pnl += (pos.unrealized_pnl_usdc or Decimal(0))
 
         total_pnl = realized_pnl + unrealized_pnl
 
