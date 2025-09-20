@@ -725,8 +725,10 @@ class WalletTransactionService:
                 user_id,
                 cdp_wallet_address
             )
-            
+
             if details:
+                # Log what we found
+                logger.info(f"Categorized tx {details.get('tx_hash', 'unknown')[:20]}... as {tx_type.value}")
                 categorized[tx_type].append(details)
                 
                 # Track totals
@@ -744,6 +746,8 @@ class WalletTransactionService:
                         tx_type=tx_type.value,
                         details=details
                     )
+                else:
+                    logger.info(f"Not saving {tx_type.value} transaction: {details.get('tx_hash', '')[:20]}...")
         
         # Commit all database changes
         await self.db.commit()
