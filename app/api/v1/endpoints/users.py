@@ -829,9 +829,7 @@ async def get_performance(
         # Calculate PnL components from positions
         realized_pnl = sum(p.realized_pnl_usdc or Decimal(0) for p in all_positions if p.status == 'CLOSED')
         unrealized_pnl = sum(p.unrealized_pnl_usdc or Decimal(0) for p in all_positions if p.status == 'ACTIVE')
-        fees_earned = sum(p.fees_earned_usdc or Decimal(0) for p in all_positions)
-        rewards_earned = sum(p.rewards_earned_usdc or Decimal(0) for p in all_positions)
-        total_pnl = realized_pnl + unrealized_pnl + fees_earned + rewards_earned
+        total_pnl = realized_pnl + unrealized_pnl
 
         # Get total deposits and withdrawals for all-time percentage calculation
         total_deposits, total_withdrawals = await service.get_deposit_withdrawal_totals(user_id)
@@ -985,7 +983,7 @@ async def get_performance(
             logger.error(f"Failed to fetch blockchain data from CDP: {e}")
             # Continue without blockchain data
     
-    # Calculate realized PnL percentage
+    # Calculate realized PnL percentage based on net deposits
     realized_pnl_pct = Decimal(0)
     if net_deposits > 0 and realized_pnl != 0:
         realized_pnl_pct = (realized_pnl / net_deposits) * 100

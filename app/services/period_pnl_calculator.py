@@ -475,36 +475,23 @@ class SimplePeriodPnLCalculator:
             if position.status == 'CLOSED':
                 # Position was closed - count as realized
                 if self._position_active_in_period(position, period_start, now):
-                    exit_value = position.current_value_usdc or Decimal(0)
-                    entry_value = position.entry_amount_usdc or Decimal(0)
-                    realized_pnl += (exit_value - entry_value)
+                    # Use the realized_pnl_usdc field directly (already calculated)
+                    realized_pnl += (position.realized_pnl_usdc or Decimal(0))
                     fees_earned += (position.fees_earned_usdc or Decimal(0))
                     rewards_earned += (position.rewards_earned_usdc or Decimal(0))
 
             elif position.status == 'ACTIVE':
                 # Position still active - count as unrealized
-                try:
-                    # Get real-time value
-                    position_info = await positions_service.get_position_by_id(position.nft_token_id)
-                    if position_info:
-                        current_value = Decimal(str(position_info.current_value_usd or 0))
-                        unclaimed_fees = Decimal(str(position_info.unclaimed_fees_usd or 0))
-                        total_current = current_value + unclaimed_fees
-                    else:
-                        total_current = position.current_value_usdc or Decimal(0)
-                except Exception:
-                    total_current = position.current_value_usdc or Decimal(0)
-
-                entry_value = position.entry_amount_usdc or Decimal(0)
-                unrealized_pnl += (total_current - entry_value)
+                # Use the unrealized_pnl_usdc property (current_value - entry_amount)
+                unrealized_pnl += (position.unrealized_pnl_usdc or Decimal(0))
                 fees_earned += (position.fees_earned_usdc or Decimal(0))
                 rewards_earned += (position.rewards_earned_usdc or Decimal(0))
 
         # Get net deposits for the period
         net_deposits = await self._get_net_deposits_for_period(user_id, period_start, now)
 
-        # Calculate total PNL
-        total_pnl = realized_pnl + unrealized_pnl + fees_earned + rewards_earned
+        # Calculate total PNL (realized + unrealized)
+        total_pnl = realized_pnl + unrealized_pnl
 
         # Calculate percentage using a meaningful denominator
         # Use the average invested capital during the period
