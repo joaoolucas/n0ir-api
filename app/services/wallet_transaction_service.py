@@ -22,7 +22,7 @@ class TransactionType(Enum):
     STAKING = "STAKING"  # NFT position staked to gauge or interaction with position manager
     POSITION_CREATED = "POSITION_CREATED"
     POSITION_CLOSED = "POSITION_CLOSED"
-    AERO_SWAP = "AERO_SWAP"
+    SWAP = "SWAP"
     UNKNOWN = "UNKNOWN"
 
 
@@ -611,7 +611,7 @@ class WalletTransactionService:
                 method_name = "closePosition"
                 position_event["method_name"] = "closePosition"
 
-            # AERO_SWAP: AERO (and possibly USDC) goes OUT and net USDC comes IN
+            # SWAP: AERO (and possibly USDC) goes OUT and net USDC comes IN
             # This happens when swapping tokens, potentially with some USDC out too
             elif position_event["aero_out"] > 0 and position_event["usdc_in"] > 0:
                 # This is a swap: selling AERO for USDC
@@ -630,7 +630,7 @@ class WalletTransactionService:
                 if position_event.get("pool"):
                     details["pool_name"] = await self._get_pool_name(position_event["pool"])
 
-                return TransactionType.AERO_SWAP, details
+                return TransactionType.SWAP, details
 
             if method_name == "openPosition":
                 # For position creation, the net amount is what the user actually invested (usdc_out - usdc_in)
@@ -791,7 +791,7 @@ class WalletTransactionService:
             TransactionType.STAKING: [],
             TransactionType.POSITION_CREATED: [],
             TransactionType.POSITION_CLOSED: [],
-            TransactionType.AERO_SWAP: [],
+            TransactionType.SWAP: [],
             TransactionType.UNKNOWN: []
         }
         
@@ -819,7 +819,7 @@ class WalletTransactionService:
                 # Save to database if it's a financial or position transaction
                 if tx_type in [TransactionType.DEPOSIT, TransactionType.WITHDRAW,
                               TransactionType.POSITION_CREATED, TransactionType.POSITION_CLOSED,
-                              TransactionType.AERO_SWAP, TransactionType.STAKING]:
+                              TransactionType.SWAP, TransactionType.STAKING]:
                     await self._save_transaction(
                         user_id=user_id,
                         tx_type=tx_type.value,
@@ -838,7 +838,7 @@ class WalletTransactionService:
             "stakings": len(categorized[TransactionType.STAKING]),
             "positions_opened": len(categorized[TransactionType.POSITION_CREATED]),
             "positions_closed": len(categorized[TransactionType.POSITION_CLOSED]),
-            "aero_swaps": len(categorized[TransactionType.AERO_SWAP]),
+            "swaps": len(categorized[TransactionType.SWAP]),
             "unknown": len(categorized[TransactionType.UNKNOWN]),
             "total_deposited": total_deposited,
             "total_withdrawn": total_withdrawn
@@ -872,7 +872,7 @@ class WalletTransactionService:
             }
             
             # Add position-specific and swap data if available
-            if tx_type in ["POSITION_CREATED", "POSITION_CLOSED", "AERO_SWAP", "STAKING"]:
+            if tx_type in ["POSITION_CREATED", "POSITION_CLOSED", "SWAP", "STAKING"]:
                 if details.get("method_sig"):
                     event_data["method_sig"] = details["method_sig"]
                 if details.get("usdc_in") is not None:

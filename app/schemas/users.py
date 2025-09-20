@@ -19,7 +19,7 @@ class TransactionType(str, enum.Enum):
     STAKING = "STAKING"
     POSITION_CREATED = "POSITION_CREATED"
     POSITION_CLOSED = "POSITION_CLOSED"
-    AERO_SWAP = "AERO_SWAP"
+    SWAP = "SWAP"
 
 
 class TransactionStatus(str, enum.Enum):
@@ -32,7 +32,6 @@ class TransactionStatus(str, enum.Enum):
 class PositionStatus(str, enum.Enum):
     ACTIVE = "ACTIVE"
     CLOSED = "CLOSED"
-    LIQUIDATED = "LIQUIDATED"
 
 
 class TimePeriod(str, enum.Enum):
@@ -212,8 +211,10 @@ class TransactionResponse(BaseModel):
                 'staking': 'STAKING',
                 'STAKING': 'STAKING',
                 # Map swap types
-                'aero_swap': 'AERO_SWAP',
-                'AERO_SWAP': 'AERO_SWAP',
+                'aero_swap': 'SWAP',
+                'AERO_SWAP': 'SWAP',
+                'swap': 'SWAP',
+                'SWAP': 'SWAP',
                 'fee_collection': 'POSITION_CLOSED',
                 'FEE_COLLECTION': 'POSITION_CLOSED',
                 'PROTOCOL_FEE': 'POSITION_CLOSED',
@@ -239,8 +240,6 @@ class PositionResponse(BaseModel):
     current_value_usdc: Optional[Decimal]
     realized_pnl_usdc: Decimal
     unrealized_pnl_usdc: Decimal
-    fees_earned_usdc: Decimal
-    rewards_earned_usdc: Decimal
     total_pnl_usdc: Optional[Decimal] = Field(None, description="Total PNL")
     status: PositionStatus
     entry_date: Optional[datetime] = None
