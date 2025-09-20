@@ -263,19 +263,12 @@ class PerformanceResponse(BaseModel):
     balance: Decimal
     active_positions: int
 
-    # PnL breakdown
+    # PnL metrics
     realized_pnl_usdc: Decimal
-    unrealized_pnl_usdc: Decimal
-    total_pnl_usdc: Decimal  # realized + unrealized + fees + rewards
-    total_pnl_percentage: Decimal
-
-    # Earnings
-    fees_earned_usdc: Decimal
+    realized_pnl_pct: Decimal
     rewards_earned_usdc: Decimal
-
-    # Legacy fields for backwards compatibility
-    pnl_usdc: Decimal  # Same as total_pnl_usdc
-    pnl_pct: Decimal  # Same as total_pnl_percentage
+    pnl_usdc: Decimal  # Total PnL (unrealized + realized)
+    pnl_pct: Decimal   # Total PnL percentage
 
 
 # List Response Models

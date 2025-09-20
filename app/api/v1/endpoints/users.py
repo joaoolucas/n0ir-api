@@ -985,7 +985,7 @@ async def get_performance(
         fees_earned = sum(p.fees_earned_usdc or Decimal(0) for p in all_positions)
         rewards_earned = sum(p.rewards_earned_usdc or Decimal(0) for p in all_positions)
         total_pnl = realized_pnl + unrealized_pnl + fees_earned + rewards_earned
-        
+
         # Get total deposits and withdrawals for all-time percentage calculation
         total_deposits, total_withdrawals = await service.get_deposit_withdrawal_totals(user_id)
         net_deposits = total_deposits - total_withdrawals
@@ -996,6 +996,11 @@ async def get_performance(
             total_pnl_percentage = (total_pnl / net_deposits) * 100
 
         active_positions_count = len([p for p in all_positions if p.status == 'ACTIVE'])
+
+    # Ensure net_deposits is defined for all code paths
+    if 'net_deposits' not in locals():
+        total_deposits, total_withdrawals = await service.get_deposit_withdrawal_totals(user_id)
+        net_deposits = total_deposits - total_withdrawals
     
     # Get positions for APR calculation
     positions = await service.get_user_positions(user_id, status='ACTIVE')
@@ -1133,26 +1138,24 @@ async def get_performance(
             logger.error(f"Failed to fetch blockchain data from CDP: {e}")
             # Continue without blockchain data
     
-    # Return comprehensive performance data including full PnL breakdown
+    # Calculate realized PnL percentage
+    realized_pnl_pct = Decimal(0)
+    if net_deposits > 0 and realized_pnl != 0:
+        realized_pnl_pct = (realized_pnl / net_deposits) * 100
+
+    # Return performance data with updated schema
     return PerformanceResponse(
         # Core metrics
         apr=apr,
         balance=total_portfolio_value,
         active_positions=active_positions_count if active_positions_count is not None else len(positions),
 
-        # PnL breakdown
+        # PnL metrics
         realized_pnl_usdc=realized_pnl,
-        unrealized_pnl_usdc=unrealized_pnl,
-        total_pnl_usdc=total_pnl,
-        total_pnl_percentage=total_pnl_percentage,
-
-        # Earnings
-        fees_earned_usdc=fees_earned,
+        realized_pnl_pct=realized_pnl_pct,
         rewards_earned_usdc=rewards_earned,
-
-        # Legacy fields for backwards compatibility
-        pnl_usdc=total_pnl,  # Same as total_pnl_usdc
-        pnl_pct=total_pnl_percentage  # Same as total_pnl_percentage
+        pnl_usdc=total_pnl,  # Total PnL (unrealized + realized)
+        pnl_pct=total_pnl_percentage  # Total PnL percentage
     )
 
 
