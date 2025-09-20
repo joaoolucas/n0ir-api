@@ -814,7 +814,29 @@ async def get_performance(
         except Exception as e:
             logger.warning(f"Failed to sync balance for {user_id} in performance endpoint: {e}")
             # Continue without syncing - don't fail the entire request
-    
+
+    # Sync transactions from blockchain (similar to transactions endpoint)
+    if user.cdp_wallet_address:
+        try:
+            from app.services.wallet_transaction_service import WalletTransactionService
+
+            # Initialize transaction service
+            tx_service = WalletTransactionService()
+
+            # Fetch and categorize recent transactions
+            result = await tx_service.fetch_and_categorize(
+                user_id=user_id,
+                cdp_wallet_address=user.cdp_wallet_address,
+                limit=50  # Fetch last 50 transactions
+            )
+
+            if result.get("success"):
+                logger.info(f"Synced {result.get('total_stored', 0)} new transactions for {user_id} during performance check")
+
+        except Exception as e:
+            logger.warning(f"Failed to sync transactions for {user_id} in performance endpoint: {e}")
+            # Continue without syncing
+
     # Get PnL data based on period
     if period:
         pnl_data = await service.recalculate_user_pnl_for_period(user_id, period)

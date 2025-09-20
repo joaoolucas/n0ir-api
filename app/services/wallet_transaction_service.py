@@ -564,7 +564,8 @@ class WalletTransactionService:
             "block": traces[0].get("block_number", ""),
             "timestamp": content.get("block_timestamp", ""),
             "amount": 0,
-            "description": ""
+            "description": "",
+            "cdp_wallet": cdp_wallet  # Always include CDP wallet
         }
         
         # Normalize addresses
