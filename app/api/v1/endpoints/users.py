@@ -829,6 +829,14 @@ async def get_performance(
         # Calculate PnL components from positions
         realized_pnl = sum(p.realized_pnl_usdc or Decimal(0) for p in all_positions if p.status == 'CLOSED')
         unrealized_pnl = sum(p.unrealized_pnl_usdc or Decimal(0) for p in all_positions if p.status == 'ACTIVE')
+
+        # Debug logging
+        active_positions = [p for p in all_positions if p.status == 'ACTIVE']
+        logger.info(f"Active positions count: {len(active_positions)}")
+        for pos in active_positions:
+            logger.info(f"Position {pos.token_id}: current={pos.current_value_usdc}, entry={pos.entry_amount_usdc}, unrealized={pos.unrealized_pnl_usdc}")
+        logger.info(f"Total unrealized PnL: {unrealized_pnl}")
+
         total_pnl = realized_pnl + unrealized_pnl
 
         # Get total deposits and withdrawals for all-time percentage calculation
