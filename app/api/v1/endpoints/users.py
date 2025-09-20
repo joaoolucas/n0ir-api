@@ -828,7 +828,7 @@ async def get_performance(
 
         # Calculate PnL components from positions
         realized_pnl = sum(p.realized_pnl_usdc or Decimal(0) for p in all_positions if p.status == 'CLOSED')
-        unrealized_pnl = sum(p.realized_pnl_usdc or Decimal(0) for p in all_positions if p.status == 'ACTIVE')
+        unrealized_pnl = sum(p.unrealized_pnl_usdc or Decimal(0) for p in all_positions if p.status == 'ACTIVE')
         fees_earned = sum(p.fees_earned_usdc or Decimal(0) for p in all_positions)
         rewards_earned = sum(p.rewards_earned_usdc or Decimal(0) for p in all_positions)
         total_pnl = realized_pnl + unrealized_pnl + fees_earned + rewards_earned
