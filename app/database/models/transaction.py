@@ -34,7 +34,7 @@ class Transaction(Base):
     # WITHDRAW: User withdraws USDC from the platform
     # POSITION_CREATED: New liquidity position created
     # POSITION_CLOSED: Liquidity position closed (includes AERO swaps and fees)
-    # TRANSFER_FEE: Fee transfers to 0xfD75350A7e2C4914908fF7E3082c45Af5762f5FE
+    # FEE_TRANSFER: Fee transfers to 0xfD75350A7e2C4914908fF7E3082c45Af5762f5FE
     
     # Transaction status
     status = Column(String(20), nullable=False, default="PENDING", index=True)
@@ -97,7 +97,7 @@ class Transaction(Base):
             'PROTOCOL_FEE': 'position_closed',     # Fees are part of closing positions
             'FEE_COLLECTION': 'position_closed',   # Fees are part of closing positions
             'AERO_SWAP': 'position_closed',        # AERO swaps are part of closing positions
-            'TRANSFER_FEE': 'transfer_fee'          # Fee transfers
+            'FEE_TRANSFER': 'fee_transfer'          # Fee transfers
         }
         return mapping.get(self.tx_type, self.tx_type.lower())
     

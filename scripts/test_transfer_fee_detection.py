@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test TRANSFER_FEE transaction type detection."""
+"""Test FEE_TRANSFER transaction type detection."""
 
 import asyncio
 import asyncpg
@@ -9,7 +9,7 @@ from datetime import datetime
 DATABASE_URL = "postgresql://postgres:pXmVJczPuWPIauAWXFUKwUdaYGTKqBdX@shuttle.proxy.rlwy.net:17669/railway"
 
 async def test_transfer_fee_detection():
-    """Test if TRANSFER_FEE transactions are properly detected."""
+    """Test if FEE_TRANSFER transactions are properly detected."""
     conn = None
     try:
         conn = await asyncpg.connect(DATABASE_URL)
@@ -17,11 +17,11 @@ async def test_transfer_fee_detection():
         # Fee recipient address
         fee_recipient = '0xfD75350A7e2C4914908fF7E3082c45Af5762f5FE'
 
-        # Check for existing TRANSFER_FEE transactions
+        # Check for existing FEE_TRANSFER transactions
         check_query = """
         SELECT id, tx_type, user_id, amount_usdc, event_data, created_at, tx_hash
         FROM transactions
-        WHERE tx_type = 'TRANSFER_FEE'
+        WHERE tx_type = 'FEE_TRANSFER'
         ORDER BY created_at DESC
         LIMIT 10
         """
@@ -29,7 +29,7 @@ async def test_transfer_fee_detection():
         transfer_fee_txs = await conn.fetch(check_query)
 
         if transfer_fee_txs:
-            print(f"✅ Found {len(transfer_fee_txs)} TRANSFER_FEE transactions:\n")
+            print(f"✅ Found {len(transfer_fee_txs)} FEE_TRANSFER transactions:\n")
 
             for tx in transfer_fee_txs:
                 event_data = tx['event_data']
@@ -44,8 +44,8 @@ async def test_transfer_fee_detection():
                 print(f"  Fee Recipient: {event_data.get('fee_recipient', 'Not specified')}")
                 print()
         else:
-            print(f"⚠️ No TRANSFER_FEE transactions found yet")
-            print(f"   Transactions to {fee_recipient} will be categorized as TRANSFER_FEE")
+            print(f"⚠️ No FEE_TRANSFER transactions found yet")
+            print(f"   Transactions to {fee_recipient} will be categorized as FEE_TRANSFER")
             print("\n   Looking for potential fee transfers that might not be categorized yet...")
 
             # Look for transfers to the fee recipient address in event_data

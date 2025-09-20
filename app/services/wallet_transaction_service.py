@@ -23,7 +23,7 @@ class TransactionType(Enum):
     POSITION_CREATED = "POSITION_CREATED"
     POSITION_CLOSED = "POSITION_CLOSED"
     SWAP = "SWAP"
-    TRANSFER_FEE = "TRANSFER_FEE"  # Fee transfers to 0xfD75350A7e2C4914908fF7E3082c45Af5762f5FE
+    FEE_TRANSFER = "FEE_TRANSFER"  # Fee transfers to 0xfD75350A7e2C4914908fF7E3082c45Af5762f5FE
     UNKNOWN = "UNKNOWN"
 
 
@@ -708,12 +708,12 @@ class WalletTransactionService:
                         found_withdrawal = True
                         withdrawal_amount += amount
 
-                    # TRANSFER_FEE: CDP wallet sending USDC to fee recipient
+                    # FEE_TRANSFER: CDP wallet sending USDC to fee recipient
                     elif from_addr == cdp_wallet and recipient == self.FEE_RECIPIENT:
                         details["amount"] = amount
                         details["description"] = f"Fee transfer to {self.FEE_RECIPIENT}"
                         details["fee_recipient"] = self.FEE_RECIPIENT
-                        return TransactionType.TRANSFER_FEE, details
+                        return TransactionType.FEE_TRANSFER, details
                 
                 # For transferFrom method
                 elif decoded.get("method") == "transferFrom":
@@ -730,12 +730,12 @@ class WalletTransactionService:
                         found_withdrawal = True
                         withdrawal_amount += amount
 
-                    # TRANSFER_FEE: CDP wallet sending USDC to fee recipient
+                    # FEE_TRANSFER: CDP wallet sending USDC to fee recipient
                     elif transfer_from == cdp_wallet and transfer_to == self.FEE_RECIPIENT:
                         details["amount"] = amount
                         details["description"] = f"Fee transfer to {self.FEE_RECIPIENT}"
                         details["fee_recipient"] = self.FEE_RECIPIENT
-                        return TransactionType.TRANSFER_FEE, details
+                        return TransactionType.FEE_TRANSFER, details
             
             # STAKING: Check if CDP wallet is interacting with position managers
             # This is a fallback if ERC721 Transfer events aren't available
@@ -912,7 +912,7 @@ class WalletTransactionService:
             }
             
             # Add position-specific and swap data if available
-            if tx_type in ["POSITION_CREATED", "POSITION_CLOSED", "SWAP", "STAKING"]:
+            if tx_type in ["POSITION_CREATED", "POSITION_CLOSED", "SWAP", "STAKING", "FEE_TRANSFER"]:
                 if details.get("method_sig"):
                     event_data["method_sig"] = details["method_sig"]
                 if details.get("usdc_in") is not None:
@@ -929,6 +929,10 @@ class WalletTransactionService:
                 # Add gauge address for STAKING transactions
                 if tx_type == "STAKING" and details.get("gauge_address"):
                     event_data["gauge_address"] = details["gauge_address"]
+
+                # Add fee recipient for FEE_TRANSFER transactions
+                if tx_type == "FEE_TRANSFER" and details.get("fee_recipient"):
+                    event_data["fee_recipient"] = details["fee_recipient"]
 
                 # Add NFT token ID if available
                 if details.get("nft_token_id"):
