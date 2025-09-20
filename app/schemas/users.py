@@ -260,7 +260,9 @@ class PnLResponse(BaseModel):
 class PerformanceResponse(BaseModel):
     # Core metrics
     apr: float
-    balance: Decimal
+    wallet_balance: Decimal  # Current USDC balance in wallet
+    positions_value: Decimal  # Total value invested in positions
+    total_balance: Decimal  # wallet_balance + positions_value (formerly just "balance")
     active_positions: int
 
     # PnL metrics

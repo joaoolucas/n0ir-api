@@ -864,17 +864,19 @@ async def get_performance(
     period: Optional[TimePeriod] = Query(None, description="Time period for performance calculation (24h, 7d, 30d, all)"),
     db: AsyncSession = Depends(get_db)
 ):
-    """Get comprehensive user performance metrics including PnL breakdown.
+    """Get comprehensive user performance metrics including balance breakdown and PnL.
 
     Returns all performance metrics:
-    - balance: wallet + current positions (real-time when possible)
+    - apr: Average APR across active positions
+    - wallet_balance: Current USDC balance in wallet
+    - positions_value: Total value invested in active positions
+    - total_balance: Total portfolio value (wallet + positions)
+    - active_positions: Number of active positions
     - realized_pnl_usdc: PnL from closed positions
-    - unrealized_pnl_usdc: PnL from active positions
-    - total_pnl_usdc: total PnL (realized + unrealized + fees + rewards)
-    - total_pnl_percentage: total PnL as percentage of net deposits
-    - fees_earned_usdc: fees earned from positions
-    - rewards_earned_usdc: rewards earned from staking
-    - apr and active positions count
+    - realized_pnl_pct: Realized PnL as percentage of net deposits
+    - rewards_earned_usdc: Rewards earned from staking
+    - pnl_usdc: Total PnL (realized + unrealized)
+    - pnl_pct: Total PnL as percentage of net deposits
 
     Time periods:
     - 24h: Last 24 hours
@@ -1143,11 +1145,13 @@ async def get_performance(
     if net_deposits > 0 and realized_pnl != 0:
         realized_pnl_pct = (realized_pnl / net_deposits) * 100
 
-    # Return performance data with updated schema
+    # Return performance data with updated schema including balance breakdown
     return PerformanceResponse(
-        # Core metrics
+        # Core metrics with balance breakdown
         apr=apr,
-        balance=total_portfolio_value,
+        wallet_balance=Decimal(str(wallet_balance)),  # Current USDC in wallet
+        positions_value=current_positions_value,  # Total value in positions
+        total_balance=total_portfolio_value,  # wallet + positions (formerly just "balance")
         active_positions=active_positions_count if active_positions_count is not None else len(positions),
 
         # PnL metrics
