@@ -774,9 +774,6 @@ class WalletTransactionService:
             # Store the USDC amount in event_data to avoid conflict with property
             event_data["amount_usdc"] = float(amount_usdc)
             
-            # Extract pool_name from event_data to set it at the Transaction level
-            pool_name = event_data.get("pool_name") if tx_type in ["POSITION_CREATED", "POSITION_CLOSED"] else None
-
             transaction = Transaction(
                 tx_hash=details["tx_hash"],
                 user_id=user_id,
@@ -784,7 +781,6 @@ class WalletTransactionService:
                 status="CONFIRMED",
                 block_number=details.get("block"),
                 block_timestamp=datetime.fromisoformat(details["timestamp"].replace("Z", "+00:00")) if details.get("timestamp") else None,
-                pool_name=pool_name,  # Set pool_name at transaction level
                 event_data=event_data
             )
             

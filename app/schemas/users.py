@@ -176,7 +176,16 @@ class TransactionResponse(BaseModel):
     @model_validator(mode='before')
     @classmethod
     def normalize_transaction_type(cls, values):
-        """Normalize transaction type from database to match enum."""
+        """Normalize transaction type from database to match enum and extract pool_name."""
+        if isinstance(values, dict):
+            # Extract pool_name from event_data if not directly available
+            if 'pool_name' not in values or values.get('pool_name') is None:
+                event_data = values.get('event_data', {})
+                if event_data and isinstance(event_data, dict):
+                    pool_name = event_data.get('pool_name')
+                    if pool_name:
+                        values['pool_name'] = pool_name
+
         if isinstance(values, dict) and 'tx_type' in values:
             tx_type = values['tx_type']
             type_mapping = {
