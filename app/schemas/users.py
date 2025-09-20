@@ -163,12 +163,12 @@ class BalanceResponse(BaseModel):
 
 class TransactionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
-    
+
     transaction_id: UUID = Field(validation_alias='id')
     user_id: str
     transaction_type: TransactionType = Field(validation_alias='tx_type')
     amount_usdc: Decimal
-    position_id: Optional[int] = Field(None, description="NFT token ID for position-related transactions")
+    position_id: Optional[int] = Field(None, description="NFT token ID for position-related transactions")  # Comes from DB column
     pool_name: Optional[str] = Field(None, description="Pool name for position transactions")
     tx_hash: Optional[str]
     status: TransactionStatus
@@ -197,13 +197,8 @@ class TransactionResponse(BaseModel):
                     if pool_name:
                         values['pool_name'] = pool_name
 
-            # Extract position_id (NFT token ID) from event_data
-            if 'position_id' not in values or values.get('position_id') is None:
-                if event_data and isinstance(event_data, dict):
-                    # Try different field names where position ID might be stored
-                    nft_token_id = event_data.get('nft_token_id') or event_data.get('position_id') or event_data.get('token_id')
-                    if nft_token_id:
-                        values['position_id'] = int(nft_token_id)
+            # Note: position_id now comes directly from the database column,
+            # no need to extract from event_data
 
         if isinstance(values, dict) and 'tx_type' in values:
             tx_type = values['tx_type']

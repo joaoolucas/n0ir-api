@@ -857,10 +857,26 @@ class WalletTransactionService:
                 # Use pool_name from details if available, otherwise try to fetch it
                 if details.get("pool_name"):
                     event_data["pool_name"] = details["pool_name"]
-                elif details.get("pool"):
-                    # Fallback: try to fetch pool name from pools_service
+
+                # Get pool address - from details or from position for POSITION_CLOSED
+                pool_address = details.get("pool")
+                if not pool_address and tx_type == "POSITION_CLOSED" and event_data.get("nft_token_id"):
+                    # For POSITION_CLOSED, look up the position to get pool_address
+                    from app.database.models import Position
+                    from sqlalchemy import select
+
+                    stmt = select(Position).where(Position.token_id == event_data["nft_token_id"])
+                    result = await self.db.execute(stmt)
+                    position = result.scalar_one_or_none()
+                    if position:
+                        pool_address = position.pool_address
+                        event_data["pool"] = pool_address  # Store for reference
+                        logger.debug(f"Found pool address {pool_address} from position {event_data['nft_token_id']}")
+
+                if pool_address and not event_data.get("pool_name"):
+                    # Fetch pool name from pools_service
                     try:
-                        pool_data = await pools_service.get_pool(details["pool"], include_effective_apr=False)
+                        pool_data = await pools_service.get_pool(pool_address, include_effective_apr=False)
                         symbol = pool_data.get('symbol', '')
                         # Symbol format is "TOKEN0/TOKEN1-0.3%"
                         # We want to keep "TOKEN0/TOKEN1" format
@@ -872,13 +888,20 @@ class WalletTransactionService:
 
                         if pool_name:
                             event_data["pool_name"] = pool_name
-                            logger.debug(f"Found pool name {pool_name} for pool {details['pool']}")
+                            logger.debug(f"Found pool name {pool_name} for pool {pool_address}")
                     except Exception as e:
-                        logger.warning(f"Could not fetch pool info for {details['pool']}: {e}")
+                        logger.warning(f"Could not fetch pool info for {pool_address}: {e}")
             
             # Store the USDC amount in event_data to avoid conflict with property
             event_data["amount_usdc"] = float(amount_usdc)
-            
+
+            # Extract position_id from nft_token_id for database column
+            position_id_value = None
+            if nft_id:
+                position_id_value = nft_id
+            elif "nft_token_id" in event_data:
+                position_id_value = event_data["nft_token_id"]
+
             transaction = Transaction(
                 tx_hash=details["tx_hash"],
                 user_id=user_id,
@@ -886,15 +909,19 @@ class WalletTransactionService:
                 status="CONFIRMED",
                 block_number=details.get("block"),
                 block_timestamp=datetime.fromisoformat(details["timestamp"].replace("Z", "+00:00")) if details.get("timestamp") else None,
-                event_data=event_data
+                event_data=event_data,
+                position_id=position_id_value  # Set the foreign key column
             )
-            
+
             self.db.add(transaction)
             logger.info(f"Saved {tx_type} transaction: {details['tx_hash'][:10]}... Amount: {amount_usdc} USDC")
 
             # If this is a POSITION_CLOSED transaction, update the position status
-            if tx_type == "POSITION_CLOSED" and details.get("nft_token_id"):
-                await self._close_position_if_needed(user_id, details["nft_token_id"], details["tx_hash"], amount_usdc)
+            # Check both details and event_data for nft_token_id
+            nft_id = details.get("nft_token_id") or event_data.get("nft_token_id")
+            if tx_type == "POSITION_CLOSED" and nft_id:
+                logger.info(f"Closing position {nft_id} for tx {details['tx_hash'][:10]}...")
+                await self._close_position_if_needed(user_id, nft_id, details["tx_hash"], amount_usdc)
         else:
             # Update existing transaction if needed
             if existing_tx.tx_type == "UNKNOWN" and tx_type != "UNKNOWN":
