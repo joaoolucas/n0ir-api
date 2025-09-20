@@ -20,6 +20,7 @@ class TransactionType(str, enum.Enum):
     POSITION_CREATED = "POSITION_CREATED"
     POSITION_CLOSED = "POSITION_CLOSED"
     SWAP = "SWAP"
+    FEE_TRANSFER = "FEE_TRANSFER"
 
 
 class TransactionStatus(str, enum.Enum):

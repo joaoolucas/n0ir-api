@@ -525,6 +525,9 @@ async def get_transactions(
     - WITHDRAW: USDC from CDP wallet to owner wallet
     - POSITION_CREATED: Position opened via LiquidityManager
     - POSITION_CLOSED: Position closed via LiquidityManager
+    - STAKING: NFT position staked to gauge
+    - SWAP: Token swap transactions
+    - FEE_TRANSFER: Fee transfers to 0xfD75350A7e2C4914908fF7E3082c45Af5762f5FE
     """
     # First check if user has a CDP wallet and fetch fresh data
     from sqlalchemy import select
