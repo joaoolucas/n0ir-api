@@ -268,7 +268,6 @@ class PerformanceResponse(BaseModel):
     # PnL metrics
     realized_pnl_usdc: Decimal
     realized_pnl_pct: Decimal
-    rewards_earned_usdc: Decimal
     pnl_usdc: Decimal  # Total PnL (unrealized + realized)
     pnl_pct: Decimal   # Total PnL percentage
 

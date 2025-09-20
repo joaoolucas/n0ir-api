@@ -720,7 +720,6 @@ async def get_performance(
     - active_positions: Number of active positions
     - realized_pnl_usdc: PnL from closed positions
     - realized_pnl_pct: Realized PnL as percentage of net deposits
-    - rewards_earned_usdc: Rewards earned from staking
     - pnl_usdc: Total PnL (realized + unrealized)
     - pnl_pct: Total PnL as percentage of net deposits
 
@@ -1003,7 +1002,6 @@ async def get_performance(
         # PnL metrics
         realized_pnl_usdc=realized_pnl,
         realized_pnl_pct=realized_pnl_pct,
-        rewards_earned_usdc=rewards_earned,
         pnl_usdc=total_pnl,  # Total PnL (unrealized + realized)
         pnl_pct=total_pnl_percentage  # Total PnL percentage
     )
