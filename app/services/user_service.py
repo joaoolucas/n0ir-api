@@ -385,7 +385,6 @@ class UserService:
         self,
         user_id: str,
         amount: Decimal,
-        tx_hash: Optional[str] = None,
         withdraw_all: bool = False
     ) -> Transaction:
         """Process USDC withdrawal for user.
@@ -394,11 +393,11 @@ class UserService:
         - Go to the user_id address (no destination_address parameter)
         - Force close positions if needed (hardcoded to True)
         - Use 0.1% max slippage (hardcoded)
+        - Execute through agent manager (no manual tx_hash)
 
         Args:
             user_id: The user's wallet address (used as both ID and destination)
             amount: Amount of USDC to withdraw
-            tx_hash: Optional transaction hash if already executed
             withdraw_all: Whether to withdraw entire available balance
         """
         # Hardcoded parameters
@@ -441,45 +440,44 @@ class UserService:
             if expected_balance < amount:
                 raise ValueError(f"Insufficient funds even with positions. Expected: {expected_balance}, Requested: {amount}")
         
-        # If no tx_hash provided, execute withdrawal through agent manager
-        if not tx_hash:
-            from app.services.agent_management_service import get_agent_service
-            agent_service = get_agent_service()
-            
-            try:
-                # DO NOT mark positions as closed in DB - let the agent handle it on-chain
-                # The watcher will detect POSITION_CLOSED events and update the DB
-                
-                # If withdraw_all and positions need to be closed, calculate expected total
-                if withdraw_all and positions_to_close:
-                    # Calculate expected balance after positions are closed (including AERO rewards)
-                    expected_total = wallet_balance
-                    for position in positions_to_close:
-                        expected_total += (position.current_value_usdc or position.entry_amount_usdc)
-                    
-                    # Note: AERO rewards will be handled by the agent when closing positions
-                    logger.info(f"Withdraw all: expecting ~{expected_total} USDC after closing {len(positions_to_close)} positions")
-                    # Use a high amount to ensure everything is withdrawn
-                    amount = expected_total * Decimal("1.1")  # Add 10% buffer to ensure all funds are withdrawn
-                
-                # Request withdrawal through agent (destination is always user_id)
-                result = await agent_service.withdraw_usdc(
-                    user_id=user_id,
-                    amount=float(amount),
-                    positions_to_close=[int(p.nft_token_id) for p in positions_to_close if p.nft_token_id],  # Ensure NFT IDs are integers
-                    withdraw_all=withdraw_all
-                )
-                
-                if not result.get('success'):
-                    error_msg = result.get('error', 'Unknown error')
-                    raise ValueError(f"Withdrawal failed: {error_msg}")
-                
-                tx_hash = result.get('tx_hash')
-                if not tx_hash:
-                    raise ValueError("Withdrawal executed but no transaction hash returned")
-                    
-            except Exception as e:
-                raise
+        # Always execute withdrawal through agent manager
+        from app.services.agent_management_service import get_agent_service
+        agent_service = get_agent_service()
+
+        try:
+            # DO NOT mark positions as closed in DB - let the agent handle it on-chain
+            # The watcher will detect POSITION_CLOSED events and update the DB
+
+            # If withdraw_all and positions need to be closed, calculate expected total
+            if withdraw_all and positions_to_close:
+                # Calculate expected balance after positions are closed (including AERO rewards)
+                expected_total = wallet_balance
+                for position in positions_to_close:
+                    expected_total += (position.current_value_usdc or position.entry_amount_usdc)
+
+                # Note: AERO rewards will be handled by the agent when closing positions
+                logger.info(f"Withdraw all: expecting ~{expected_total} USDC after closing {len(positions_to_close)} positions")
+                # Use a high amount to ensure everything is withdrawn
+                amount = expected_total * Decimal("1.1")  # Add 10% buffer to ensure all funds are withdrawn
+
+            # Request withdrawal through agent (destination is always user_id)
+            result = await agent_service.withdraw_usdc(
+                user_id=user_id,
+                amount=float(amount),
+                positions_to_close=[int(p.nft_token_id) for p in positions_to_close if p.nft_token_id],  # Ensure NFT IDs are integers
+                withdraw_all=withdraw_all
+            )
+
+            if not result.get('success'):
+                error_msg = result.get('error', 'Unknown error')
+                raise ValueError(f"Withdrawal failed: {error_msg}")
+
+            tx_hash = result.get('tx_hash')
+            if not tx_hash:
+                raise ValueError("Withdrawal executed but no transaction hash returned")
+
+        except Exception as e:
+            raise
         
         # Don't create transaction in database - let the watcher handle it
         # The watcher will detect the WITHDRAWAL event on-chain and create the transaction
@@ -496,7 +494,7 @@ class UserService:
             user_id=user_id,
             tx_type='WITHDRAW',  # Changed from WITHDRAWAL to match schema
             tx_hash=tx_hash,
-            status='PENDING' if not tx_hash else 'CONFIRMED',
+            status='CONFIRMED',  # Always CONFIRMED since we wait for tx_hash from agent
             event_data={
                 'amount_usdc': float(amount),
                 'to_address': user_id  # Always withdraw to user's own address

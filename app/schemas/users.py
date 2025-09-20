@@ -59,7 +59,6 @@ class DepositRequest(BaseModel):
 
 class WithdrawRequest(BaseModel):
     amount_usdc: Decimal = Field(..., gt=0, description="Amount to withdraw in USDC")
-    tx_hash: Optional[str] = Field(None, description="Transaction hash if already executed")
     withdraw_all: bool = Field(False, description="Withdraw entire available balance after closing positions")
 
 

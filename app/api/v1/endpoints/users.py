@@ -465,7 +465,6 @@ async def withdraw(
             transaction = await service.withdraw_usdc(
                 user_id=user_id,
                 amount=actual_amount,  # Use the smart amount
-                tx_hash=request.tx_hash,
                 withdraw_all=request.withdraw_all
             )
         
