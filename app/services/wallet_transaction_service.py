@@ -216,14 +216,12 @@ class WalletTransactionService:
             pool_data = await pools_service.get_pool(pool_address, include_effective_apr=False)
             symbol = pool_data.get('symbol', '')
             # Symbol format is "TOKEN0/TOKEN1-0.3%"
-            # We want to convert it to "TOKEN0-TOKEN1"
+            # We want to keep "TOKEN0/TOKEN1" format
             if symbol and '-' in symbol:
                 # Remove fee percentage (everything after last dash)
-                token_pair = symbol.rsplit('-', 1)[0]  # Gets "TOKEN0/TOKEN1"
-                # Replace slash with dash for consistent format
-                pool_name = token_pair.replace('/', '-')
+                pool_name = symbol.rsplit('-', 1)[0]  # Gets "TOKEN0/TOKEN1"
             else:
-                pool_name = symbol.replace('/', '-') if symbol else ''
+                pool_name = symbol
             return pool_name if pool_name else None
         except Exception as e:
             logger.warning(f"Could not fetch pool info for {pool_address}: {e}")
@@ -760,14 +758,12 @@ class WalletTransactionService:
                         pool_data = await pools_service.get_pool(details["pool"], include_effective_apr=False)
                         symbol = pool_data.get('symbol', '')
                         # Symbol format is "TOKEN0/TOKEN1-0.3%"
-                        # We want to convert it to "TOKEN0-TOKEN1"
+                        # We want to keep "TOKEN0/TOKEN1" format
                         if symbol and '-' in symbol:
                             # Remove fee percentage (everything after last dash)
-                            token_pair = symbol.rsplit('-', 1)[0]  # Gets "TOKEN0/TOKEN1"
-                            # Replace slash with dash for consistent format
-                            pool_name = token_pair.replace('/', '-')
+                            pool_name = symbol.rsplit('-', 1)[0]  # Gets "TOKEN0/TOKEN1"
                         else:
-                            pool_name = symbol.replace('/', '-') if symbol else ''
+                            pool_name = symbol
 
                         if pool_name:
                             event_data["pool_name"] = pool_name
