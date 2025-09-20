@@ -865,10 +865,10 @@ async def get_performance(
         total_deposits, total_withdrawals = await service.get_deposit_withdrawal_totals(user_id)
         net_deposits = total_deposits - total_withdrawals
 
-        # Calculate total_pnl_percentage
+        # Calculate total_pnl_percentage using total deposits (not net) to avoid weird percentages
         total_pnl_percentage = Decimal(0)
-        if net_deposits > 0:
-            total_pnl_percentage = (total_pnl / net_deposits) * 100
+        if total_deposits > 0:
+            total_pnl_percentage = (total_pnl / total_deposits) * 100
 
         active_positions_count = len([p for p in all_positions if p.status == 'ACTIVE'])
 
@@ -1013,10 +1013,18 @@ async def get_performance(
             logger.error(f"Failed to fetch blockchain data from CDP: {e}")
             # Continue without blockchain data
     
-    # Calculate realized PnL percentage based on net deposits
+    # Calculate realized PnL percentage based on total deposits (not net)
+    # Use total deposits as the denominator to avoid weird percentages when user has withdrawn
     realized_pnl_pct = Decimal(0)
-    if net_deposits > 0 and realized_pnl != 0:
-        realized_pnl_pct = (realized_pnl / net_deposits) * 100
+    if period:
+        # For period calculations, percentage is already calculated correctly
+        if net_deposits > 0 and realized_pnl != 0:
+            realized_pnl_pct = (realized_pnl / net_deposits) * 100
+    else:
+        # For all-time, use total deposits (not net) to avoid negative/weird percentages
+        total_deposits_only, _ = await service.get_deposit_withdrawal_totals(user_id)
+        if total_deposits_only > 0 and realized_pnl != 0:
+            realized_pnl_pct = (realized_pnl / total_deposits_only) * 100
 
     # Return performance data with updated schema including balance breakdown
     return PerformanceResponse(
