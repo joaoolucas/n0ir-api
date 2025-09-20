@@ -1,7 +1,6 @@
 from fastapi import APIRouter, HTTPException, Path, Request
 from app.schemas.tokens import (
     TokenInfoResponse,
-    TokenPricesRequest,
     TokenPricesResponse
 )
 from app.schemas.common import ErrorResponse
@@ -60,36 +59,4 @@ async def get_token_info(
         )
 
 
-@router.post(
-    "/tokens/prices",
-    response_model=TokenPricesResponse,
-    responses={
-        400: {"model": ErrorResponse, "description": "Bad Request"},
-        500: {"model": ErrorResponse, "description": "Internal Server Error"}
-    }
-)
-async def get_token_prices(request: Request, price_request: TokenPricesRequest):
-    """
-    Get current USD prices for multiple tokens.
-    
-    Returns a map of token addresses to their current USD prices.
-    Tokens without available price data will have a price of 0.
-    """
-    logger.info(f"POST /tokens/prices - IP: {request.client.host} - Count: {len(price_request.addresses)}")
-    try:
-        prices = await pools_service.get_token_prices(price_request.addresses)
-        logger.info(f"Successfully fetched prices for {len(prices)} tokens")
-        return TokenPricesResponse(prices=prices)
-        
-    except Exception as e:
-        logger.error(f"Error fetching token prices: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": {
-                    "code": "INTERNAL_ERROR",
-                    "message": "Failed to fetch token prices",
-                    "details": {"error": str(e)}
-                }
-            }
-        )
+# POST /tokens/prices endpoint removed - use GET /tokens/prices/<address> instead

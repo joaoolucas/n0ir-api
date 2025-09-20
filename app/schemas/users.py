@@ -44,8 +44,7 @@ class TimePeriod(str, enum.Enum):
 
 # Request Models
 class CreateUserRequest(BaseModel):
-    user_id: str = Field(..., description="User's wallet address (EOA)")
-    start_agent: bool = Field(True, description="Whether to start agent and create CDP wallet")
+    pass  # Empty body, user_id is now a path parameter
 
 
 class UpdateUserRequest(BaseModel):

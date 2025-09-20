@@ -545,6 +545,7 @@ class WalletTransactionService:
 
                 # Try to get the position details to find pool name
                 from app.database.models.position import Position
+                from sqlalchemy import select
                 stmt = select(Position).where(Position.token_id == position_event["nft_token_id"])
                 result = await self.db.execute(stmt)
                 position = result.scalar_one_or_none()

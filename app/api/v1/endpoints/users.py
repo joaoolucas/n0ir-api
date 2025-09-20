@@ -334,17 +334,17 @@ async def list_users(
     return enhanced_users
 
 
-@router.post("", response_model=UserResponse, status_code=201)
+@router.post("/{user_id}", response_model=UserResponse, status_code=201)
 async def create_user(
-    request: CreateUserRequest,
+    user_id: str,
     db: AsyncSession = Depends(get_db)
 ):
-    """Create a new user and optionally start their agent.
-    
-    This endpoint intelligently handles user creation:
+    """Create a new user and start their agent.
+
+    This endpoint handles user creation:
     - Creates user record with wallet address as ID
-    - Optionally starts agent and creates CDP wallet
-    - Returns user info with CDP wallet if created
+    - Always starts agent and creates CDP wallet
+    - Returns user info with CDP wallet
     
     Args:
         user_id: User's wallet address (EOA)
@@ -353,16 +353,16 @@ async def create_user(
     """
     
     # Validate wallet address format
-    if not request.user_id.startswith("0x") or len(request.user_id) != 42:
+    if not user_id.startswith("0x") or len(user_id) != 42:
         raise HTTPException(status_code=400, detail="Invalid wallet address format")
 
     # Signature verification removed - CDP wallet generation doesn't require it
-    logger.info(f"Creating user {request.user_id} without signature verification")
-    
+    logger.info(f"Creating user {user_id} without signature verification")
+
     user_service = UserService(db)
-    
+
     # Check if user already exists
-    existing_user = await user_service.get_user(request.user_id)
+    existing_user = await user_service.get_user(user_id)
     if existing_user:
         raise HTTPException(status_code=400, detail="User already exists")
     
@@ -370,31 +370,31 @@ async def create_user(
         # Create user with wallet address as ID
         # user_id IS the owner's wallet address
         user = await user_service.create_user(
-            user_id=request.user_id,  # This is the user's EOA address
+            user_id=user_id,  # This is the user's EOA address
             cdp_wallet_address=None,  # Will be set when CDP wallet is created
-            cdp_wallet_name=f"n0ir-agent-{request.user_id[:8]}"  # Shortened for readability
+            cdp_wallet_name=f"n0ir-agent-{user_id[:8]}"  # Shortened for readability
         )
-        
-        # Immediately request CDP wallet creation from agent manager
+
+        # Always request CDP wallet creation from agent manager (start_agent is always true now)
         from app.services.agent_management_service import get_agent_service
         agent_service = get_agent_service()
-        
-        logger.info(f"Requesting CDP wallet creation for user {request.user_id}")
-        wallet_result = await agent_service.create_wallet_for_user(request.user_id)
-        
+
+        logger.info(f"Requesting CDP wallet creation for user {user_id}")
+        wallet_result = await agent_service.create_wallet_for_user(user_id)
+
         if wallet_result.get('success') and wallet_result.get('wallet_address'):
             # Update user with real wallet address
-            await user_service.update_user_wallet(request.user_id, wallet_result['wallet_address'])
+            await user_service.update_user_wallet(user_id, wallet_result['wallet_address'])
             user.cdp_wallet_address = wallet_result['wallet_address']
-            logger.info(f"CDP wallet created immediately for {request.user_id}: {wallet_result['wallet_address']}")
+            logger.info(f"CDP wallet created immediately for {user_id}: {wallet_result['wallet_address']}")
         elif wallet_result.get('error') == 'timeout':
-            logger.info(f"CDP wallet creation timed out for {request.user_id}, will update asynchronously")
+            logger.info(f"CDP wallet creation timed out for {user_id}, will update asynchronously")
             # Continue with pending address - will be updated via event listener
         else:
-            logger.warning(f"Failed to create CDP wallet for {request.user_id}: {wallet_result.get('error')}")
+            logger.warning(f"Failed to create CDP wallet for {user_id}: {wallet_result.get('error')}")
             # Continue with pending address
-        
-        logger.info(f"User {request.user_id} created successfully. Agent will auto-start when balance >= 50 USDC")
+
+        logger.info(f"User {user_id} created successfully. Agent will auto-start when balance >= 50 USDC")
         
         return UserResponse.model_validate(user)
         
