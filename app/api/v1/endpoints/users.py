@@ -746,26 +746,14 @@ async def get_performance(
             from web3 import Web3
             from app.database.models import User
             from sqlalchemy import select
-            from app.core.redis_client import publish_balance_change_event
-            from app.core.redis_client import redis_client
+            # Redis client removed - not available
+            # from app.core.redis_client import publish_balance_change_event
+            # from app.core.redis_client import redis_client
             import time
 
-            # Check cache first (60 second TTL to prevent excessive chain calls)
-            cache_key = f"balance_sync:{user_id}"
-            last_sync = await redis_client.get(cache_key)
-
-            # Skip sync if we synced within last 60 seconds
-            if last_sync:
-                last_sync_time = float(last_sync)
-                if time.time() - last_sync_time < 60:
-                    logger.debug(f"Skipping balance sync for {user_id} - synced {int(time.time() - last_sync_time)}s ago")
-                else:
-                    # Clear expired cache entry
-                    await redis_client.delete(cache_key)
-                    last_sync = None
-
-            # Only sync if not recently cached
-            if not last_sync:
+            # Redis caching disabled - proceed with sync
+            # TODO: Re-enable caching when redis_client is available
+            if True:  # Always sync for now
                 # Initialize Web3 and USDC contract
                 w3 = Web3(Web3.HTTPProvider(settings.BASE_RPC_URL))
                 usdc_address = Web3.to_checksum_address("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
@@ -777,8 +765,8 @@ async def get_performance(
                 balance_wei = usdc_contract.functions.balanceOf(checksum_address).call()
                 onchain_balance = Decimal(balance_wei) / Decimal(10 ** 6)  # USDC has 6 decimals
 
-                # Cache the sync timestamp
-                await redis_client.setex(cache_key, 60, str(time.time()))
+                # Redis caching disabled
+                # await redis_client.setex(cache_key, 60, str(time.time()))
 
                 # Get current database balance
                 db_balance = Decimal(str(user.usdc_balance or 0))
@@ -823,8 +811,8 @@ async def get_performance(
         try:
             from app.services.wallet_transaction_service import WalletTransactionService
 
-            # Initialize transaction service
-            tx_service = WalletTransactionService()
+            # Initialize transaction service with database session
+            tx_service = WalletTransactionService(db)
 
             # Fetch and categorize recent transactions
             result = await tx_service.fetch_and_categorize(
