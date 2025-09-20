@@ -162,8 +162,8 @@ class CDPSQLClient:
                 raise CDPAuthorizationError(f"Access denied: {response.text}")
                 
             elif 500 <= response.status_code < 600:
-                # Use warning level for external service errors instead of error
-                logger.warning(f"CDP API server error {response.status_code} (external service issue): {response.text}")
+                # Use debug level for external service errors to reduce noise
+                logger.debug(f"CDP API server error {response.status_code} (external service issue): {response.text}")
                 raise CDPServerError(f"Server error {response.status_code}")
                 
             else:

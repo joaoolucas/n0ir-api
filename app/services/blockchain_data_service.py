@@ -155,15 +155,15 @@ class BlockchainDataService:
             return result
             
         except Exception as e:
-            # Use warning for expected external service issues
+            # Use debug for expected external service issues to reduce noise
             if "Server error 500" in str(e) or "internal_server_error" in str(e):
-                logger.warning(f"CDP API experiencing issues: {e}")
+                logger.debug(f"CDP API experiencing issues: {e}")
             else:
                 logger.error(f"Unexpected error fetching wallet performance data: {e}")
             # For unexpected errors, check if we have any cached data
             fallback_cache = await self.cache_manager.get_stale_cache('wallet_performance', cache_params)
             if fallback_cache:
-                logger.info("Using stale cache due to CDP API error")
+                logger.debug("Using stale cache due to CDP API error")
                 return fallback_cache
             return self._empty_performance_data()
     
