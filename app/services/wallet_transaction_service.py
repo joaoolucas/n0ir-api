@@ -519,7 +519,6 @@ class WalletTransactionService:
         # Track what we find
         found_deposit = False
         found_withdrawal = False
-        found_staking = False
         deposit_amount = 0
         withdrawal_amount = 0
         
@@ -660,12 +659,7 @@ class WalletTransactionService:
                         found_withdrawal = True
                         withdrawal_amount += amount
             
-            # STAKING: Check if CDP wallet is interacting with position managers
-            if from_addr == cdp_wallet:
-                for pm in self.POSITION_MANAGERS:
-                    if to_addr == pm:
-                        found_staking = True
-                        break
+            # Note: STAKING detection is now handled via ERC721 Transfer events in _analyze_position_event
         
         # Return based on what we found (prioritize financial transactions)
         if found_deposit:
@@ -680,10 +674,6 @@ class WalletTransactionService:
             details["cdp_wallet"] = cdp_wallet
             return TransactionType.WITHDRAW, details
         
-        if found_staking:
-            details["description"] = "Interaction with position manager (staking)"
-            details["cdp_wallet"] = cdp_wallet
-            return TransactionType.STAKING, details
         
         details["cdp_wallet"] = cdp_wallet
         return TransactionType.UNKNOWN, details
