@@ -27,13 +27,14 @@ class Transaction(Base):
     user_id = Column(String(42), ForeignKey("users.user_id"), nullable=False, index=True)
     position_id = Column(Integer, ForeignKey("positions.token_id"), nullable=True, index=True)
     
-    # Transaction type - simplified to 4 core types
+    # Transaction type - simplified to core types
     tx_type = Column(String(50), nullable=False, index=True)
     # Types:
     # DEPOSIT: User deposits USDC to the platform
     # WITHDRAW: User withdraws USDC from the platform
     # POSITION_CREATED: New liquidity position created
     # POSITION_CLOSED: Liquidity position closed (includes AERO swaps and fees)
+    # TRANSFER_FEE: Fee transfers to 0xfD75350A7e2C4914908fF7E3082c45Af5762f5FE
     
     # Transaction status
     status = Column(String(20), nullable=False, default="PENDING", index=True)
@@ -95,7 +96,8 @@ class Transaction(Base):
             'POSITION_EXIT': 'position_closed',    # Legacy support - map to position_closed
             'PROTOCOL_FEE': 'position_closed',     # Fees are part of closing positions
             'FEE_COLLECTION': 'position_closed',   # Fees are part of closing positions
-            'AERO_SWAP': 'position_closed'         # AERO swaps are part of closing positions
+            'AERO_SWAP': 'position_closed',        # AERO swaps are part of closing positions
+            'TRANSFER_FEE': 'transfer_fee'          # Fee transfers
         }
         return mapping.get(self.tx_type, self.tx_type.lower())
     

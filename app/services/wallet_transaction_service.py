@@ -23,6 +23,7 @@ class TransactionType(Enum):
     POSITION_CREATED = "POSITION_CREATED"
     POSITION_CLOSED = "POSITION_CLOSED"
     SWAP = "SWAP"
+    TRANSFER_FEE = "TRANSFER_FEE"  # Fee transfers to 0xfD75350A7e2C4914908fF7E3082c45Af5762f5FE
     UNKNOWN = "UNKNOWN"
 
 
@@ -36,7 +37,10 @@ class WalletTransactionService:
         # Known token addresses on Base
         self.USDC_ADDRESS = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913".lower()
         self.AERO_ADDRESS = settings.aero_token_address.lower()
-        
+
+        # Fee recipient address for TRANSFER_FEE transactions
+        self.FEE_RECIPIENT = "0xfD75350A7e2C4914908fF7E3082c45Af5762f5FE".lower()
+
         # LiquidityManager contract for position open/close detection
         self.LIQUIDITY_MANAGER = settings.liquidity_manager_address.lower()
 
@@ -703,6 +707,13 @@ class WalletTransactionService:
                     elif from_addr == cdp_wallet and recipient == owner_wallet:
                         found_withdrawal = True
                         withdrawal_amount += amount
+
+                    # TRANSFER_FEE: CDP wallet sending USDC to fee recipient
+                    elif from_addr == cdp_wallet and recipient == self.FEE_RECIPIENT:
+                        details["amount"] = amount
+                        details["description"] = f"Fee transfer to {self.FEE_RECIPIENT}"
+                        details["fee_recipient"] = self.FEE_RECIPIENT
+                        return TransactionType.TRANSFER_FEE, details
                 
                 # For transferFrom method
                 elif decoded.get("method") == "transferFrom":
@@ -718,6 +729,13 @@ class WalletTransactionService:
                     elif transfer_from == cdp_wallet and transfer_to == owner_wallet:
                         found_withdrawal = True
                         withdrawal_amount += amount
+
+                    # TRANSFER_FEE: CDP wallet sending USDC to fee recipient
+                    elif transfer_from == cdp_wallet and transfer_to == self.FEE_RECIPIENT:
+                        details["amount"] = amount
+                        details["description"] = f"Fee transfer to {self.FEE_RECIPIENT}"
+                        details["fee_recipient"] = self.FEE_RECIPIENT
+                        return TransactionType.TRANSFER_FEE, details
             
             # STAKING: Check if CDP wallet is interacting with position managers
             # This is a fallback if ERC721 Transfer events aren't available
