@@ -608,13 +608,17 @@ class WalletTransactionService:
                 return TransactionType.STAKING, details
 
             method_name = position_event["method_name"]
+            method_sig = position_event.get("method_sig", "")
 
             # Additional logic: detect swaps and position closes
+            # BUT: Never override if we have a known method signature
 
-            # POSITION_CLOSED: if both USDC and AERO are coming IN (highest priority)
+            # POSITION_CLOSED: if both USDC and AERO are coming IN
             # When closing a position, you get both tokens back
-            if position_event["usdc_in"] > 0 and position_event["aero_in"] > 0:
-                # This is a position close
+            # IMPORTANT: Only consider this a close if we DON'T have an openPosition method signature
+            if (position_event["usdc_in"] > 0 and position_event["aero_in"] > 0 and
+                method_sig not in ["0x3a1e3569", "0x2b17db59"]):  # Don't override openPosition methods
+                # This is likely a position close
                 method_name = "closePosition"
                 position_event["method_name"] = "closePosition"
 
