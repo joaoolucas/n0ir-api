@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from app.api.v1.endpoints import pools, tokens, health, positions, strategy, users
+from app.api.v1.endpoints import blockchain, health, strategy, users
 from app.core.auth import verify_bearer_token
 
 api_router = APIRouter()
@@ -10,22 +10,10 @@ api_router.include_router(
     tags=["Health"]
 )
 
-# Include all other endpoints with Bearer token authentication
+# Include blockchain endpoints with Bearer token authentication
 api_router.include_router(
-    pools.router,
-    tags=["Pools"],
-    dependencies=[Depends(verify_bearer_token)]
-)
-
-api_router.include_router(
-    tokens.router,
-    tags=["Tokens"],
-    dependencies=[Depends(verify_bearer_token)]
-)
-
-api_router.include_router(
-    positions.router,
-    tags=["Positions"],
+    blockchain.router,
+    tags=["Blockchain"],
     dependencies=[Depends(verify_bearer_token)]
 )
 

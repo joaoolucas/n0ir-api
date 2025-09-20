@@ -1,9 +1,23 @@
-"""Positions API endpoints."""
+"""Unified Blockchain endpoints for pools, positions, and tokens."""
 
 from typing import List, Optional, Union
-from fastapi import APIRouter, HTTPException, Query, Request, Depends
+from fastapi import APIRouter, HTTPException, Query, Path, Request, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from statistics import median
+
+# Import schemas
+from app.schemas.pools import (
+    PoolData,
+    PoolsListResponse,
+    PoolBatchRequest,
+    PoolStatsResponse,
+    MedianAPRResponse
+)
+from app.schemas.tokens import (
+    TokenInfoResponse,
+    TokenPricesResponse
+)
 from app.schemas.positions import (
     PositionInfo,
     PositionListResponse,
@@ -12,18 +26,117 @@ from app.schemas.positions import (
     HedgedPositionResponse
 )
 from app.schemas.common import ErrorResponse
-from app.core.positions_service import positions_service
+
+# Import services
 from app.core.pools_service import pools_service
+from app.core.positions_service import positions_service
 from app.core.logger import logger
+from app.core.strategy_service import WHITELISTED_POOLS
 from app.database.session import get_db
-from app.database.models import Position  # Import from __init__ to get compat version
+from app.database.models import Position
 from app.services.hedge_service import HedgeService
 from app.core.exceptions import HedgeNotFoundError, HedgeError
 
 router = APIRouter()
 
 
-# NOTE: GET /positions/{position_id} endpoint removed - use GET /positions?position_id={id} instead
+# ============================================================================
+# POOLS ENDPOINTS
+# ============================================================================
+
+@router.get(
+    "/pools/{address}",
+    response_model=PoolData,
+    responses={
+        404: {"model": ErrorResponse, "description": "Pool not found"},
+        500: {"model": ErrorResponse, "description": "Internal Server Error"}
+    }
+)
+async def get_pool(
+    request: Request,
+    address: str = Path(..., description="Pool contract address", pattern="^0x[a-fA-F0-9]{40}$")
+):
+    """
+    Get detailed information for a specific pool.
+
+    Returns comprehensive data about a single concentrated liquidity pool.
+    """
+    logger.info(f"GET /pools/{address} - IP: {request.client.host}")
+    try:
+        pool = await pools_service.get_pool(address)
+        logger.info(f"Successfully fetched pool {address}")
+        return pool
+
+    except Exception as e:
+        if "not found" in str(e).lower():
+            logger.warning(f"Pool not found: {address}")
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": {
+                        "code": "POOL_NOT_FOUND",
+                        "message": f"Pool with address {address} not found",
+                        "details": {}
+                    }
+                }
+            )
+        logger.error(f"Error fetching pool {address}: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Failed to fetch pool",
+                    "details": {"error": str(e)}
+                }
+            }
+        )
+
+
+@router.get(
+    "/pools/whitelist/median-apr",
+    response_model=MedianAPRResponse,
+    responses={
+        500: {"model": ErrorResponse, "description": "Internal Server Error"}
+    }
+)
+async def get_whitelist_median_apr(request: Request) -> MedianAPRResponse:
+    """
+    Median APR for whitelisted pools.
+
+    Computes the median of APRs across pools listed in the global whitelist.
+    """
+    logger.info(f"GET /pools/whitelist/median-apr - IP: {request.client.host}")
+    try:
+        addresses = list(WHITELISTED_POOLS)
+        if not addresses:
+            return MedianAPRResponse(median_apr=0.0)
+
+        pools = await pools_service.get_pools_batch(addresses)
+        aprs = [float(p.get('apr', 0) or 0) for p in pools if p]
+
+        if not aprs:
+            return MedianAPRResponse(median_apr=0.0)
+
+        med = float(median(aprs))
+        return MedianAPRResponse(median_apr=med)
+    except Exception as e:
+        logger.error(f"Error computing whitelist median APR: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Failed to compute median APR",
+                    "details": {"error": str(e)}
+                }
+            }
+        )
+
+
+# ============================================================================
+# POSITIONS ENDPOINTS
+# ============================================================================
 
 @router.get(
     "/positions",
@@ -240,19 +353,19 @@ async def get_positions(
                 }
             }
         )
-    
+
     try:
         # Currently only owner filter is implemented
         if owner:
             positions = await positions_service.get_positions_by_owner(owner)
             logger.info(f"Successfully fetched {len(positions)} positions for owner {owner}")
-            
+
             # Apply additional filters if provided (future enhancement)
             # if pool:
             #     positions = [p for p in positions if p.pool_address.lower() == pool.lower()]
             # if in_range is not None:
             #     positions = [p for p in positions if p.in_range == in_range]
-            
+
             return PositionListResponse(
                 positions=positions,
                 total=len(positions)
@@ -270,7 +383,7 @@ async def get_positions(
                     }
                 }
             )
-        
+
     except HTTPException:
         raise
     except ValueError as e:
@@ -299,5 +412,54 @@ async def get_positions(
         )
 
 
+# ============================================================================
+# TOKENS ENDPOINTS
+# ============================================================================
 
+@router.get(
+    "/tokens/{address}",
+    response_model=TokenInfoResponse,
+    responses={
+        404: {"model": ErrorResponse, "description": "Token not found"},
+        500: {"model": ErrorResponse, "description": "Internal Server Error"}
+    }
+)
+async def get_token_info(
+    request: Request,
+    address: str = Path(..., description="Token contract address", pattern="^0x[a-fA-F0-9]{40}$")
+):
+    """
+    Get information about a specific token.
 
+    Returns token metadata including symbol, decimals, name, and current price.
+    """
+    logger.info(f"GET /tokens/{address} - IP: {request.client.host}")
+    try:
+        token_info = await pools_service.get_token_info(address)
+        logger.info(f"Successfully fetched token info for {address}")
+        return token_info
+
+    except Exception as e:
+        if "not found" in str(e).lower():
+            logger.warning(f"Token not found: {address}")
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": {
+                        "code": "TOKEN_NOT_FOUND",
+                        "message": f"Token with address {address} not found",
+                        "details": {}
+                    }
+                }
+            )
+        logger.error(f"Error fetching token info for {address}: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Failed to fetch token information",
+                    "details": {"error": str(e)}
+                }
+            }
+        )
