@@ -373,7 +373,7 @@ class WalletTransactionService:
                                 }
                                 break  # This is definitive
 
-                            # Check for ERC721 Transfer events (NFT staking)
+                            # Check for ERC721 Transfer events (NFT minting, burning, and staking)
                             elif event_sig_normalized == ERC721_TRANSFER_EVENT.lower():
                                 # Check if this is from the NFT Position Manager contract
                                 log_address = log.get("address", "").lower() if log.get("address") else ""
@@ -396,8 +396,39 @@ class WalletTransactionService:
                                             token_id_hex = topics[3].replace('0x', '') if isinstance(topics[3], str) else str(topics[3]).replace('0x', '')
                                             nft_token_id = int(token_id_hex, 16) if token_id_hex else None
 
+                                            # Check for MINT (position creation) - from address 0x0 to CDP wallet
+                                            zero_address = "0x" + "0" * 40
+                                            if from_addr == zero_address and to_addr == cdp_wallet and nft_token_id:
+                                                logger.debug(f"Detected NFT mint to CDP wallet: token {nft_token_id}")
+                                                # Don't override if we already have a position event, just add the NFT ID
+                                                if position_event and position_event.get("method_name") == "openPosition":
+                                                    position_event["nft_token_id"] = nft_token_id
+                                                else:
+                                                    position_event = {
+                                                        "method_sig": "0x3a1e3569",  # openPosition method signature
+                                                        "method_name": "openPosition",
+                                                        "nft_token_id": nft_token_id,
+                                                        "event_detected": "ERC721Mint",
+                                                        "event_signature": event_sig_normalized
+                                                    }
+
+                                            # Check for BURN (position close) - from CDP wallet to address 0x0
+                                            elif from_addr == cdp_wallet and to_addr == zero_address and nft_token_id:
+                                                logger.debug(f"Detected NFT burn from CDP wallet: token {nft_token_id}")
+                                                # Don't override if we already have a position event, just add the NFT ID
+                                                if position_event and position_event.get("method_name") == "closePosition":
+                                                    position_event["nft_token_id"] = nft_token_id
+                                                else:
+                                                    position_event = {
+                                                        "method_sig": "0xe0891d91",  # closePosition method signature
+                                                        "method_name": "closePosition",
+                                                        "nft_token_id": nft_token_id,
+                                                        "event_detected": "ERC721Burn",
+                                                        "event_signature": event_sig_normalized
+                                                    }
+
                                             # Check if this is a stake (CDP wallet transferring NFT to a gauge)
-                                            if from_addr == cdp_wallet and nft_token_id:
+                                            elif from_addr == cdp_wallet and nft_token_id and to_addr != zero_address:
                                                 # To determine if it's a stake, we need to check if the recipient is a gauge
                                                 # We'll mark it as potential stake and verify the gauge address later
                                                 position_event = {
@@ -619,6 +650,7 @@ class WalletTransactionService:
                 details["aero_in"] = position_event["aero_in"]
                 details["aero_out"] = position_event["aero_out"]
                 details["pool"] = position_event.get("pool")  # Include pool address
+                details["nft_token_id"] = position_event.get("nft_token_id")  # Include NFT token ID
 
                 # Try to get pool name
                 if position_event.get("pool"):
@@ -874,20 +906,26 @@ class WalletTransactionService:
                 if details.get("pool_name"):
                     event_data["pool_name"] = details["pool_name"]
 
-                # Get pool address - from details or from position for POSITION_CLOSED
+                # Get pool address - from details or from position data
                 pool_address = details.get("pool")
-                if not pool_address and tx_type == "POSITION_CLOSED" and event_data.get("nft_token_id"):
-                    # For POSITION_CLOSED, look up the position to get pool_address
+                nft_token_id = event_data.get("nft_token_id") or details.get("nft_token_id")
+
+                # For any transaction with an NFT token ID, try to get pool info from the position
+                if not pool_address and nft_token_id and tx_type in ["POSITION_CLOSED", "POSITION_CREATED", "STAKING"]:
                     from app.database.models import Position
                     from sqlalchemy import select
 
-                    stmt = select(Position).where(Position.token_id == event_data["nft_token_id"])
+                    stmt = select(Position).where(Position.token_id == nft_token_id)
                     result = await self.db.execute(stmt)
                     position = result.scalar_one_or_none()
                     if position:
                         pool_address = position.pool_address
                         event_data["pool"] = pool_address  # Store for reference
-                        logger.debug(f"Found pool address {pool_address} from position {event_data['nft_token_id']}")
+                        # Also get the pool name directly from the position
+                        if position.pool_name and not event_data.get("pool_name"):
+                            event_data["pool_name"] = position.pool_name
+                            logger.debug(f"Found pool name {position.pool_name} from position {nft_token_id}")
+                        logger.debug(f"Found pool address {pool_address} from position {nft_token_id}")
 
                 if pool_address and not event_data.get("pool_name"):
                     # Fetch pool name from pools_service
