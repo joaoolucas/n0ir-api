@@ -16,6 +16,7 @@ class UserStatus(str, enum.Enum):
 class TransactionType(str, enum.Enum):
     DEPOSIT = "DEPOSIT"
     WITHDRAW = "WITHDRAW"
+    STAKE = "STAKE"
     POSITION_CREATED = "POSITION_CREATED"
     POSITION_CLOSED = "POSITION_CLOSED"
     AERO_SWAP = "AERO_SWAP"
@@ -202,6 +203,9 @@ class TransactionResponse(BaseModel):
                 'position_opened': 'POSITION_CREATED',
                 'STAKING': 'POSITION_CREATED',
                 'staking': 'POSITION_CREATED',
+                # Map stake types
+                'stake': 'STAKE',
+                'STAKE': 'STAKE',
                 # Map swap types
                 'aero_swap': 'AERO_SWAP',
                 'AERO_SWAP': 'AERO_SWAP',

@@ -19,7 +19,8 @@ class TransactionType(Enum):
     """Transaction types for categorization."""
     DEPOSIT = "DEPOSIT"
     WITHDRAW = "WITHDRAW"  # Changed from WITHDRAWAL to match schema
-    STAKING = "STAKING"
+    STAKE = "STAKE"  # NFT position staked to gauge
+    STAKING = "STAKING"  # Legacy - keep for backwards compatibility
     POSITION_CREATED = "POSITION_CREATED"
     POSITION_CLOSED = "POSITION_CLOSED"
     AERO_SWAP = "AERO_SWAP"
@@ -39,7 +40,10 @@ class WalletTransactionService:
         
         # LiquidityManager contract for position open/close detection
         self.LIQUIDITY_MANAGER = settings.liquidity_manager_address.lower()
-        
+
+        # NFT Position Manager - the ERC721 contract that holds position NFTs
+        self.NFT_POSITION_MANAGER = "0x827922686190790b37229fd06084350e74485b72".lower()  # Aerodrome NFT Position Manager
+
         # Position manager contracts (for staking detection)
         self.POSITION_MANAGERS = [
             "0x827922686190790b37229fd06084350e74485b72".lower(),  # Main position manager
@@ -291,6 +295,8 @@ class WalletTransactionService:
                         DECREASE_LIQUIDITY_EVENT = "0x26f6a048ee9138f2c0ce266f322cb99228e8d619ae2bff30c67f8dcf9d2377b4"  # DecreaseLiquidity
                         INCREASE_LIQUIDITY_EVENT = "0x3067048beee31b25b2f1681f88dac838c8bba36af25bfb2b7cf7473a5847e35f"  # IncreaseLiquidity
                         COLLECT_EVENT = "0x40d0efd1a53d60ecbf40971b9daf7dc90178c3aadc7aab1765632738fa8b8f01"  # Collect
+                        # ERC721 Transfer event for NFT staking detection
+                        ERC721_TRANSFER_EVENT = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"  # Transfer(from, to, tokenId)
 
                         if event_sig:
                             # Normalize event signature for comparison
@@ -353,6 +359,44 @@ class WalletTransactionService:
                                     "event_signature": event_sig_normalized
                                 }
                                 break  # This is definitive
+
+                            # Check for ERC721 Transfer events (NFT staking)
+                            elif event_sig_normalized == ERC721_TRANSFER_EVENT.lower():
+                                # Check if this is from the NFT Position Manager contract
+                                log_address = log.get("address", "").lower() if log.get("address") else ""
+                                if log_address == self.NFT_POSITION_MANAGER:
+                                    # ERC721 Transfer has 3 indexed params: from, to, tokenId
+                                    # topics[0] = event signature
+                                    # topics[1] = from address (padded)
+                                    # topics[2] = to address (padded)
+                                    # topics[3] = tokenId
+                                    if len(topics) >= 4:
+                                        try:
+                                            # Extract addresses (remove 0x prefix and padding)
+                                            from_addr_hex = topics[1][-40:] if isinstance(topics[1], str) else str(topics[1])[-40:]
+                                            to_addr_hex = topics[2][-40:] if isinstance(topics[2], str) else str(topics[2])[-40:]
+                                            from_addr = ("0x" + from_addr_hex).lower()
+                                            to_addr = ("0x" + to_addr_hex).lower()
+
+                                            # Extract token ID
+                                            token_id_hex = topics[3].replace('0x', '') if isinstance(topics[3], str) else str(topics[3]).replace('0x', '')
+                                            nft_token_id = int(token_id_hex, 16) if token_id_hex else None
+
+                                            # Check if this is a stake (CDP wallet transferring NFT to a gauge)
+                                            if from_addr == cdp_wallet and nft_token_id:
+                                                # To determine if it's a stake, we need to check if the recipient is a gauge
+                                                # We'll mark it as potential stake and verify the gauge address later
+                                                position_event = {
+                                                    "type": "STAKE",
+                                                    "from_address": from_addr,
+                                                    "to_address": to_addr,
+                                                    "nft_token_id": nft_token_id,
+                                                    "event_detected": "ERC721Transfer",
+                                                    "event_signature": event_sig_normalized
+                                                }
+                                                logger.debug(f"Detected NFT transfer from CDP wallet: token {nft_token_id} to {to_addr}")
+                                        except (ValueError, TypeError, IndexError) as e:
+                                            logger.warning(f"Failed to parse ERC721 Transfer event: {e}")
 
         # PRIORITY 2: If no events found, fall back to method signature analysis
         # But only if we didn't already find a position event
@@ -483,6 +527,25 @@ class WalletTransactionService:
         # Check for position events first (highest priority)
         position_event = self._analyze_position_event(traces, cdp_wallet)
         if position_event:
+            # Handle STAKE type separately
+            if position_event.get("type") == "STAKE":
+                details["nft_token_id"] = position_event["nft_token_id"]
+                details["gauge_address"] = position_event["to_address"]
+                details["description"] = f"Staked NFT position {position_event['nft_token_id']} to gauge"
+                details["amount"] = 0  # Staking doesn't have a USDC amount
+
+                # Try to get the position details to find pool name
+                from app.database.models.position import Position
+                stmt = select(Position).where(Position.token_id == position_event["nft_token_id"])
+                result = await self.db.execute(stmt)
+                position = result.scalar_one_or_none()
+
+                if position:
+                    details["pool_name"] = position.pool_name
+                    details["pool"] = position.pool_address
+
+                return TransactionType.STAKE, details
+
             method_name = position_event["method_name"]
 
             # Additional logic: detect swaps and position closes
@@ -645,7 +708,8 @@ class WalletTransactionService:
         categorized = {
             TransactionType.DEPOSIT: [],
             TransactionType.WITHDRAW: [],
-            TransactionType.STAKING: [],
+            TransactionType.STAKE: [],
+            TransactionType.STAKING: [],  # Keep for backwards compatibility
             TransactionType.POSITION_CREATED: [],
             TransactionType.POSITION_CLOSED: [],
             TransactionType.AERO_SWAP: [],
@@ -674,7 +738,7 @@ class WalletTransactionService:
                 # Save to database if it's a financial or position transaction
                 if tx_type in [TransactionType.DEPOSIT, TransactionType.WITHDRAW,
                               TransactionType.POSITION_CREATED, TransactionType.POSITION_CLOSED,
-                              TransactionType.AERO_SWAP]:
+                              TransactionType.AERO_SWAP, TransactionType.STAKE]:
                     await self._save_transaction(
                         user_id=user_id,
                         tx_type=tx_type.value,
@@ -688,7 +752,8 @@ class WalletTransactionService:
             "total": len(transactions),
             "deposits": len(categorized[TransactionType.DEPOSIT]),
             "withdrawals": len(categorized[TransactionType.WITHDRAW]),
-            "stakings": len(categorized[TransactionType.STAKING]),
+            "stakes": len(categorized[TransactionType.STAKE]),
+            "stakings": len(categorized[TransactionType.STAKING]),  # Legacy
             "positions_opened": len(categorized[TransactionType.POSITION_CREATED]),
             "positions_closed": len(categorized[TransactionType.POSITION_CLOSED]),
             "aero_swaps": len(categorized[TransactionType.AERO_SWAP]),
@@ -723,7 +788,7 @@ class WalletTransactionService:
             }
             
             # Add position-specific and swap data if available
-            if tx_type in ["POSITION_CREATED", "POSITION_CLOSED", "AERO_SWAP"]:
+            if tx_type in ["POSITION_CREATED", "POSITION_CLOSED", "AERO_SWAP", "STAKE"]:
                 if details.get("method_sig"):
                     event_data["method_sig"] = details["method_sig"]
                 if details.get("usdc_in") is not None:
@@ -736,6 +801,10 @@ class WalletTransactionService:
                     event_data["aero_out"] = details["aero_out"]
                 if details.get("pool"):
                     event_data["pool"] = details["pool"]
+
+                # Add gauge address for STAKE transactions
+                if tx_type == "STAKE" and details.get("gauge_address"):
+                    event_data["gauge_address"] = details["gauge_address"]
 
                 # Add NFT token ID if available
                 if details.get("nft_token_id"):
