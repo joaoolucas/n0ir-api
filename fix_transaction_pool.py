@@ -79,7 +79,7 @@ async def fix_transaction_pool():
                 else:
                     # Fallback to AERO-USDC since that's the most common pool
                     pool_name = "AERO-USDC"
-                    print(f"\nUsing default pool name: {pool_name}")
+                    print(f"\nUsing fallback pool name: {pool_name}")
 
         # Update the transaction - only update event_data since pool_name column doesn't exist
         update_query = """

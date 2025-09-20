@@ -215,13 +215,15 @@ class WalletTransactionService:
         try:
             pool_data = await pools_service.get_pool(pool_address, include_effective_apr=False)
             symbol = pool_data.get('symbol', '')
-            # Extract just the token pair (remove fee percentage)
+            # Symbol format is "TOKEN0/TOKEN1-0.3%"
+            # We want to convert it to "TOKEN0-TOKEN1"
             if symbol and '-' in symbol:
-                # Get everything before the last dash (handles token pairs like WETH-USDC)
-                parts = symbol.rsplit('-', 1)  # Split from right to remove fee percentage
-                pool_name = parts[0]
+                # Remove fee percentage (everything after last dash)
+                token_pair = symbol.rsplit('-', 1)[0]  # Gets "TOKEN0/TOKEN1"
+                # Replace slash with dash for consistent format
+                pool_name = token_pair.replace('/', '-')
             else:
-                pool_name = symbol
+                pool_name = symbol.replace('/', '-') if symbol else ''
             return pool_name if pool_name else None
         except Exception as e:
             logger.warning(f"Could not fetch pool info for {pool_address}: {e}")
@@ -757,13 +759,15 @@ class WalletTransactionService:
                     try:
                         pool_data = await pools_service.get_pool(details["pool"], include_effective_apr=False)
                         symbol = pool_data.get('symbol', '')
-                        # Extract just the token pair (remove fee percentage)
+                        # Symbol format is "TOKEN0/TOKEN1-0.3%"
+                        # We want to convert it to "TOKEN0-TOKEN1"
                         if symbol and '-' in symbol:
-                            # Get everything before the last dash (handles token pairs like WETH-USDC)
-                            parts = symbol.rsplit('-', 1)  # Split from right to remove fee percentage
-                            pool_name = parts[0]
+                            # Remove fee percentage (everything after last dash)
+                            token_pair = symbol.rsplit('-', 1)[0]  # Gets "TOKEN0/TOKEN1"
+                            # Replace slash with dash for consistent format
+                            pool_name = token_pair.replace('/', '-')
                         else:
-                            pool_name = symbol
+                            pool_name = symbol.replace('/', '-') if symbol else ''
 
                         if pool_name:
                             event_data["pool_name"] = pool_name
