@@ -898,6 +898,9 @@ class WalletTransactionService:
             # Store the USDC amount in event_data to avoid conflict with property
             event_data["amount_usdc"] = float(amount_usdc)
 
+            # Extract nft_token_id from details or event_data
+            nft_id = details.get("nft_token_id") or event_data.get("nft_token_id")
+
             # Extract position_id from nft_token_id for database column
             position_id_value = None
             if nft_id:
@@ -920,8 +923,6 @@ class WalletTransactionService:
             logger.info(f"Saved {tx_type} transaction: {details['tx_hash'][:10]}... Amount: {amount_usdc} USDC")
 
             # If this is a POSITION_CLOSED transaction, update the position status
-            # Check both details and event_data for nft_token_id
-            nft_id = details.get("nft_token_id") or event_data.get("nft_token_id")
             if tx_type == "POSITION_CLOSED" and nft_id:
                 logger.info(f"Closing position {nft_id} for tx {details['tx_hash'][:10]}...")
                 await self._close_position_if_needed(user_id, nft_id, details["tx_hash"], amount_usdc)
