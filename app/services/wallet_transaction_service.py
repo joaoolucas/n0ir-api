@@ -19,8 +19,7 @@ class TransactionType(Enum):
     """Transaction types for categorization."""
     DEPOSIT = "DEPOSIT"
     WITHDRAW = "WITHDRAW"  # Changed from WITHDRAWAL to match schema
-    STAKE = "STAKE"  # NFT position staked to gauge
-    STAKING = "STAKING"  # Legacy - keep for backwards compatibility
+    STAKING = "STAKING"  # NFT position staked to gauge or interaction with position manager
     POSITION_CREATED = "POSITION_CREATED"
     POSITION_CLOSED = "POSITION_CLOSED"
     AERO_SWAP = "AERO_SWAP"
@@ -387,7 +386,7 @@ class WalletTransactionService:
                                                 # To determine if it's a stake, we need to check if the recipient is a gauge
                                                 # We'll mark it as potential stake and verify the gauge address later
                                                 position_event = {
-                                                    "type": "STAKE",
+                                                    "type": "STAKING",
                                                     "from_address": from_addr,
                                                     "to_address": to_addr,
                                                     "nft_token_id": nft_token_id,
@@ -527,8 +526,8 @@ class WalletTransactionService:
         # Check for position events first (highest priority)
         position_event = self._analyze_position_event(traces, cdp_wallet)
         if position_event:
-            # Handle STAKE type separately
-            if position_event.get("type") == "STAKE":
+            # Handle STAKING type separately
+            if position_event.get("type") == "STAKING":
                 details["nft_token_id"] = position_event["nft_token_id"]
                 details["gauge_address"] = position_event["to_address"]
                 details["description"] = f"Staked NFT position {position_event['nft_token_id']} to gauge"
@@ -544,7 +543,7 @@ class WalletTransactionService:
                     details["pool_name"] = position.pool_name
                     details["pool"] = position.pool_address
 
-                return TransactionType.STAKE, details
+                return TransactionType.STAKING, details
 
             method_name = position_event["method_name"]
 
@@ -708,8 +707,7 @@ class WalletTransactionService:
         categorized = {
             TransactionType.DEPOSIT: [],
             TransactionType.WITHDRAW: [],
-            TransactionType.STAKE: [],
-            TransactionType.STAKING: [],  # Keep for backwards compatibility
+            TransactionType.STAKING: [],
             TransactionType.POSITION_CREATED: [],
             TransactionType.POSITION_CLOSED: [],
             TransactionType.AERO_SWAP: [],
@@ -740,7 +738,7 @@ class WalletTransactionService:
                 # Save to database if it's a financial or position transaction
                 if tx_type in [TransactionType.DEPOSIT, TransactionType.WITHDRAW,
                               TransactionType.POSITION_CREATED, TransactionType.POSITION_CLOSED,
-                              TransactionType.AERO_SWAP, TransactionType.STAKE]:
+                              TransactionType.AERO_SWAP, TransactionType.STAKING]:
                     await self._save_transaction(
                         user_id=user_id,
                         tx_type=tx_type.value,
@@ -756,8 +754,7 @@ class WalletTransactionService:
             "total": len(transactions),
             "deposits": len(categorized[TransactionType.DEPOSIT]),
             "withdrawals": len(categorized[TransactionType.WITHDRAW]),
-            "stakes": len(categorized[TransactionType.STAKE]),
-            "stakings": len(categorized[TransactionType.STAKING]),  # Legacy
+            "stakings": len(categorized[TransactionType.STAKING]),
             "positions_opened": len(categorized[TransactionType.POSITION_CREATED]),
             "positions_closed": len(categorized[TransactionType.POSITION_CLOSED]),
             "aero_swaps": len(categorized[TransactionType.AERO_SWAP]),
@@ -792,7 +789,7 @@ class WalletTransactionService:
             }
             
             # Add position-specific and swap data if available
-            if tx_type in ["POSITION_CREATED", "POSITION_CLOSED", "AERO_SWAP", "STAKE"]:
+            if tx_type in ["POSITION_CREATED", "POSITION_CLOSED", "AERO_SWAP", "STAKING"]:
                 if details.get("method_sig"):
                     event_data["method_sig"] = details["method_sig"]
                 if details.get("usdc_in") is not None:
@@ -806,8 +803,8 @@ class WalletTransactionService:
                 if details.get("pool"):
                     event_data["pool"] = details["pool"]
 
-                # Add gauge address for STAKE transactions
-                if tx_type == "STAKE" and details.get("gauge_address"):
+                # Add gauge address for STAKING transactions
+                if tx_type == "STAKING" and details.get("gauge_address"):
                     event_data["gauge_address"] = details["gauge_address"]
 
                 # Add NFT token ID if available

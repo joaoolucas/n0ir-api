@@ -16,7 +16,7 @@ class UserStatus(str, enum.Enum):
 class TransactionType(str, enum.Enum):
     DEPOSIT = "DEPOSIT"
     WITHDRAW = "WITHDRAW"
-    STAKE = "STAKE"
+    STAKING = "STAKING"
     POSITION_CREATED = "POSITION_CREATED"
     POSITION_CLOSED = "POSITION_CLOSED"
     AERO_SWAP = "AERO_SWAP"
@@ -168,6 +168,7 @@ class TransactionResponse(BaseModel):
     user_id: str
     transaction_type: TransactionType = Field(validation_alias='tx_type')
     amount_usdc: Decimal
+    position_id: Optional[int] = Field(None, description="NFT token ID for position-related transactions")
     pool_name: Optional[str] = Field(None, description="Pool name for position transactions")
     tx_hash: Optional[str]
     status: TransactionStatus
@@ -177,15 +178,24 @@ class TransactionResponse(BaseModel):
     @model_validator(mode='before')
     @classmethod
     def normalize_transaction_type(cls, values):
-        """Normalize transaction type from database to match enum and extract pool_name."""
+        """Normalize transaction type from database to match enum and extract fields from event_data."""
         if isinstance(values, dict):
+            event_data = values.get('event_data', {})
+
             # Extract pool_name from event_data if not directly available
             if 'pool_name' not in values or values.get('pool_name') is None:
-                event_data = values.get('event_data', {})
                 if event_data and isinstance(event_data, dict):
                     pool_name = event_data.get('pool_name')
                     if pool_name:
                         values['pool_name'] = pool_name
+
+            # Extract position_id (NFT token ID) from event_data
+            if 'position_id' not in values or values.get('position_id') is None:
+                if event_data and isinstance(event_data, dict):
+                    # Try different field names where position ID might be stored
+                    nft_token_id = event_data.get('nft_token_id') or event_data.get('position_id') or event_data.get('token_id')
+                    if nft_token_id:
+                        values['position_id'] = int(nft_token_id)
 
         if isinstance(values, dict) and 'tx_type' in values:
             tx_type = values['tx_type']
@@ -201,11 +211,8 @@ class TransactionResponse(BaseModel):
                 'POSITION_CLOSED': 'POSITION_CLOSED',
                 'POSITION_OPENED': 'POSITION_CREATED',  # Map variations
                 'position_opened': 'POSITION_CREATED',
-                'STAKING': 'POSITION_CREATED',
-                'staking': 'POSITION_CREATED',
-                # Map stake types
-                'stake': 'STAKE',
-                'STAKE': 'STAKE',
+                'staking': 'STAKING',
+                'STAKING': 'STAKING',
                 # Map swap types
                 'aero_swap': 'AERO_SWAP',
                 'AERO_SWAP': 'AERO_SWAP',
