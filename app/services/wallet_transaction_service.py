@@ -283,6 +283,7 @@ class WalletTransactionService:
         for trace in traces:
             # Check if trace has logs/events
             if "logs" in trace:
+                logger.debug(f"Checking {len(trace.get('logs', []))} logs in trace")
                 for log in trace.get("logs", []):
                     # Look for event signatures
                     # PositionClosed event signature would be in topics[0]
@@ -363,6 +364,7 @@ class WalletTransactionService:
                             elif event_sig_normalized == ERC721_TRANSFER_EVENT.lower():
                                 # Check if this is from the NFT Position Manager contract
                                 log_address = log.get("address", "").lower() if log.get("address") else ""
+                                logger.debug(f"Found ERC721 Transfer event from {log_address}, NFT Manager: {self.NFT_POSITION_MANAGER}")
                                 if log_address == self.NFT_POSITION_MANAGER:
                                     # ERC721 Transfer has 3 indexed params: from, to, tokenId
                                     # topics[0] = event signature
@@ -487,6 +489,15 @@ class WalletTransactionService:
         owner_wallet: str,
         cdp_wallet: str
     ) -> Tuple[TransactionType, Dict[str, Any]]:
+        # Log STAKING transaction structure for debugging
+        if tx_data.get("hash") and "c033aabc" in tx_data.get("hash", ""):
+            logger.info(f"STAKE tx structure keys: {list(tx_data.keys())}")
+            logger.info(f"STAKE tx has traces: {'traces' in tx_data}")
+            if 'traces' in tx_data and tx_data['traces']:
+                first_trace = tx_data['traces'][0] if tx_data['traces'] else {}
+                logger.info(f"STAKE tx first trace keys: {list(first_trace.keys())}")
+                if 'logs' in first_trace:
+                    logger.info(f"STAKE tx has {len(first_trace['logs'])} logs")
         """Categorize transaction based on wallet relationships.
         
         Args:
@@ -659,7 +670,41 @@ class WalletTransactionService:
                         found_withdrawal = True
                         withdrawal_amount += amount
             
-            # Note: STAKING detection is now handled via ERC721 Transfer events in _analyze_position_event
+            # STAKING: Check if CDP wallet is interacting with position managers
+            # This is a fallback if ERC721 Transfer events aren't available
+            if from_addr == cdp_wallet:
+                for pm in self.POSITION_MANAGERS:
+                    if to_addr == pm:
+                        # This is likely a staking transaction
+                        # Try to extract NFT token ID from input data
+                        if input_data and len(input_data) > 10:
+                            method_sig = input_data[:10]
+                            # Common staking method signatures
+                            # 0x6e553f65 = deposit(uint256,address)
+                            # 0x1526fe27 = gauges(address)
+                            logger.info(f"Found potential staking to position manager with method: {method_sig}")
+                            details["description"] = f"NFT position staked to gauge"
+                            details["gauge_address"] = to_addr
+                            details["cdp_wallet"] = cdp_wallet
+
+                            # Try to extract NFT ID from recent positions
+                            # This is a workaround since we can't get it from the transaction directly
+                            from app.database.models.position import Position
+                            from sqlalchemy import select
+                            stmt = select(Position).where(
+                                Position.user_id == owner_wallet,
+                                Position.status == 'ACTIVE'
+                            ).order_by(Position.created_at.desc()).limit(1)
+                            result = await self.db.execute(stmt)
+                            position = result.scalar_one_or_none()
+
+                            if position:
+                                details["nft_token_id"] = position.token_id
+                                details["pool_name"] = position.pool_name
+                                details["pool"] = position.pool_address
+                                details["description"] = f"Staked NFT position {position.token_id} to gauge"
+
+                            return TransactionType.STAKING, details
         
         # Return based on what we found (prioritize financial transactions)
         if found_deposit:
