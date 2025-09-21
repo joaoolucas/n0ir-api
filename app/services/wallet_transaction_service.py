@@ -380,7 +380,8 @@ class WalletTransactionService:
     def _analyze_position_event(
         self,
         traces: List[Dict],
-        cdp_wallet: str
+        cdp_wallet: str,
+        owner_wallet: str = None
     ) -> Optional[Dict[str, Any]]:
         """Analyze traces to extract position event details.
 
@@ -638,19 +639,37 @@ class WalletTransactionService:
         
         # Final fallback: If we have significant USDC/AERO flows but no position event detected,
         # check if this might be a position close based on token flows
+        # BUT: Don't confuse deposits (from owner wallet) with position closes (from pools/contracts)
         if not position_event and (usdc_flows["in"] > 0 or aero_flows["in"] > 0):
             # Look for patterns that suggest position activity
             is_likely_close = False
 
-            # Pattern 1: Both USDC and AERO coming IN (classic position close)
-            if usdc_flows["in"] > 0 and aero_flows["in"] > 0:
-                is_likely_close = True
-                logger.info(f"Detected likely position close based on token flows: USDC in={usdc_flows['in']}, AERO in={aero_flows['in']}")
+            # Check if USDC is coming from a non-owner source (likely a pool or liquidity manager)
+            # We need to distinguish between deposits and position closes
+            is_from_owner = False
+            if owner_wallet:  # Only check if owner_wallet is provided
+                for trace in traces:
+                    to_addr = trace.get("to", "").lower()
+                    if to_addr == self.USDC_ADDRESS:
+                        decoded = self._decode_erc20_input(trace.get("input", ""))
+                        if decoded and decoded.get("method") == "transfer":
+                            from_addr = trace.get("from", "").lower()
+                            if from_addr == owner_wallet.lower():
+                                is_from_owner = True
+                                break
 
-            # Pattern 2: Significant USDC coming IN with no USDC going OUT (pure return)
-            elif usdc_flows["in"] > 1000 and usdc_flows["out"] == 0:  # More than 1000 USDC returned
-                is_likely_close = True
-                logger.info(f"Detected likely position close based on USDC return: {usdc_flows['in']} USDC")
+            # Only consider position close if USDC is NOT from owner wallet
+            if not is_from_owner:
+                # Pattern 1: Both USDC and AERO coming IN (classic position close)
+                if usdc_flows["in"] > 0 and aero_flows["in"] > 0:
+                    is_likely_close = True
+                    logger.info(f"Detected likely position close based on token flows: USDC in={usdc_flows['in']}, AERO in={aero_flows['in']}")
+
+                # Pattern 2: Significant USDC coming IN with no USDC going OUT (pure return)
+                # Only if it's NOT from the owner wallet (which would be a deposit)
+                elif usdc_flows["in"] > 1000 and usdc_flows["out"] == 0:  # More than 1000 USDC returned
+                    is_likely_close = True
+                    logger.info(f"Detected likely position close based on USDC return: {usdc_flows['in']} USDC")
 
             if is_likely_close:
                 position_event = {
@@ -728,7 +747,7 @@ class WalletTransactionService:
         withdrawal_amount = 0
         
         # Check for position events first (highest priority)
-        position_event = self._analyze_position_event(traces, cdp_wallet)
+        position_event = self._analyze_position_event(traces, cdp_wallet, owner_wallet)
 
         # Debug logging for transactions that might be position events but weren't detected
         if not position_event:
