@@ -659,7 +659,9 @@ class WalletTransactionService:
                     logger.info(f"Log #{i} from Liquidity Manager: sig={event_sig[:10]}...")
 
                 # Check for PositionCreated event (0x8d53117d...)
-                if event_sig == "0x8d53117d19441d0a7f168d2728ff066eed66d078efdaf9bf249eef6e20887ae5" and log_address == liquidity_manager_lower:
+                # Note: RPC returns signatures without 0x prefix, CDP with prefix
+                expected_sig = "8d53117d19441d0a7f168d2728ff066eed66d078efdaf9bf249eef6e20887ae5"
+                if (event_sig == expected_sig or event_sig == f"0x{expected_sig}") and log_address == liquidity_manager_lower:
                     if len(log["topics"]) >= 4:
                         try:
                             # Extract position details from PositionCreated event
