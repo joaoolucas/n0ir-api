@@ -483,20 +483,67 @@ class WalletTransactionService:
                                 }
                                 break  # This is definitive
 
+                            # Check for PositionCreated event from Liquidity Manager
+                            # Event signature: PositionCreated(address indexed user, uint256 indexed positionId, address indexed pool, ...)
+                            elif event_sig_normalized == "0x8d53117d19441d0a7f168d2728ff066eed66d078efdaf9bf249eef6e20887ae5":
+                                log_address = log.get("address", "").lower() if log.get("address") else ""
+
+                                # Check if this is from the Liquidity Manager
+                                if log_address == self.LIQUIDITY_MANAGER:
+                                    logger.debug(f"Found PositionCreated event from Liquidity Manager")
+
+                                    # Extract indexed parameters
+                                    if len(topics) >= 4:
+                                        try:
+                                            # Topic 1: user address (CDP wallet)
+                                            user_addr = ("0x" + topics[1][-40:] if isinstance(topics[1], str) else "0x" + str(topics[1])[-40:]).lower()
+                                            # Topic 2: position ID (NFT token ID)
+                                            position_id = int(topics[2].hex() if hasattr(topics[2], 'hex') else topics[2], 16)
+                                            # Topic 3: pool address
+                                            pool_addr = ("0x" + topics[3][-40:] if isinstance(topics[3], str) else "0x" + str(topics[3])[-40:]).lower()
+
+                                            if user_addr == cdp_wallet:
+                                                logger.debug(f"Detected PositionCreated for CDP wallet: position {position_id} in pool {pool_addr}")
+                                                position_event = {
+                                                    "method_sig": "0x3a1e3569",  # openPosition method signature
+                                                    "method_name": "openPosition",
+                                                    "nft_token_id": position_id,
+                                                    "pool": pool_addr,
+                                                    "event_detected": "PositionCreated",
+                                                    "event_signature": event_sig_normalized
+                                                }
+                                        except (ValueError, TypeError, AttributeError) as e:
+                                            logger.warning(f"Failed to parse PositionCreated event: {e}")
+
+                            # Check for PositionClosed event from Liquidity Manager (if it exists)
+                            # Event signature would be similar: PositionClosed(address indexed user, uint256 indexed positionId, ...)
+                            elif event_sig_normalized == "0x1234567890abcdef":  # TODO: Find actual PositionClosed event signature
+                                log_address = log.get("address", "").lower() if log.get("address") else ""
+
+                                if log_address == self.LIQUIDITY_MANAGER:
+                                    logger.debug(f"Found PositionClosed event from Liquidity Manager")
+                                    # Similar parsing logic for PositionClosed
+                                    if len(topics) >= 2:
+                                        try:
+                                            position_id = int(topics[1].hex() if hasattr(topics[1], 'hex') else topics[1], 16)
+                                            position_event = {
+                                                "method_sig": "0xe0891d91",  # closePosition method signature
+                                                "method_name": "closePosition",
+                                                "nft_token_id": position_id,
+                                                "event_detected": "PositionClosed",
+                                                "event_signature": event_sig_normalized
+                                            }
+                                        except (ValueError, TypeError, AttributeError) as e:
+                                            logger.warning(f"Failed to parse PositionClosed event: {e}")
+
                             # Check for ERC721 Transfer events (NFT minting, burning, and staking)
                             elif event_sig_normalized == ERC721_TRANSFER_EVENT.lower():
-                                # Check if this is from the NFT Position Manager contract or a gauge contract
+                                # Check if this is from the NFT Position Manager contract
                                 log_address = log.get("address", "").lower() if log.get("address") else ""
                                 logger.debug(f"Found ERC721 Transfer event from {log_address}, NFT Manager: {self.NFT_POSITION_MANAGER}")
 
-                                # Known gauge contracts that can mint NFTs
-                                KNOWN_GAUGES = [
-                                    "0x827922686190790b37229fd06084350e74485b72",  # WETH/USDC gauge
-                                    # Add more gauge addresses here as needed
-                                ]
-
-                                # Accept NFTs from either Position Manager or known gauges
-                                if log_address == self.NFT_POSITION_MANAGER or log_address in KNOWN_GAUGES:
+                                # Accept NFTs from Position Manager
+                                if log_address == self.NFT_POSITION_MANAGER:
                                     # ERC721 Transfer has 3 indexed params: from, to, tokenId
                                     # topics[0] = event signature
                                     # topics[1] = from address (padded)
@@ -517,17 +564,10 @@ class WalletTransactionService:
                                             # Check for MINT (position creation) - from address 0x0 to CDP wallet
                                             zero_address = "0x" + "0" * 40
                                             if from_addr == zero_address and to_addr == cdp_wallet and nft_token_id:
-                                                # Check if it's from a gauge
-                                                is_from_gauge = log_address in KNOWN_GAUGES
-                                                mint_source = "gauge" if is_from_gauge else "position manager"
-                                                logger.debug(f"Detected NFT mint to CDP wallet from {mint_source}: token {nft_token_id}")
-
+                                                logger.debug(f"Detected NFT mint to CDP wallet: token {nft_token_id}")
                                                 # Don't override if we already have a position event, just add the NFT ID
                                                 if position_event and position_event.get("method_name") == "openPosition":
                                                     position_event["nft_token_id"] = nft_token_id
-                                                    if is_from_gauge:
-                                                        position_event["minted_by_gauge"] = True
-                                                        position_event["gauge_address"] = log_address
                                                 else:
                                                     position_event = {
                                                         "method_sig": "0x3a1e3569",  # openPosition method signature
@@ -536,9 +576,6 @@ class WalletTransactionService:
                                                         "event_detected": "ERC721Mint",
                                                         "event_signature": event_sig_normalized
                                                     }
-                                                    if is_from_gauge:
-                                                        position_event["minted_by_gauge"] = True
-                                                        position_event["gauge_address"] = log_address
 
                                             # Check for BURN (position close) - from CDP wallet to address 0x0
                                             elif from_addr == cdp_wallet and to_addr == zero_address and nft_token_id:
@@ -912,11 +949,6 @@ class WalletTransactionService:
                 details["pool"] = position_event.get("pool")  # Include pool address
                 details["nft_token_id"] = position_event.get("nft_token_id")  # Include NFT token ID
 
-                # Add gauge info if minted by gauge
-                if position_event.get("minted_by_gauge"):
-                    details["gauge_address"] = position_event.get("gauge_address")
-                    details["minted_by_gauge"] = True
-
                 # Try to get pool name
                 if position_event.get("pool"):
                     details["pool_name"] = await self._get_pool_name(position_event["pool"])
@@ -1193,12 +1225,9 @@ class WalletTransactionService:
                 if details.get("pool"):
                     event_data["pool"] = details["pool"]
 
-                # Add gauge address for STAKING transactions or gauge-minted positions
+                # Add gauge address for STAKING transactions
                 if tx_type == "STAKING" and details.get("gauge_address"):
                     event_data["gauge_address"] = details["gauge_address"]
-                elif tx_type == "POSITION_CREATED" and details.get("gauge_address"):
-                    event_data["gauge_address"] = details["gauge_address"]
-                    event_data["minted_by_gauge"] = details.get("minted_by_gauge", False)
 
                 # Add fee recipient for FEE_TRANSFER transactions
                 if tx_type == "FEE_TRANSFER" and details.get("fee_recipient"):
