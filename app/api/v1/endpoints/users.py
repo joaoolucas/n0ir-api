@@ -613,13 +613,15 @@ async def get_transactions(
             token_id = tx.event_data.get('tokenId') or tx.event_data.get('token_id')
             if token_id:
                 # Look for AERO_SWAP with matching tokenId or position_token_id
+                # Cast token_id to string for JSONB comparison
+                token_id_str = str(token_id)
                 stmt = select(Transaction).where(
                     and_(
                         Transaction.user_id == user_id,
                         Transaction.tx_type == 'AERO_SWAP',
                         or_(
-                            Transaction.event_data['tokenId'].astext == token_id,
-                            Transaction.event_data['position_token_id'].astext == token_id
+                            Transaction.event_data['tokenId'].astext == token_id_str,
+                            Transaction.event_data['position_token_id'].astext == token_id_str
                         )
                     )
                 ).limit(1)
