@@ -247,6 +247,110 @@ class WalletTransactionService:
                 logger.warning(f"Could not fetch pool info for {pool_address}: {e}")
             return None
 
+    async def _ensure_position_data(
+        self,
+        tx_type: str,
+        event_data: Dict[str, Any],
+        details: Dict[str, Any],
+        user_id: str
+    ) -> tuple[Optional[int], Dict[str, Any]]:
+        """
+        Ensure position_id and pool_name are present for position-related transactions.
+        Returns: (position_id, updated_event_data)
+        """
+        # Skip non-position transactions
+        if tx_type not in ['POSITION_CREATED', 'POSITION_CLOSED', 'STAKING']:
+            return None, event_data
+
+        position_id = None
+
+        # Step 1: Try to get position_id from multiple sources
+        # Priority: nft_token_id > token_id > position_id
+        potential_ids = [
+            details.get("nft_token_id"),
+            event_data.get("nft_token_id"),
+            event_data.get("token_id"),
+            event_data.get("position_id"),
+            details.get("token_id"),
+            details.get("position_id")
+        ]
+
+        for pid in potential_ids:
+            if pid is not None:
+                position_id = int(pid) if isinstance(pid, (str, float)) else pid
+                break
+
+        # Step 2: If still no position_id, try to find it
+        if not position_id and tx_type in ['POSITION_CREATED', 'POSITION_CLOSED']:
+            # Try to match by transaction details
+            position_id = await self._find_position_for_transaction(
+                user_id, tx_type,
+                Decimal(str(event_data.get('amount_usdc', 0))),
+                details
+            )
+            if position_id:
+                logger.info(f"Auto-discovered position_id {position_id} for {tx_type}")
+
+        # Step 3: Get pool information from position or event data
+        pool_address = None
+        pool_name = event_data.get('pool_name')
+
+        if position_id:
+            # Try to get pool info from position table
+            from app.database.models import Position
+            from sqlalchemy import select
+
+            stmt = select(Position).where(Position.token_id == position_id)
+            result = await self.db.execute(stmt)
+            position = result.scalar_one_or_none()
+
+            if position:
+                pool_address = position.pool_address
+                if position.pool_name and not pool_name:
+                    pool_name = position.pool_name
+                    event_data['pool_name'] = pool_name
+
+        # Step 4: If no pool_address from position, try event data
+        if not pool_address:
+            pool_address = event_data.get('pool') or details.get('pool')
+
+        # Step 5: If we have pool_address but no pool_name, fetch it
+        if pool_address and not pool_name:
+            fetched_name = await self._get_pool_name(pool_address)
+            if fetched_name:
+                pool_name = fetched_name
+                event_data['pool_name'] = pool_name
+            else:
+                # Fallback: use abbreviated pool address
+                event_data['pool_name'] = f"Pool-{pool_address[:6]}...{pool_address[-4:]}"
+                logger.warning(f"Using fallback pool name for {pool_address}")
+
+        # Step 6: Store all discovered IDs in event_data for consistency
+        if position_id:
+            event_data['nft_token_id'] = position_id
+            event_data['token_id'] = position_id
+            event_data['position_id'] = position_id
+
+        if pool_address:
+            event_data['pool'] = pool_address
+
+        # Step 7: Flag if data is incomplete for review
+        if tx_type in ['POSITION_CREATED', 'POSITION_CLOSED', 'STAKING']:
+            if not position_id or not pool_name or pool_name.startswith('Pool-'):
+                event_data['needs_review'] = True
+                event_data['missing_fields'] = []
+                if not position_id:
+                    event_data['missing_fields'].append('position_id')
+                    logger.error(f"Missing position_id for {tx_type} - tx_hash: {details.get('tx_hash', 'unknown')}")
+                if not pool_name:
+                    event_data['missing_fields'].append('pool_name')
+                    logger.error(f"Missing pool_name for {tx_type} - position_id: {position_id}, tx_hash: {details.get('tx_hash', 'unknown')}")
+                elif pool_name.startswith('Pool-'):
+                    event_data['missing_fields'].append('pool_name_incomplete')
+                    logger.warning(f"Using fallback pool_name for {tx_type} - position_id: {position_id}")
+
+        return position_id, event_data
+
     def _decode_erc20_input(self, input_data: str) -> Optional[Dict[str, Any]]:
         """Decode ERC20 method calls from input data."""
         if not input_data or len(input_data) < 10:
@@ -944,80 +1048,29 @@ class WalletTransactionService:
                 if tx_type == "FEE_TRANSFER" and details.get("fee_recipient"):
                     event_data["fee_recipient"] = details["fee_recipient"]
 
-                # Add NFT token ID if available
+                # The position and pool data fetching is now handled by _ensure_position_data
+                # Just pass through any initial data we have
                 if details.get("nft_token_id"):
                     event_data["nft_token_id"] = details["nft_token_id"]
-                elif tx_type in ["POSITION_CREATED", "POSITION_CLOSED"]:
-                    # Try to find the NFT token ID by matching position
-                    nft_token_id = await self._find_position_for_transaction(
-                        user_id, tx_type, amount_usdc, details
-                    )
-                    if nft_token_id:
-                        event_data["nft_token_id"] = nft_token_id
-                        logger.info(f"Found matching position {nft_token_id} for {tx_type} transaction")
-
-                # Use pool_name from details if available, otherwise try to fetch it
                 if details.get("pool_name"):
                     event_data["pool_name"] = details["pool_name"]
-
-                # Get pool address - prefer position data over transaction traces
-                nft_token_id = event_data.get("nft_token_id") or details.get("nft_token_id")
-                pool_address = None
-
-                # For any transaction with an NFT token ID, get pool info from the position (most reliable)
-                if nft_token_id and tx_type in ["POSITION_CLOSED", "POSITION_CREATED", "STAKING"]:
-                    from app.database.models import Position
-                    from sqlalchemy import select
-
-                    stmt = select(Position).where(Position.token_id == nft_token_id)
-                    result = await self.db.execute(stmt)
-                    position = result.scalar_one_or_none()
-                    if position:
-                        # Position data is the authoritative source for pool information
-                        pool_address = position.pool_address
-                        event_data["pool"] = pool_address
-                        # Also get the pool name directly from the position
-                        if position.pool_name:
-                            event_data["pool_name"] = position.pool_name
-                            logger.debug(f"Using pool info from position {nft_token_id}: {pool_address} ({position.pool_name})")
-                        else:
-                            logger.debug(f"Found pool address {pool_address} from position {nft_token_id}")
-
-                # Fallback to transaction traces only if we don't have position data
-                if not pool_address:
-                    pool_address = details.get("pool")
-
-                if pool_address and not event_data.get("pool_name"):
-                    # Fetch pool name from pools_service
-                    try:
-                        pool_data = await pools_service.get_pool(pool_address, include_effective_apr=False)
-                        symbol = pool_data.get('symbol', '')
-                        # Symbol format is "TOKEN0/TOKEN1-0.3%"
-                        # We want to keep "TOKEN0/TOKEN1" format
-                        if symbol and '-' in symbol:
-                            # Remove fee percentage (everything after last dash)
-                            pool_name = symbol.rsplit('-', 1)[0]  # Gets "TOKEN0/TOKEN1"
-                        else:
-                            pool_name = symbol
-
-                        if pool_name:
-                            event_data["pool_name"] = pool_name
-                            logger.debug(f"Found pool name {pool_name} for pool {pool_address}")
-                    except Exception as e:
-                        logger.warning(f"Could not fetch pool info for {pool_address}: {e}")
+                if details.get("pool"):
+                    event_data["pool"] = details["pool"]
             
             # Store the USDC amount in event_data to avoid conflict with property
             event_data["amount_usdc"] = float(amount_usdc)
 
-            # Extract nft_token_id from details or event_data
-            nft_id = details.get("nft_token_id") or event_data.get("nft_token_id")
+            # Ensure complete data for position-related transactions
+            position_id_value, event_data = await self._ensure_position_data(
+                tx_type, event_data, details, user_id
+            )
 
-            # Extract position_id from nft_token_id for database column
-            position_id_value = None
-            if nft_id:
-                position_id_value = nft_id
-            elif "nft_token_id" in event_data:
-                position_id_value = event_data["nft_token_id"]
+            # For non-position transactions, check if we still have a position_id
+            if position_id_value is None:
+                # Extract nft_token_id from details or event_data for backward compatibility
+                nft_id = details.get("nft_token_id") or event_data.get("nft_token_id")
+                if nft_id:
+                    position_id_value = nft_id
 
             transaction = Transaction(
                 tx_hash=details["tx_hash"],
