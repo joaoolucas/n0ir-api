@@ -653,6 +653,12 @@ class WalletTransactionService:
                     logger.warning(f"Skipping position event with zero/negative net amount: {details['tx_hash'][:10]}...")
                     return TransactionType.UNKNOWN, details
 
+                # IMPORTANT: Skip if no NFT was actually minted (no position created)
+                # This prevents saving empty/failed transactions as POSITION_CREATED
+                if not position_event.get("nft_token_id"):
+                    logger.warning(f"Skipping openPosition without NFT mint (likely failed/empty tx): {details['tx_hash'][:10]}...")
+                    return TransactionType.UNKNOWN, details
+
                 details["amount"] = net_amount
                 details["description"] = f"Position opened via LiquidityManager"
                 details["method_sig"] = position_event["method_sig"]
