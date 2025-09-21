@@ -437,7 +437,8 @@ class UserService:
             for position in active_positions:
                 expected_balance += (position.current_value_usdc or position.entry_amount_usdc)
             
-            if expected_balance < amount:
+            # Skip validation if withdraw_all is True - we want to withdraw everything
+            if not withdraw_all and expected_balance < amount:
                 raise ValueError(f"Insufficient funds even with positions. Expected: {expected_balance}, Requested: {amount}")
         
         # Always execute withdrawal through agent manager

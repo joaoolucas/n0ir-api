@@ -446,9 +446,8 @@ async def withdraw(
         wallet_balance = await service.get_user_balance(user_id)
 
         # Calculate total expected amount (positions + wallet balance)
-        # Use a very large amount to ensure everything is withdrawn
-        # The agent will close all positions, swap all tokens to USDC, and withdraw everything
-        withdrawal_amount = (wallet_balance + expected_from_positions) * Decimal("10")  # Use 10x to ensure all funds are withdrawn
+        # When withdraw_all=True, the agent will close all positions, swap all tokens, and withdraw everything
+        withdrawal_amount = wallet_balance + expected_from_positions
 
         logger.info(f"User {user_id} has {positions_closed} active positions worth ~{expected_from_positions} USDC and wallet balance {wallet_balance} USDC")
 
@@ -458,7 +457,7 @@ async def withdraw(
         try:
             transaction = await service.withdraw_usdc(
                 user_id=user_id,
-                amount=withdrawal_amount,  # Large amount to ensure everything is withdrawn
+                amount=withdrawal_amount,  # Expected total amount
                 withdraw_all=True  # This flag tells the agent to withdraw everything
             )
 
