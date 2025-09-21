@@ -48,12 +48,6 @@ class PositionInfo(BaseModel):
     pool_name: Optional[str] = Field(None, description="Pool name/symbol (e.g., WETH/USDC-0.3%)")
     apr: Optional[float] = Field(None, description="Pool's current APR percentage")
 
-    # User tracking field (from database)
-    user_id: Optional[str] = Field(None, description="User ID if position is tracked in database")
-    
-    # Hedge information (optional, null if no hedge)
-    hedge: Optional[HedgeInfo] = Field(None, description="Hedge position information if delta-neutral hedge exists")
-
     class Config:
         json_schema_extra = {
             "example": {

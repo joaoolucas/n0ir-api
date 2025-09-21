@@ -34,8 +34,6 @@ from app.core.logger import logger
 from app.core.strategy_service import WHITELISTED_POOLS
 from app.database.session import get_db
 from app.database.models import Position
-from app.services.hedge_service import HedgeService
-from app.core.exceptions import HedgeNotFoundError, HedgeError
 
 router = APIRouter()
 
@@ -183,27 +181,7 @@ async def get_positions(
         try:
             position = await positions_service.get_position_by_id(position_id)
 
-            # Query database to get user_id for this NFT token ID
-            user_id = None
-            try:
-                # Import here to avoid module-level import issues
-                from app.database.models import Position as DBPosition
-
-                # Use the already imported select from sqlalchemy
-                stmt = select(DBPosition.user_id).where(DBPosition.token_id == position_id)
-                result = await db.execute(stmt)
-                db_user_id = result.scalar_one_or_none()
-                if db_user_id:
-                    user_id = db_user_id
-                    logger.info(f"Found user_id {user_id} for position {position_id}")
-            except ImportError as e:
-                logger.warning(f"Could not import Position model: {e}")
-            except Exception as e:
-                logger.warning(f"Could not fetch user_id for position {position_id}: {e}")
-
-            # Add user_id to position data if found
             position_dict = position.dict()
-            position_dict['user_id'] = user_id
 
             # Fetch pool information to get pool_name and APR
             pool_name = None
@@ -224,35 +202,6 @@ async def get_positions(
             # Add pool_name and APR to position data
             position_dict['pool_name'] = pool_name
             position_dict['apr'] = pool_apr
-
-            # Fetch hedge information if it exists
-            hedge_info = None
-            try:
-                hedge_service = HedgeService(db)
-                hedge = await hedge_service.get_hedge_status(position_id)
-
-                if hedge:
-                    from app.schemas.positions import HedgeInfo
-                    hedge_info = HedgeInfo(
-                        hedge_id=hedge.hedge_id,
-                        enabled=hedge.hedge_enabled,
-                        market=hedge.market,
-                        size_usdc=hedge.hedge_size_usdc,
-                        collateral_usdc=hedge.collateral_usdc,
-                        leverage=hedge.leverage,
-                        entry_price=hedge.entry_price,
-                        current_price=hedge.current_price,
-                        pnl_usdc=hedge.pnl_usdc,
-                        funding_paid_usdc=hedge.funding_paid_usdc,
-                        health_ratio=hedge.health_ratio,
-                        status=hedge.status
-                    )
-                    logger.info(f"Found hedge for position {position_id}: hedge_id={hedge.hedge_id}")
-            except Exception as e:
-                logger.debug(f"No hedge found for position {position_id}: {e}")
-
-            # Add hedge to position data
-            position_dict['hedge'] = hedge_info
 
             logger.info(f"Successfully fetched position {position_id} via unified endpoint")
             return PositionDetailResponse(position=PositionInfo(**position_dict))
@@ -321,9 +270,7 @@ async def get_positions(
                     staked=pos.staked,
                     current_value_usd=float(pos.current_value_usdc) if pos.current_value_usdc else None,
                     gauge_address=pos.gauge_address,
-                    pool_name=pos.pool_name,
-                    user_id=pos.user_id,  # Add user_id for agent-manager compatibility
-                    wallet_address=pos.user_id  # Add wallet_address for agent-manager
+                    pool_name=pos.pool_name
                 )
                 positions.append(position_info)
 
