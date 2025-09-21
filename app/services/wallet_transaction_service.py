@@ -781,17 +781,26 @@ class WalletTransactionService:
             method_name = position_event["method_name"]
             method_sig = position_event.get("method_sig", "")
 
-            # Additional logic: detect swaps and position closes
-            # BUT: Never override if we have a known method signature
+            # Additional logic: detect swaps and position closes based on token flows
+            # TOKEN FLOWS ARE MORE RELIABLE THAN METHOD SIGNATURES
 
-            # POSITION_CLOSED: if both USDC and AERO are coming IN
-            # When closing a position, you get both tokens back
-            # IMPORTANT: Only consider this a close if we DON'T have an openPosition method signature
-            if (position_event["usdc_in"] > 0 and position_event["aero_in"] > 0 and
-                method_sig not in ["0x3a1e3569", "0x2b17db59"]):  # Don't override openPosition methods
-                # This is likely a position close
+            # POSITION_CLOSED: Check token flows to determine if this is actually a close
+            # Prioritize flow patterns over method signatures as they're more reliable
+
+            # Pattern 1: Both USDC and AERO coming IN (classic position close)
+            if position_event["usdc_in"] > 0 and position_event["aero_in"] > 0:
+                # This is definitely a position close, regardless of method signature
                 method_name = "closePosition"
                 position_event["method_name"] = "closePosition"
+                logger.info(f"Overriding method based on flows: USDC+AERO IN indicates close (was {method_name})")
+
+            # Pattern 2: Significant USDC coming IN with minimal/no USDC OUT
+            # This happens when closing a position that only had USDC liquidity
+            elif position_event["usdc_in"] > 1000 and position_event["usdc_out"] < position_event["usdc_in"] * 0.1:
+                # Net positive USDC flow of >1000 USDC suggests position close
+                method_name = "closePosition"
+                position_event["method_name"] = "closePosition"
+                logger.info(f"Overriding method based on large USDC return: {position_event['usdc_in']} USDC IN (was {method_name})")
 
             # SWAP: AERO (and possibly USDC) goes OUT and net USDC comes IN
             # This happens when swapping tokens, potentially with some USDC out too
