@@ -1104,6 +1104,36 @@ class WalletTransactionService:
                 return TransactionType.POSITION_CREATED, details
 
             elif method_name == "closePosition":
+                # IMPORTANT: Only classify as POSITION_CLOSED if there's actual evidence of position closure
+                # Must have either: NFT burn event, PositionClosed event, or DecreaseLiquidity event
+                event_detected = position_event.get("event_detected", "")
+                is_definitive_close = (
+                    event_detected in ["ERC721Burn", "PositionClosed", "PositionClosed_RPC", "DecreaseLiquidity/Collect"] or
+                    position_event.get("is_definitive", False)
+                )
+
+                # If we don't have definitive evidence of position closure, it's likely a swap or other operation
+                if not is_definitive_close:
+                    # Check if it looks like a swap (tokens being exchanged)
+                    if position_event["usdc_in"] > 0 and position_event["aero_out"] > 0:
+                        logger.info(f"Reclassifying as SWAP: USDC in and AERO out without NFT burn (was closePosition)")
+                        details["amount"] = position_event["usdc_in"]
+                        details["description"] = f"Swapped AERO for USDC"
+                        details["usdc_in"] = position_event["usdc_in"]
+                        details["aero_out"] = position_event["aero_out"]
+                        details["usdc_out"] = position_event["usdc_out"]
+                        details["aero_in"] = position_event["aero_in"]
+                        return TransactionType.SWAP, details
+                    elif position_event["aero_in"] > 0 and position_event["usdc_out"] > 0:
+                        logger.info(f"Reclassifying as SWAP: AERO in and USDC out without NFT burn (was closePosition)")
+                        details["amount"] = position_event["usdc_out"]
+                        details["description"] = f"Swapped USDC for AERO"
+                        details["aero_in"] = position_event["aero_in"]
+                        details["usdc_out"] = position_event["usdc_out"]
+                        details["usdc_in"] = position_event["usdc_in"]
+                        details["aero_out"] = position_event["aero_out"]
+                        return TransactionType.SWAP, details
+
                 # For position closing, the amount received back is what matters
                 # This is typically usdc_in (what comes back to wallet) plus any AERO converted to USDC
                 amount_received = position_event["usdc_in"]
