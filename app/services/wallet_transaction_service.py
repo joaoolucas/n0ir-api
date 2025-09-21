@@ -1385,8 +1385,27 @@ class WalletTransactionService:
             self.db.add(transaction)
             logger.info(f"Saved {tx_type} transaction: {details['tx_hash'][:10]}... Amount: {amount_usdc} USDC")
 
+            # If this is a POSITION_CREATED transaction, create the position
+            if tx_type == "POSITION_CREATED" and position_id_value:
+                await self._create_position_if_needed(
+                    user_id=user_id,
+                    position_id=position_id_value,
+                    pool_address=event_data.get("pool"),
+                    pool_name=event_data.get("pool_name"),
+                    tx_hash=details["tx_hash"],
+                    amount_usdc=amount_usdc
+                )
+
+            # If this is a STAKING transaction, update position's staked status
+            elif tx_type == "STAKING" and position_id_value:
+                await self._update_position_staking(
+                    user_id=user_id,
+                    position_id=position_id_value,
+                    gauge_address=event_data.get("gauge_address")
+                )
+
             # If this is a POSITION_CLOSED transaction, update the position status
-            if tx_type == "POSITION_CLOSED":
+            elif tx_type == "POSITION_CLOSED":
                 if nft_id:
                     logger.info(f"Closing position {nft_id} for tx {details['tx_hash'][:10]}...")
                     await self._close_position_if_needed(user_id, nft_id, details["tx_hash"], amount_usdc)
@@ -1590,6 +1609,89 @@ class WalletTransactionService:
         except Exception as e:
             logger.error(f"Error finding position to close: {e}")
             return None
+
+    async def _update_position_staking(
+        self,
+        user_id: str,
+        position_id: int,
+        gauge_address: Optional[str]
+    ) -> None:
+        """Update position's staking status when a STAKING transaction is detected."""
+        from app.database.models import Position
+        from sqlalchemy import select, and_
+
+        try:
+            # Find the position
+            stmt = select(Position).where(
+                and_(
+                    Position.token_id == position_id,
+                    Position.user_id == user_id
+                )
+            )
+            result = await self.db.execute(stmt)
+            position = result.scalar_one_or_none()
+
+            if position:
+                position.staked = True
+                position.gauge_address = gauge_address
+                logger.info(f"Updated position {position_id} as staked to gauge {gauge_address}")
+            else:
+                logger.warning(f"Position {position_id} not found when trying to update staking status")
+
+        except Exception as e:
+            logger.error(f"Failed to update position {position_id} staking status: {e}")
+
+    async def _create_position_if_needed(
+        self,
+        user_id: str,
+        position_id: int,
+        pool_address: Optional[str],
+        pool_name: Optional[str],
+        tx_hash: str,
+        amount_usdc: Decimal
+    ) -> None:
+        """Create a position when a POSITION_CREATED transaction is detected."""
+        from app.database.models import Position
+        from sqlalchemy import select, and_
+
+        try:
+            # Check if position already exists
+            stmt = select(Position).where(
+                and_(
+                    Position.token_id == position_id,
+                    Position.user_id == user_id
+                )
+            )
+            result = await self.db.execute(stmt)
+            existing_position = result.scalar_one_or_none()
+
+            if existing_position:
+                logger.info(f"Position {position_id} already exists for user {user_id}")
+                return
+
+            # Create new position
+            new_position = Position(
+                user_id=user_id,
+                token_id=position_id,
+                nft_token_id=position_id,  # Same as token_id for compatibility
+                pool_address=pool_address,
+                pool_name=pool_name,
+                status='ACTIVE',
+                entry_date=datetime.utcnow(),
+                entry_tx_hash=tx_hash,
+                entry_amount_usdc=amount_usdc,
+                current_value_usdc=amount_usdc,  # Initial value is entry amount
+                staked=False,  # Will be updated by STAKING transaction
+                liquidity="0",  # Will be fetched from blockchain later
+                tick_lower=None,  # Will be fetched from blockchain later
+                tick_upper=None   # Will be fetched from blockchain later
+            )
+
+            self.db.add(new_position)
+            logger.info(f"Created position {position_id} for user {user_id} in pool {pool_name or pool_address}")
+
+        except Exception as e:
+            logger.error(f"Failed to create position {position_id}: {e}")
 
     async def _close_position_if_needed(
         self,
