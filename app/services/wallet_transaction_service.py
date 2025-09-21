@@ -1900,7 +1900,10 @@ class WalletTransactionService:
                 staked=False,  # Will be updated by STAKING transaction
                 liquidity="0",  # Will be fetched from blockchain later
                 tick_lower=None,  # Will be fetched from blockchain later
-                tick_upper=None   # Will be fetched from blockchain later
+                tick_upper=None,  # Will be fetched from blockchain later
+                # Set default token addresses - will be updated when position is enriched
+                token0_address="",  # Will be fetched from pool data
+                token1_address=""   # Will be fetched from pool data
             )
 
             self.db.add(new_position)
