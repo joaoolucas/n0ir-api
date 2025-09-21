@@ -789,41 +789,98 @@ class WalletTransactionService:
                             }
                             logger.info(f"Detected position close via alternative signature: {method_sig}")
 
-        # Always track USDC transfers regardless of position detection
+        # Track ACTUAL ERC20 Transfer events from logs (not just attempted calls)
+        has_actual_transfers = False
+        erc20_transfer_sig = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
+        # First, check logs for actual Transfer events
         for trace in traces:
-            from_addr = trace.get("from", "").lower()
-            to_addr = trace.get("to", "").lower()
-            input_data = trace.get("input", "")
+            if "logs" in trace:
+                for log in trace.get("logs", []):
+                    if not log.get("topics") or len(log["topics"]) < 3:
+                        continue
 
-            # Track USDC transfers
-            if to_addr == self.USDC_ADDRESS:
-                decoded = self._decode_erc20_input(input_data)
-                if decoded:
-                    if decoded["method"] == "transfer":
-                        if from_addr == cdp_wallet:
-                            usdc_flows["out"] += decoded["amount"]
-                        elif decoded["to"].lower() == cdp_wallet:
-                            usdc_flows["in"] += decoded["amount"]
-                    elif decoded["method"] == "transferFrom":
-                        if decoded["from"].lower() == cdp_wallet:
-                            usdc_flows["out"] += decoded["amount"]
-                        elif decoded["to"].lower() == cdp_wallet:
-                            usdc_flows["in"] += decoded["amount"]
+                    event_sig = log["topics"][0].lower() if log["topics"] else None
+                    log_address = log.get("address", "").lower()
 
-            # Track AERO transfers
-            if to_addr == self.AERO_ADDRESS:
-                decoded = self._decode_erc20_input(input_data)
-                if decoded:
-                    if decoded["method"] == "transfer":
-                        if from_addr == cdp_wallet:
-                            aero_flows["out"] += decoded["amount"]
-                        elif decoded["to"].lower() == cdp_wallet:
-                            aero_flows["in"] += decoded["amount"]
-                    elif decoded["method"] == "transferFrom":
-                        if decoded["from"].lower() == cdp_wallet:
-                            aero_flows["out"] += decoded["amount"]
-                        elif decoded["to"].lower() == cdp_wallet:
-                            aero_flows["in"] += decoded["amount"]
+                    # Check for ERC20 Transfer event (same signature as ERC721 but only 3 topics for ERC20)
+                    if event_sig == erc20_transfer_sig.lower() and len(log["topics"]) == 3:
+                        # This is an ERC20 Transfer
+                        from_addr = ("0x" + log["topics"][1][-40:]).lower()
+                        to_addr = ("0x" + log["topics"][2][-40:]).lower()
+
+                        # Decode amount from data field
+                        try:
+                            amount_hex = log.get("data", "0x0")
+                            if amount_hex.startswith("0x"):
+                                amount_hex = amount_hex[2:]
+                            amount = int(amount_hex, 16) if amount_hex else 0
+
+                            # Track USDC flows
+                            if log_address == self.USDC_ADDRESS:
+                                if from_addr == cdp_wallet:
+                                    usdc_flows["out"] += amount
+                                    has_actual_transfers = True
+                                elif to_addr == cdp_wallet:
+                                    usdc_flows["in"] += amount
+                                    has_actual_transfers = True
+
+                            # Track AERO flows
+                            elif log_address == self.AERO_ADDRESS:
+                                if from_addr == cdp_wallet:
+                                    aero_flows["out"] += amount
+                                    has_actual_transfers = True
+                                elif to_addr == cdp_wallet:
+                                    aero_flows["in"] += amount
+                                    has_actual_transfers = True
+
+                        except (ValueError, TypeError) as e:
+                            logger.warning(f"Failed to decode ERC20 Transfer amount: {e}")
+
+        # If no actual transfers found in logs, try checking RPC logs
+        if not has_actual_transfers and tx_hash:
+            rpc_logs = await self._fetch_rpc_logs(tx_hash)
+            for log in rpc_logs:
+                if not log.get("topics") or len(log["topics"]) < 3:
+                    continue
+
+                event_sig = log["topics"][0].lower() if log["topics"] else None
+                log_address = log.get("address", "").lower()
+
+                # Check for ERC20 Transfer event
+                if (event_sig == erc20_transfer_sig.lower() or event_sig == erc20_transfer_sig[2:].lower()) and len(log["topics"]) == 3:
+                    from_addr = ("0x" + log["topics"][1][-40:]).lower()
+                    to_addr = ("0x" + log["topics"][2][-40:]).lower()
+
+                    try:
+                        amount_hex = log.get("data", "0x0")
+                        if amount_hex.startswith("0x"):
+                            amount_hex = amount_hex[2:]
+                        amount = int(amount_hex, 16) if amount_hex else 0
+
+                        if log_address == self.USDC_ADDRESS:
+                            if from_addr == cdp_wallet:
+                                usdc_flows["out"] += amount
+                                has_actual_transfers = True
+                            elif to_addr == cdp_wallet:
+                                usdc_flows["in"] += amount
+                                has_actual_transfers = True
+                        elif log_address == self.AERO_ADDRESS:
+                            if from_addr == cdp_wallet:
+                                aero_flows["out"] += amount
+                                has_actual_transfers = True
+                            elif to_addr == cdp_wallet:
+                                aero_flows["in"] += amount
+                                has_actual_transfers = True
+
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Failed to decode RPC ERC20 Transfer amount: {e}")
+
+        # Log if we found actual transfers
+        if has_actual_transfers:
+            logger.info(f"Found actual ERC20 Transfer events: USDC in={usdc_flows['in']}, out={usdc_flows['out']}, AERO in={aero_flows['in']}, out={aero_flows['out']}")
+        else:
+            logger.info(f"No actual ERC20 Transfer events found in transaction")
         
         # Final fallback: If we have significant USDC/AERO flows but no position event detected,
         # check if this might be a position close based on token flows
@@ -877,15 +934,29 @@ class WalletTransactionService:
                 "usdc_in": usdc_flows["in"],
                 "usdc_out": usdc_flows["out"],
                 "aero_in": aero_flows["in"],
-                "aero_out": aero_flows["out"]
+                "aero_out": aero_flows["out"],
+                "has_actual_transfers": has_actual_transfers
             })
             # Only set pool to None if we don't already have one from an event
             if "pool" not in position_event:
                 position_event["pool"] = None  # Will be fetched from position data later
 
             # Log the complete position event for debugging
-            logger.info(f"✅ Final position_event: method={position_event.get('method_name')}, nft_id={position_event.get('nft_token_id')}, usdc_out={position_event.get('usdc_out')}, usdc_in={position_event.get('usdc_in')}")
+            logger.info(f"✅ Final position_event: method={position_event.get('method_name')}, nft_id={position_event.get('nft_token_id')}, usdc_out={position_event.get('usdc_out')}, usdc_in={position_event.get('usdc_in')}, has_actual_transfers={has_actual_transfers}")
             return position_event
+
+        # If no position event but we have token flows, create a minimal event for swap detection
+        # But only if we have actual transfers
+        if has_actual_transfers and (usdc_flows["in"] > 0 or usdc_flows["out"] > 0 or aero_flows["in"] > 0 or aero_flows["out"] > 0):
+            return {
+                "usdc_in": usdc_flows["in"],
+                "usdc_out": usdc_flows["out"],
+                "aero_in": aero_flows["in"],
+                "aero_out": aero_flows["out"],
+                "has_actual_transfers": has_actual_transfers,
+                "method_name": None,
+                "method_sig": None
+            }
 
         return None
     
@@ -1039,12 +1110,19 @@ class WalletTransactionService:
 
             # SWAP: AERO (and possibly USDC) goes OUT and net USDC comes IN
             # This happens when swapping tokens, potentially with some USDC out too
-            # BUT: Require meaningful amounts to avoid false positives on empty/failed txs
+            # BUT: Require actual ERC20 Transfer events, not just attempted calls
             elif position_event["aero_out"] > 0 and position_event["usdc_in"] > 0:
-                # Check if amounts are meaningful (at least $1 worth)
-                if position_event["aero_out"] < 0.01 and position_event["usdc_in"] < 1:
-                    # Too small to be a real swap, likely an empty/failed transaction
-                    logger.info(f"Skipping tiny amounts as swap: AERO={position_event['aero_out']}, USDC={position_event['usdc_in']}")
+                # CRITICAL: Check if we have actual Transfer events
+                if not position_event.get("has_actual_transfers"):
+                    logger.info(f"Skipping swap without actual Transfer events: AERO out={position_event['aero_out']}, USDC in={position_event['usdc_in']}")
+                    return TransactionType.UNKNOWN, details
+
+                # Check if amounts are meaningful (at least $1 worth of USDC)
+                # Convert raw USDC units to actual USDC (divide by 1e6)
+                usdc_amount = position_event["usdc_in"] / 1_000_000
+                if usdc_amount < 1.0:
+                    # Less than $1 USDC received - likely an empty/failed transaction
+                    logger.info(f"Skipping swap with insignificant USDC amount: {usdc_amount} USDC (raw: {position_event['usdc_in']})")
                     return TransactionType.UNKNOWN, details
 
                 # This is a swap: selling AERO for USDC
@@ -1115,24 +1193,29 @@ class WalletTransactionService:
                 # If we don't have definitive evidence of position closure, it's likely a swap or other operation
                 if not is_definitive_close:
                     # Check if it looks like a swap (tokens being exchanged)
-                    if position_event["usdc_in"] > 0 and position_event["aero_out"] > 0:
-                        logger.info(f"Reclassifying as SWAP: USDC in and AERO out without NFT burn (was closePosition)")
-                        details["amount"] = position_event["usdc_in"]
-                        details["description"] = f"Swapped AERO for USDC"
-                        details["usdc_in"] = position_event["usdc_in"]
-                        details["aero_out"] = position_event["aero_out"]
-                        details["usdc_out"] = position_event["usdc_out"]
-                        details["aero_in"] = position_event["aero_in"]
-                        return TransactionType.SWAP, details
-                    elif position_event["aero_in"] > 0 and position_event["usdc_out"] > 0:
-                        logger.info(f"Reclassifying as SWAP: AERO in and USDC out without NFT burn (was closePosition)")
-                        details["amount"] = position_event["usdc_out"]
-                        details["description"] = f"Swapped USDC for AERO"
-                        details["aero_in"] = position_event["aero_in"]
-                        details["usdc_out"] = position_event["usdc_out"]
-                        details["usdc_in"] = position_event["usdc_in"]
-                        details["aero_out"] = position_event["aero_out"]
-                        return TransactionType.SWAP, details
+                    # But require actual Transfer events
+                    if position_event.get("has_actual_transfers"):
+                        if position_event["usdc_in"] > 0 and position_event["aero_out"] > 0:
+                            logger.info(f"Reclassifying as SWAP: USDC in and AERO out without NFT burn (was closePosition)")
+                            details["amount"] = position_event["usdc_in"]
+                            details["description"] = f"Swapped AERO for USDC"
+                            details["usdc_in"] = position_event["usdc_in"]
+                            details["aero_out"] = position_event["aero_out"]
+                            details["usdc_out"] = position_event["usdc_out"]
+                            details["aero_in"] = position_event["aero_in"]
+                            return TransactionType.SWAP, details
+                        elif position_event["aero_in"] > 0 and position_event["usdc_out"] > 0:
+                            logger.info(f"Reclassifying as SWAP: AERO in and USDC out without NFT burn (was closePosition)")
+                            details["amount"] = position_event["usdc_out"]
+                            details["description"] = f"Swapped USDC for AERO"
+                            details["aero_in"] = position_event["aero_in"]
+                            details["usdc_out"] = position_event["usdc_out"]
+                            details["usdc_in"] = position_event["usdc_in"]
+                            details["aero_out"] = position_event["aero_out"]
+                            return TransactionType.SWAP, details
+                    else:
+                        logger.info(f"No actual Transfer events - marking as UNKNOWN instead of SWAP")
+                        return TransactionType.UNKNOWN, details
 
                 # For position closing, the amount received back is what matters
                 # This is typically usdc_in (what comes back to wallet) plus any AERO converted to USDC

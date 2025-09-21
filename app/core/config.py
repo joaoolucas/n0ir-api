@@ -15,6 +15,7 @@ class Settings(BaseSettings):
         default="https://base-mainnet.g.alchemy.com/v2/PbEIlFPXdZpA6ld_nxViZD73mlaupBrY",
         env="RPC_URL"
     )
+    base_rpc_url: Optional[str] = Field(default=None, env="BASE_RPC_URL")
     
     # Cache Configuration (seconds)
     cache_ttl_token_info: int = Field(default=3600, env="CACHE_TTL_TOKEN_INFO")
@@ -99,6 +100,8 @@ class Settings(BaseSettings):
     cdp_api_key_id: Optional[str] = Field(default=None, env="CDP_API_KEY_ID")
     cdp_api_key_secret: Optional[str] = Field(default=None, env="CDP_API_KEY_SECRET")
     cdp_wallet_secret: Optional[str] = Field(default=None, env="CDP_WALLET_SECRET")
+    cdp_api_key_name: Optional[str] = Field(default=None, env="CDP_API_KEY_NAME")
+    cdp_api_key_private_key: Optional[str] = Field(default=None, env="CDP_API_KEY_PRIVATE_KEY")
     
     # CDP SQL API Configuration
     cdp_client_api_key: Optional[str] = Field(
@@ -133,6 +136,10 @@ class Settings(BaseSettings):
         default=None,
         env="API_BEARER_TOKEN"
     )
+
+    # Wallet Registry Configuration
+    wallet_registry_contract_address: Optional[str] = Field(default=None, env="WALLET_REGISTRY_CONTRACT_ADDRESS")
+    wallet_registry_operator_address: Optional[str] = Field(default=None, env="WALLET_REGISTRY_OPERATOR_ADDRESS")
     
     @property
     def get_database_url(self) -> Optional[str]:
