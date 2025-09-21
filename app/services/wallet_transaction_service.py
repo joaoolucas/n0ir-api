@@ -575,16 +575,30 @@ class WalletTransactionService:
                     if from_addr == self.LIQUIDITY_MANAGER or to_addr != from_addr:
                         pool_addresses.add(to_addr)
 
-                # Check for LiquidityManager interaction (only if no event-based detection)
-                if not position_event and to_addr == self.LIQUIDITY_MANAGER and from_addr == cdp_wallet:
+                # Check for LiquidityManager interaction
+                # Relaxed check: allow indirect calls (not just from CDP wallet)
+                if not position_event and to_addr == self.LIQUIDITY_MANAGER:
                     if len(input_data) >= 10:
                         method_sig = input_data[:10]
+
+                        # Check if it's a known position method
                         if method_sig in self.POSITION_METHOD_SIGNATURES:
                             position_event = {
                                 "method_sig": method_sig,
                                 "method_name": self.POSITION_METHOD_SIGNATURES[method_sig],
-                                "event_detected": "method_signature_fallback"
+                                "event_detected": "method_signature_fallback",
+                                "from_address": from_addr
                             }
+                            logger.info(f"Detected position event via method signature: {method_sig} from {from_addr[:10]}...")
+                        # Also check for other potential close position signatures
+                        elif method_sig in ["0xfcdf9752", "0x8e005082", "0x4f1eb3d8"]:  # Other possible closePosition variants
+                            position_event = {
+                                "method_sig": method_sig,
+                                "method_name": "closePosition",
+                                "event_detected": "alternative_close_signature",
+                                "from_address": from_addr
+                            }
+                            logger.info(f"Detected position close via alternative signature: {method_sig}")
 
         # Always track USDC transfers regardless of position detection
         for trace in traces:
@@ -622,6 +636,31 @@ class WalletTransactionService:
                         elif decoded["to"].lower() == cdp_wallet:
                             aero_flows["in"] += decoded["amount"]
         
+        # Final fallback: If we have significant USDC/AERO flows but no position event detected,
+        # check if this might be a position close based on token flows
+        if not position_event and (usdc_flows["in"] > 0 or aero_flows["in"] > 0):
+            # Look for patterns that suggest position activity
+            is_likely_close = False
+
+            # Pattern 1: Both USDC and AERO coming IN (classic position close)
+            if usdc_flows["in"] > 0 and aero_flows["in"] > 0:
+                is_likely_close = True
+                logger.info(f"Detected likely position close based on token flows: USDC in={usdc_flows['in']}, AERO in={aero_flows['in']}")
+
+            # Pattern 2: Significant USDC coming IN with no USDC going OUT (pure return)
+            elif usdc_flows["in"] > 1000 and usdc_flows["out"] == 0:  # More than 1000 USDC returned
+                is_likely_close = True
+                logger.info(f"Detected likely position close based on USDC return: {usdc_flows['in']} USDC")
+
+            if is_likely_close:
+                position_event = {
+                    "method_sig": "0xe0891d91",  # Default closePosition signature
+                    "method_name": "closePosition",
+                    "event_detected": "flow_pattern_detection",
+                    "detected_reason": f"USDC_in={usdc_flows['in']}, AERO_in={aero_flows['in']}"
+                }
+                logger.warning(f"Using flow pattern detection for potential position close")
+
         if position_event:
             # Don't use pool addresses from traces - they're often wrong
             # The actual pool address should be looked up from the position NFT
@@ -634,7 +673,7 @@ class WalletTransactionService:
                 "pool": None  # Will be fetched from position data later
             })
             return position_event
-        
+
         return None
     
     async def _categorize_transaction(
@@ -690,6 +729,34 @@ class WalletTransactionService:
         
         # Check for position events first (highest priority)
         position_event = self._analyze_position_event(traces, cdp_wallet)
+
+        # Debug logging for transactions that might be position events but weren't detected
+        if not position_event:
+            # Check if this looks like it might be a position event based on flows
+            has_significant_usdc = False
+            has_significant_aero = False
+
+            for trace in traces:
+                to_addr = trace.get("to", "").lower()
+
+                # Check for any interaction with liquidity-related contracts
+                if to_addr == self.LIQUIDITY_MANAGER:
+                    logger.warning(f"Transaction {details['tx_hash'][:10]}... interacts with LiquidityManager but wasn't detected as position event")
+                    logger.warning(f"  From: {trace.get('from', '')[:10]}... To: {to_addr[:10]}...")
+                    logger.warning(f"  Method sig: {trace.get('input', '')[:10] if trace.get('input') else 'none'}")
+
+                # Check for NFT burns (which would indicate position close)
+                if "logs" in trace:
+                    for log in trace.get("logs", []):
+                        topics = log.get("topics", [])
+                        if topics and len(topics) >= 4:
+                            # ERC721 Transfer event
+                            if topics[0] and "ddf252ad" in str(topics[0]).lower():
+                                # Check if it's a burn (to address 0x0)
+                                to_addr_hex = topics[2][-40:] if len(topics) > 2 else ""
+                                if to_addr_hex == "0" * 40:
+                                    logger.warning(f"Transaction {details['tx_hash'][:10]}... has NFT burn but wasn't detected as POSITION_CLOSED")
+
         if position_event:
             # Handle STAKING type separately
             if position_event.get("type") == "STAKING":
