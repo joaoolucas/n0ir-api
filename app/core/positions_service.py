@@ -577,16 +577,26 @@ class PositionsService:
             else:
                 logger.warning(f"Position {token_id} - No Sugar data found")
 
-            # Fetch pool APR from pools_service
+            # Fetch pool APR and name from pools_service
             pool_apr = None
+            pool_name = None
             try:
                 from app.core.pools_service import pools_service
                 pool_data = await pools_service.get_pool(pool_address, include_effective_apr=False)
                 pool_apr = pool_data.get('apr', 0)
-                logger.info(f"Position {token_id} - Pool APR: {pool_apr}%")
+
+                # Extract pool name from symbol
+                symbol = pool_data.get('symbol', '')
+                if symbol and '-' in symbol:
+                    pool_name = symbol.split('-')[0]  # Get everything before the dash (e.g., "WETH/USDC-0.3%" -> "WETH/USDC")
+                else:
+                    pool_name = symbol
+
+                logger.info(f"Position {token_id} - Pool: {pool_name}, APR: {pool_apr}%")
             except Exception as e:
-                logger.warning(f"Could not fetch pool APR for position {token_id}: {e}")
+                logger.warning(f"Could not fetch pool data for position {token_id}: {e}")
                 pool_apr = 0
+                pool_name = None
 
             position_info = PositionInfo(
                 id=token_id,
@@ -605,6 +615,7 @@ class PositionsService:
                 token0=token0,
                 token1=token1,
                 tick_spacing=tick_spacing,
+                pool_name=pool_name,  # Add pool name to position info
                 apr=pool_apr  # Add APR to position info
             )
             

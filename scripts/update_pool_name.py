@@ -1,30 +1,29 @@
 #!/usr/bin/env python3
 """
-Fix position status.
+Update pool name to WETH/USDC.
 """
 
 import asyncio
 import asyncpg
 
-async def fix_position():
-    """Fix the position status."""
+async def update_pool_name():
+    """Update the pool name."""
     
     database_url = "postgresql://postgres:pXmVJczPuWPIauAWXFUKwUdaYGTKqBdX@shuttle.proxy.rlwy.net:17669/railway"
     
     position_id = 26256789
     
-    print("FIXING POSITION STATUS")
+    print("UPDATING POOL NAME")
     print("="*60)
     
     conn = await asyncpg.connect(database_url)
     
     try:
-        # Update position status to ACTIVE and fix entry amount
+        # Update pool name
         updated = await conn.fetchval(
             """
             UPDATE positions 
-            SET status = 'ACTIVE',
-                entry_amount_usdc = 49.98,
+            SET pool_name = 'WETH/USDC',
                 updated_at = NOW()
             WHERE token_id = $1
             RETURNING token_id
@@ -33,18 +32,20 @@ async def fix_position():
         )
         
         if updated:
-            print(f"✅ Fixed position {updated}")
-            print(f"  - Status: CLOSED → ACTIVE")
-            print(f"  - Entry amount: 0.0 → 49.98 USDC")
-        else:
-            print(f"Position {position_id} not found")
+            print(f"✅ Updated position {updated}")
+            print(f"  Pool name: → WETH/USDC")
+            
+            # Verify
+            pool_name = await conn.fetchval(
+                "SELECT pool_name FROM positions WHERE token_id = $1",
+                position_id
+            )
+            print(f"\nVerified: Pool name is now '{pool_name}'")
         
     except Exception as e:
         print(f"❌ Error: {e}")
-        import traceback
-        traceback.print_exc()
     finally:
         await conn.close()
 
 if __name__ == "__main__":
-    asyncio.run(fix_position())
+    asyncio.run(update_pool_name())
