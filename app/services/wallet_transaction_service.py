@@ -485,20 +485,10 @@ class WalletTransactionService:
 
                             # Check for ERC721 Transfer events (NFT minting, burning, and staking)
                             elif event_sig_normalized == ERC721_TRANSFER_EVENT.lower():
-                                # Check if this is from the NFT Position Manager contract OR a gauge contract
+                                # Check if this is from the NFT Position Manager contract
                                 log_address = log.get("address", "").lower() if log.get("address") else ""
-
-                                # Known gauge addresses that can mint NFTs
-                                gauge_addresses = [
-                                    "0x827922686190790b37229fd06084350e74485b72".lower(),  # WETH/USDC gauge
-                                ]
-
-                                is_position_manager = log_address == self.NFT_POSITION_MANAGER
-                                is_gauge = log_address in gauge_addresses
-
-                                logger.debug(f"Found ERC721 Transfer event from {log_address}, NFT Manager: {is_position_manager}, Gauge: {is_gauge}")
-
-                                if is_position_manager or is_gauge:
+                                logger.debug(f"Found ERC721 Transfer event from {log_address}, NFT Manager: {self.NFT_POSITION_MANAGER}")
+                                if log_address == self.NFT_POSITION_MANAGER:
                                     # ERC721 Transfer has 3 indexed params: from, to, tokenId
                                     # topics[0] = event signature
                                     # topics[1] = from address (padded)
@@ -529,8 +519,7 @@ class WalletTransactionService:
                                                         "method_name": "openPosition",
                                                         "nft_token_id": nft_token_id,
                                                         "event_detected": "ERC721Mint",
-                                                        "event_signature": event_sig_normalized,
-                                                        "minted_by": "gauge" if is_gauge else "position_manager"
+                                                        "event_signature": event_sig_normalized
                                                     }
 
                                             # Check for BURN (position close) - from CDP wallet to address 0x0
