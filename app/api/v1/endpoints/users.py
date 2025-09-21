@@ -809,13 +809,31 @@ async def get_performance(
                     await db.commit()
 
                     # Publish balance change event for agent manager
-                    await publish_balance_change_event(
-                        user_id=user_id,
-                        old_balance=db_balance,
-                        new_balance=onchain_balance,
-                        event_type=event_type,
-                        has_deposited_50_usdc=user.has_deposited_50_usdc
-                    )
+                    # Use BOTH pub/sub and streams for redundancy
+                    try:
+                        # Method 1: Pub/Sub (original)
+                        await publish_balance_change_event(
+                            user_id=user_id,
+                            old_balance=db_balance,
+                            new_balance=onchain_balance,
+                            event_type=event_type,
+                            has_deposited_50_usdc=user.has_deposited_50_usdc
+                        )
+                    except Exception as e:
+                        logger.error(f"Pub/sub publish failed: {e}")
+
+                    try:
+                        # Method 2: Stream (backup)
+                        from app.services.balance_stream_publisher import publish_balance_change_to_stream
+                        await publish_balance_change_to_stream(
+                            user_id=user_id,
+                            old_balance=db_balance,
+                            new_balance=onchain_balance,
+                            event_type=event_type,
+                            has_deposited_50_usdc=user.has_deposited_50_usdc
+                        )
+                    except Exception as e:
+                        logger.error(f"Stream publish failed: {e}")
 
                     # Refresh user data after update
                     await db.refresh(user)
