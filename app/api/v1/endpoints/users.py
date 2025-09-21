@@ -758,8 +758,8 @@ async def get_performance(
             # TODO: Re-enable caching when redis_client is available
             if True:  # Always sync for now
                 # Initialize Web3 and USDC contract
-                # Use base_rpc_url from settings or fallback to default
-                rpc_url = getattr(settings, 'base_rpc_url', None) or os.getenv('BASE_RPC_URL', 'https://mainnet.base.org')
+                # Use RPC_URL from environment
+                rpc_url = os.getenv('RPC_URL', 'https://mainnet.base.org')
                 w3 = Web3(Web3.HTTPProvider(rpc_url))
                 usdc_address = Web3.to_checksum_address("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
                 usdc_abi = [{"constant":True,"inputs":[{"name":"_owner","type":"address"}],"name":"balanceOf","outputs":[{"name":"balance","type":"uint256"}],"type":"function"}]
