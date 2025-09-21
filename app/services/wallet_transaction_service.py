@@ -1156,35 +1156,65 @@ class WalletTransactionService:
                 for pm in self.POSITION_MANAGERS:
                     if to_addr == pm:
                         # This is likely a staking transaction
-                        # Try to extract NFT token ID from input data
-                        if input_data and len(input_data) > 10:
-                            method_sig = input_data[:10]
-                            # Common staking method signatures
-                            # 0x6e553f65 = deposit(uint256,address)
-                            # 0x1526fe27 = gauges(address)
-                            logger.info(f"Found potential staking to position manager with method: {method_sig}")
-                            details["description"] = f"NFT position staked to gauge"
-                            details["gauge_address"] = to_addr
-                            details["cdp_wallet"] = cdp_wallet
+                        logger.info(f"Found potential staking to position manager {to_addr}")
+                        details["description"] = f"NFT position staked to gauge"
+                        details["gauge_address"] = to_addr
+                        details["cdp_wallet"] = cdp_wallet
 
-                            # Try to extract NFT ID from recent positions
-                            # This is a workaround since we can't get it from the transaction directly
+                        # Try harder to find the NFT token ID by looking at logs
+                        # Even if position_event wasn't detected, we can still look for ERC721 Transfer events
+                        nft_token_id = None
+
+                        # First, check if there are any ERC721 Transfer events in the logs
+                        if "logs" in tx_data:
+                            for log in tx_data["logs"]:
+                                if log.get("topics") and len(log["topics"]) >= 4:
+                                    # ERC721 Transfer event signature
+                                    transfer_sig = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+                                    event_sig = log["topics"][0]
+
+                                    if event_sig == transfer_sig:
+                                        # Check if it's from CDP wallet (topics[1])
+                                        from_addr_hex = log["topics"][1][-40:] if len(log["topics"][1]) > 40 else log["topics"][1]
+                                        from_addr_log = f"0x{from_addr_hex}".lower()
+
+                                        # Check if to_addr is the position manager (topics[2])
+                                        to_addr_hex = log["topics"][2][-40:] if len(log["topics"][2]) > 40 else log["topics"][2]
+                                        to_addr_log = f"0x{to_addr_hex}".lower()
+
+                                        if from_addr_log == cdp_wallet and to_addr_log == to_addr:
+                                            # Extract NFT token ID from topics[3]
+                                            try:
+                                                nft_token_id = int(log["topics"][3], 16)
+                                                logger.info(f"Found NFT token ID {nft_token_id} from ERC721 Transfer event in staking fallback")
+                                                break
+                                            except Exception as e:
+                                                logger.warning(f"Failed to parse NFT ID from ERC721 Transfer: {e}")
+
+                        # If we found the NFT ID from logs, use it
+                        if nft_token_id:
+                            details["nft_token_id"] = nft_token_id
+
+                            # Try to get position details for pool information
                             from app.database.models.position import Position
                             from sqlalchemy import select
-                            stmt = select(Position).where(
-                                Position.user_id == owner_wallet,
-                                Position.status == 'ACTIVE'
-                            ).order_by(Position.created_at.desc()).limit(1)
+                            stmt = select(Position).where(Position.token_id == nft_token_id)
                             result = await self.db.execute(stmt)
                             position = result.scalar_one_or_none()
 
                             if position:
-                                details["nft_token_id"] = position.token_id
                                 details["pool_name"] = position.pool_name
                                 details["pool"] = position.pool_address
-                                details["description"] = f"Staked NFT position {position.token_id} to gauge"
+                                details["description"] = f"NFT position staked to gauge"
+                            else:
+                                logger.warning(f"Position {nft_token_id} not found in database for staking transaction")
+                        else:
+                            # Mark for manual review if we couldn't find the NFT ID
+                            details["needs_review"] = True
+                            details["missing_fields"] = ["position_id", "pool_name"]
+                            logger.warning(f"Could not determine NFT token ID for staking transaction {details['tx_hash'][:10]}...")
 
-                            return TransactionType.STAKING, details
+                        return TransactionType.STAKING, details
         
         # Return based on what we found (prioritize financial transactions)
         if found_deposit:
