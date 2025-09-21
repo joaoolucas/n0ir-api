@@ -1439,6 +1439,14 @@ class WalletTransactionService:
                 if not position_id and existing_tx.event_data:
                     position_id = existing_tx.event_data.get('position_id') or existing_tx.event_data.get('nft_token_id') or existing_tx.event_data.get('token_id')
 
+                # Convert to int if it's a string
+                if position_id and isinstance(position_id, str):
+                    try:
+                        position_id = int(position_id)
+                    except (ValueError, TypeError):
+                        logger.error(f"Invalid position_id format: {position_id}")
+                        position_id = None
+
                 if position_id:
                     # Check if the position exists
                     from app.database.models import Position
@@ -1475,6 +1483,14 @@ class WalletTransactionService:
                 position_id = existing_tx.position_id
                 if not position_id and existing_tx.event_data:
                     position_id = existing_tx.event_data.get('position_id') or existing_tx.event_data.get('nft_token_id') or existing_tx.event_data.get('token_id')
+
+                # Convert to int if it's a string
+                if position_id and isinstance(position_id, str):
+                    try:
+                        position_id = int(position_id)
+                    except (ValueError, TypeError):
+                        logger.error(f"Invalid position_id format: {position_id}")
+                        position_id = None
 
                 if position_id:
                     # Check if the position exists and needs staking update
@@ -1702,6 +1718,7 @@ class WalletTransactionService:
             if position:
                 position.staked = True
                 position.gauge_address = gauge_address
+                await self.db.commit()
                 logger.info(f"Updated position {position_id} as staked to gauge {gauge_address}")
             else:
                 logger.warning(f"Position {position_id} not found when trying to update staking status")
@@ -1756,6 +1773,7 @@ class WalletTransactionService:
             )
 
             self.db.add(new_position)
+            await self.db.commit()
             logger.info(f"Created position {position_id} for user {user_id} in pool {pool_name or pool_address}")
 
         except Exception as e:
