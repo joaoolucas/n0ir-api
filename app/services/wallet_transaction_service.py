@@ -1351,6 +1351,9 @@ class WalletTransactionService:
                 # Just pass through any initial data we have
                 if details.get("nft_token_id"):
                     event_data["nft_token_id"] = details["nft_token_id"]
+                    event_data["tokenId"] = str(details["nft_token_id"])  # Also store as string with tokenId key
+                    event_data["token_id"] = details["nft_token_id"]  # Also store with underscore
+                    logger.info(f"Storing position ID in event_data: nft_token_id={details['nft_token_id']}")
                 if details.get("pool_name"):
                     event_data["pool_name"] = details["pool_name"]
                 if details.get("pool"):
@@ -1383,18 +1386,22 @@ class WalletTransactionService:
             )
 
             self.db.add(transaction)
-            logger.info(f"Saved {tx_type} transaction: {details['tx_hash'][:10]}... Amount: {amount_usdc} USDC")
+            logger.info(f"Saved {tx_type} transaction: {details['tx_hash'][:10]}... Amount: {amount_usdc} USDC, position_id: {position_id_value}")
 
             # If this is a POSITION_CREATED transaction, create the position
             if tx_type == "POSITION_CREATED" and position_id_value:
-                await self._create_position_if_needed(
-                    user_id=user_id,
-                    position_id=position_id_value,
-                    pool_address=event_data.get("pool"),
-                    pool_name=event_data.get("pool_name"),
-                    tx_hash=details["tx_hash"],
-                    amount_usdc=amount_usdc
-                )
+                try:
+                    await self._create_position_if_needed(
+                        user_id=user_id,
+                        position_id=position_id_value,
+                        pool_address=event_data.get("pool"),
+                        pool_name=event_data.get("pool_name"),
+                        tx_hash=details["tx_hash"],
+                        amount_usdc=amount_usdc
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to create position for POSITION_CREATED transaction: {e}")
+                    # Continue processing other transactions
 
             # If this is a STAKING transaction, update position's staked status
             elif tx_type == "STAKING" and position_id_value:
@@ -1710,20 +1717,26 @@ class WalletTransactionService:
             result = await self.db.execute(stmt)
             position_created_txs = result.scalars().all()
 
+            positions_created = 0
             for tx in position_created_txs:
                 # Get position_id from either column or event_data
                 position_id = tx.position_id
                 if not position_id and tx.event_data:
-                    position_id = tx.event_data.get('position_id') or tx.event_data.get('nft_token_id') or tx.event_data.get('token_id')
+                    # Try multiple possible keys in event_data
+                    for key in ['position_id', 'nft_token_id', 'tokenId', 'token_id']:
+                        position_id = tx.event_data.get(key)
+                        if position_id:
+                            break
 
                 # Convert to int if string
-                if position_id and isinstance(position_id, str):
-                    try:
-                        position_id = int(position_id)
-                    except (ValueError, TypeError):
-                        continue
-
                 if position_id:
+                    if isinstance(position_id, str):
+                        try:
+                            position_id = int(position_id)
+                        except (ValueError, TypeError):
+                            logger.error(f"Invalid position_id format in transaction {tx.tx_hash}: {position_id}")
+                            continue
+
                     # Check if position exists
                     check_stmt = select(Position).where(
                         and_(
@@ -1736,19 +1749,26 @@ class WalletTransactionService:
 
                     if not position:
                         # Create position
-                        logger.info(f"Creating missing position {position_id} for user {user_id}")
+                        logger.info(f"Creating missing position {position_id} for user {user_id} from tx {tx.tx_hash[:10]}...")
                         amount_usdc = Decimal(str(tx.event_data.get('amount_usdc', 0))) if tx.event_data else Decimal(0)
                         pool_address = tx.event_data.get('pool') if tx.event_data else None
                         pool_name = tx.event_data.get('pool_name') if tx.event_data else None
 
-                        await self._create_position_if_needed(
-                            user_id=user_id,
-                            position_id=position_id,
-                            pool_address=pool_address,
-                            pool_name=pool_name,
-                            tx_hash=tx.tx_hash,
-                            amount_usdc=amount_usdc
-                        )
+                        try:
+                            await self._create_position_if_needed(
+                                user_id=user_id,
+                                position_id=position_id,
+                                pool_address=pool_address,
+                                pool_name=pool_name,
+                                tx_hash=tx.tx_hash,
+                                amount_usdc=amount_usdc
+                            )
+                            positions_created += 1
+                        except Exception as e:
+                            logger.error(f"Failed to create position {position_id}: {e}")
+                            continue
+                else:
+                    logger.warning(f"POSITION_CREATED transaction {tx.tx_hash[:10]}... has no position_id")
 
             # Also check STAKING transactions to update positions
             stmt = select(Transaction).where(
@@ -1792,8 +1812,14 @@ class WalletTransactionService:
                             gauge_address=gauge_address
                         )
 
+            # Commit all position creations and updates
+            if positions_created > 0:
+                await self.db.commit()
+                logger.info(f"Committed {positions_created} new positions for user {user_id}")
+
         except Exception as e:
             logger.error(f"Error ensuring positions for transactions: {e}")
+            await self.db.rollback()  # Rollback on error
 
     async def _update_position_staking(
         self,
@@ -1819,7 +1845,7 @@ class WalletTransactionService:
             if position:
                 position.staked = True
                 position.gauge_address = gauge_address
-                await self.db.commit()
+                # Don't commit here - let the caller handle the commit
                 logger.info(f"Updated position {position_id} as staked to gauge {gauge_address}")
             else:
                 logger.warning(f"Position {position_id} not found when trying to update staking status")
@@ -1839,8 +1865,13 @@ class WalletTransactionService:
         """Create a position when a POSITION_CREATED transaction is detected."""
         from app.database.models import Position
         from sqlalchemy import select, and_
+        from sqlalchemy.exc import IntegrityError
 
         try:
+            # Ensure position_id is an integer
+            if isinstance(position_id, str):
+                position_id = int(position_id)
+
             # Check if position already exists
             stmt = select(Position).where(
                 and_(
@@ -1860,7 +1891,7 @@ class WalletTransactionService:
                 user_id=user_id,
                 token_id=position_id,
                 nft_token_id=position_id,  # Same as token_id for compatibility
-                pool_address=pool_address,
+                pool_address=pool_address or "",  # Ensure not None
                 pool_name=pool_name,
                 status='ACTIVE',
                 entry_date=datetime.utcnow(),
@@ -1874,11 +1905,22 @@ class WalletTransactionService:
             )
 
             self.db.add(new_position)
-            await self.db.commit()
-            logger.info(f"Created position {position_id} for user {user_id} in pool {pool_name or pool_address}")
+            # Don't commit here - let the caller handle the commit
+            # This ensures all operations happen in the same transaction
+            logger.info(f"Added position {position_id} to session for user {user_id} in pool {pool_name or pool_address}")
 
+        except IntegrityError as e:
+            # Position might already exist (race condition)
+            logger.warning(f"Position {position_id} already exists (integrity error): {e}")
+            await self.db.rollback()
+        except ValueError as e:
+            logger.error(f"Invalid position_id format {position_id}: {e}")
+            raise
         except Exception as e:
             logger.error(f"Failed to create position {position_id}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            raise  # Re-raise to make failures visible
 
     async def _close_position_if_needed(
         self,
