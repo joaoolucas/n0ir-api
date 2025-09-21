@@ -1172,9 +1172,24 @@ class WalletTransactionService:
             logger.info(f"Saved {tx_type} transaction: {details['tx_hash'][:10]}... Amount: {amount_usdc} USDC")
 
             # If this is a POSITION_CLOSED transaction, update the position status
-            if tx_type == "POSITION_CLOSED" and nft_id:
-                logger.info(f"Closing position {nft_id} for tx {details['tx_hash'][:10]}...")
-                await self._close_position_if_needed(user_id, nft_id, details["tx_hash"], amount_usdc)
+            if tx_type == "POSITION_CLOSED":
+                if nft_id:
+                    logger.info(f"Closing position {nft_id} for tx {details['tx_hash'][:10]}...")
+                    await self._close_position_if_needed(user_id, nft_id, details["tx_hash"], amount_usdc)
+                else:
+                    # Try to find the position to close based on transaction timing and amount
+                    logger.warning(f"POSITION_CLOSED detected without NFT ID, attempting to find position...")
+                    found_position_id = await self._find_position_to_close(user_id, amount_usdc, details)
+                    if found_position_id:
+                        logger.info(f"Found position {found_position_id} to close for tx {details['tx_hash'][:10]}...")
+                        await self._close_position_if_needed(user_id, found_position_id, details["tx_hash"], amount_usdc)
+                        # Update the transaction with the found position_id
+                        transaction.position_id = found_position_id
+                        if not transaction.event_data:
+                            transaction.event_data = {}
+                        transaction.event_data["nft_token_id"] = found_position_id
+                    else:
+                        logger.error(f"Could not find position to close for tx {details['tx_hash'][:10]}... Amount: {amount_usdc}")
         else:
             # Update existing transaction if needed
             if existing_tx.tx_type == "UNKNOWN" and tx_type != "UNKNOWN":
@@ -1279,6 +1294,60 @@ class WalletTransactionService:
 
         except Exception as e:
             logger.error(f"Error finding position for transaction: {e}")
+            return None
+
+    async def _find_position_to_close(
+        self,
+        user_id: str,
+        amount_usdc: Decimal,
+        details: Dict[str, Any]
+    ) -> Optional[int]:
+        """Find an active position to close when we don't have the NFT ID."""
+        from app.database.models import Position
+        from sqlalchemy import select, and_
+
+        try:
+            # Look for the most recently created ACTIVE position for this user
+            # This is a reasonable assumption since positions are usually closed in order
+            stmt = select(Position).where(
+                and_(
+                    Position.user_id == user_id,
+                    Position.status == 'ACTIVE'
+                )
+            ).order_by(Position.created_at.desc())
+
+            result = await self.db.execute(stmt)
+            positions = result.scalars().all()
+
+            if len(positions) == 1:
+                # If there's only one active position, it must be the one being closed
+                logger.info(f"Found single active position {positions[0].token_id} to close")
+                return positions[0].token_id
+
+            elif len(positions) > 1:
+                # Multiple active positions - try to match by expected return amount
+                # The position with entry_amount closest to the return amount is likely the one
+                best_match = None
+                best_diff = float('inf')
+
+                for position in positions:
+                    # Check if return amount is reasonable for this position
+                    # (typically 80-120% of entry amount for normal closes)
+                    diff = abs(float(position.entry_amount_usdc) - float(amount_usdc))
+                    if diff < best_diff:
+                        best_diff = diff
+                        best_match = position
+
+                if best_match and best_diff < float(amount_usdc) * 0.5:  # Within 50% of return amount
+                    logger.info(f"Found best matching position {best_match.token_id} with entry {best_match.entry_amount_usdc} USDC")
+                    return best_match.token_id
+                else:
+                    logger.warning(f"Could not confidently match position. Found {len(positions)} active positions")
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error finding position to close: {e}")
             return None
 
     async def _close_position_if_needed(
