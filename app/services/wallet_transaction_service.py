@@ -1199,6 +1199,33 @@ class WalletTransactionService:
                 existing_tx.event_data["description"] = details.get("description", "")
                 logger.info(f"Recategorized transaction {details['tx_hash'][:10]}... as {tx_type}")
 
+            # IMPORTANT: Check if this is a POSITION_CLOSED transaction that hasn't closed its position yet
+            if existing_tx.tx_type == "POSITION_CLOSED" and existing_tx.position_id:
+                # Check if the position is still ACTIVE
+                from app.database.models import Position
+                from sqlalchemy import select, and_
+
+                check_stmt = select(Position).where(
+                    and_(
+                        Position.token_id == existing_tx.position_id,
+                        Position.user_id == existing_tx.user_id,
+                        Position.status == 'ACTIVE'
+                    )
+                )
+                result = await self.db.execute(check_stmt)
+                active_position = result.scalar_one_or_none()
+
+                if active_position:
+                    logger.warning(f"Found POSITION_CLOSED transaction with ACTIVE position {existing_tx.position_id}, closing it now...")
+                    # Use the amount from event_data
+                    amount_usdc = Decimal(str(existing_tx.event_data.get('amount_usdc', 0))) if existing_tx.event_data else Decimal(0)
+                    await self._close_position_if_needed(
+                        existing_tx.user_id,
+                        existing_tx.position_id,
+                        existing_tx.tx_hash,
+                        amount_usdc
+                    )
+
     async def _find_position_for_transaction(
         self,
         user_id: str,
