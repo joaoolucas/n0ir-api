@@ -1432,8 +1432,76 @@ class WalletTransactionService:
                 existing_tx.event_data["description"] = details.get("description", "")
                 logger.info(f"Recategorized transaction {details['tx_hash'][:10]}... as {tx_type}")
 
+            # IMPORTANT: Check if this is a POSITION_CREATED transaction that hasn't created its position yet
+            if existing_tx.tx_type == "POSITION_CREATED":
+                # Get position_id from either the column or event_data
+                position_id = existing_tx.position_id
+                if not position_id and existing_tx.event_data:
+                    position_id = existing_tx.event_data.get('position_id') or existing_tx.event_data.get('nft_token_id') or existing_tx.event_data.get('token_id')
+
+                if position_id:
+                    # Check if the position exists
+                    from app.database.models import Position
+                    from sqlalchemy import select, and_
+
+                    check_stmt = select(Position).where(
+                        and_(
+                            Position.token_id == position_id,
+                            Position.user_id == existing_tx.user_id
+                        )
+                    )
+                    result = await self.db.execute(check_stmt)
+                    position = result.scalar_one_or_none()
+
+                    if not position:
+                        logger.warning(f"Found POSITION_CREATED transaction without position {position_id}, creating it now...")
+                        # Get data from event_data
+                        amount_usdc = Decimal(str(existing_tx.event_data.get('amount_usdc', 0))) if existing_tx.event_data else Decimal(0)
+                        pool_address = existing_tx.event_data.get('pool') if existing_tx.event_data else None
+                        pool_name = existing_tx.event_data.get('pool_name') if existing_tx.event_data else None
+
+                        await self._create_position_if_needed(
+                            user_id=existing_tx.user_id,
+                            position_id=position_id,
+                            pool_address=pool_address,
+                            pool_name=pool_name,
+                            tx_hash=existing_tx.tx_hash,
+                            amount_usdc=amount_usdc
+                        )
+
+            # IMPORTANT: Check if this is a STAKING transaction that hasn't updated its position yet
+            elif existing_tx.tx_type == "STAKING":
+                # Get position_id from either the column or event_data
+                position_id = existing_tx.position_id
+                if not position_id and existing_tx.event_data:
+                    position_id = existing_tx.event_data.get('position_id') or existing_tx.event_data.get('nft_token_id') or existing_tx.event_data.get('token_id')
+
+                if position_id:
+                    # Check if the position exists and needs staking update
+                    from app.database.models import Position
+                    from sqlalchemy import select, and_
+
+                    check_stmt = select(Position).where(
+                        and_(
+                            Position.token_id == position_id,
+                            Position.user_id == existing_tx.user_id
+                        )
+                    )
+                    result = await self.db.execute(check_stmt)
+                    position = result.scalar_one_or_none()
+
+                    if position and not position.staked:
+                        logger.warning(f"Found STAKING transaction for unstaked position {position_id}, updating it now...")
+                        gauge_address = existing_tx.event_data.get('gauge_address') if existing_tx.event_data else None
+
+                        await self._update_position_staking(
+                            user_id=existing_tx.user_id,
+                            position_id=position_id,
+                            gauge_address=gauge_address
+                        )
+
             # IMPORTANT: Check if this is a POSITION_CLOSED transaction that hasn't closed its position yet
-            if existing_tx.tx_type == "POSITION_CLOSED" and existing_tx.position_id:
+            elif existing_tx.tx_type == "POSITION_CLOSED" and existing_tx.position_id:
                 # Check if the position is still ACTIVE
                 from app.database.models import Position
                 from sqlalchemy import select, and_
