@@ -19,14 +19,14 @@ async def get_redis_client() -> aioredis.Redis:
     if _redis_client is None:
         try:
             _redis_client = await aioredis.from_url(
-                settings.REDIS_URL,
+                settings.redis_url,
                 encoding="utf-8",
                 decode_responses=True,
                 socket_connect_timeout=10,
                 socket_keepalive=True,
             )
             await _redis_client.ping()
-            logger.info(f"Redis stream client connected to {settings.REDIS_URL}")
+            logger.info(f"Redis stream client connected to {settings.redis_url}")
         except Exception as e:
             logger.error(f"Failed to connect to Redis: {e}")
             raise

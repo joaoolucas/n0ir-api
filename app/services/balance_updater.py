@@ -17,9 +17,9 @@ async def get_redis_client() -> aioredis.Redis:
     global _redis_client
 
     if _redis_client is None or not await _redis_client.ping():
-        logger.info(f"Creating new Redis connection to {settings.REDIS_URL}")
+        logger.info(f"Creating new Redis connection to {settings.redis_url}")
         _redis_client = await aioredis.from_url(
-            settings.REDIS_URL,
+            settings.redis_url,
             encoding="utf-8",
             decode_responses=True,
             socket_connect_timeout=10,
