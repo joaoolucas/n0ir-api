@@ -639,6 +639,7 @@ class WalletTransactionService:
 
         # PRIORITY 1.5: If no position event found in CDP traces and we have a tx_hash,
         # fetch logs directly from RPC as CDP might not include all events
+        # Also check for staking events specifically
         if not position_event and tx_hash:
             logger.info(f"No position event in CDP data for {tx_hash[:10]}..., fetching from RPC")
             rpc_logs = await self._fetch_rpc_logs(tx_hash)
@@ -707,6 +708,39 @@ class WalletTransactionService:
                                 break
                         except Exception as e:
                             logger.warning(f"Failed to parse RPC PositionClosed event: {e}")
+
+            # Check for ERC721 Transfer events (for staking detection)
+            if not position_event:
+                erc721_transfer_sig = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
+                for i, log in enumerate(rpc_logs):
+                    if not log.get("topics") or len(log["topics"]) < 4:
+                        continue
+
+                    event_sig = log["topics"][0].lower() if log["topics"] else None
+
+                    # Check for ERC721 Transfer event
+                    if event_sig == erc721_transfer_sig or event_sig == erc721_transfer_sig[2:]:  # With or without 0x
+                        try:
+                            # Extract from, to, and token ID
+                            from_addr = ("0x" + log["topics"][1][-40:]).lower()
+                            to_addr = ("0x" + log["topics"][2][-40:]).lower()
+                            nft_token_id = int(log["topics"][3], 16)
+
+                            # Check if it's a transfer FROM the CDP wallet (staking)
+                            if from_addr == cdp_wallet and to_addr != "0x0000000000000000000000000000000000000000":
+                                logger.info(f"✅ Found ERC721 Transfer in RPC logs: NFT {nft_token_id} from CDP to {to_addr}")
+                                position_event = {
+                                    "type": "STAKING",
+                                    "from_address": from_addr,
+                                    "to_address": to_addr,
+                                    "nft_token_id": nft_token_id,
+                                    "event_detected": "ERC721Transfer_RPC",
+                                    "event_signature": event_sig
+                                }
+                                break
+                        except Exception as e:
+                            logger.warning(f"Failed to parse RPC ERC721 Transfer event: {e}")
 
         # PRIORITY 2: If no events found, fall back to method signature analysis
         # But only if we didn't already find a position event
