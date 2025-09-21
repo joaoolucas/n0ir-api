@@ -382,6 +382,8 @@ class WalletTransactionService:
         try:
             from web3 import Web3
             w3 = Web3(Web3.HTTPProvider(settings.rpc_url))
+
+            logger.info(f"Fetching RPC logs for tx {tx_hash[:10]}...")
             receipt = w3.eth.get_transaction_receipt(tx_hash)
 
             # Convert logs to dict format similar to CDP traces
@@ -392,9 +394,13 @@ class WalletTransactionService:
                     "topics": [topic.hex() if hasattr(topic, 'hex') else str(topic) for topic in log.topics],
                     "data": log.data.hex() if hasattr(log.data, 'hex') else log.data
                 })
+
+            logger.info(f"Found {len(logs)} logs from RPC for {tx_hash[:10]}...")
             return logs
         except Exception as e:
-            logger.warning(f"Failed to fetch RPC logs for {tx_hash}: {e}")
+            logger.error(f"Failed to fetch RPC logs for {tx_hash}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return []
 
     async def _analyze_position_event(
@@ -638,15 +644,22 @@ class WalletTransactionService:
             rpc_logs = await self._fetch_rpc_logs(tx_hash)
 
             # Check RPC logs for PositionCreated event from Liquidity Manager
-            for log in rpc_logs:
+            liquidity_manager_lower = self.LIQUIDITY_MANAGER.lower()
+            logger.info(f"Looking for PositionCreated events from Liquidity Manager: {liquidity_manager_lower}")
+
+            for i, log in enumerate(rpc_logs):
                 if not log.get("topics"):
                     continue
 
                 event_sig = log["topics"][0].lower() if log["topics"] else None
                 log_address = log["address"].lower()
 
+                # Log all events from Liquidity Manager for debugging
+                if log_address == liquidity_manager_lower:
+                    logger.info(f"Log #{i} from Liquidity Manager: sig={event_sig[:10]}...")
+
                 # Check for PositionCreated event (0x8d53117d...)
-                if event_sig == "0x8d53117d19441d0a7f168d2728ff066eed66d078efdaf9bf249eef6e20887ae5" and log_address == self.LIQUIDITY_MANAGER:
+                if event_sig == "0x8d53117d19441d0a7f168d2728ff066eed66d078efdaf9bf249eef6e20887ae5" and log_address == liquidity_manager_lower:
                     if len(log["topics"]) >= 4:
                         try:
                             # Extract position details from PositionCreated event
@@ -965,7 +978,14 @@ class WalletTransactionService:
 
             # SWAP: AERO (and possibly USDC) goes OUT and net USDC comes IN
             # This happens when swapping tokens, potentially with some USDC out too
+            # BUT: Require meaningful amounts to avoid false positives on empty/failed txs
             elif position_event["aero_out"] > 0 and position_event["usdc_in"] > 0:
+                # Check if amounts are meaningful (at least $1 worth)
+                if position_event["aero_out"] < 0.01 and position_event["usdc_in"] < 1:
+                    # Too small to be a real swap, likely an empty/failed transaction
+                    logger.info(f"Skipping tiny amounts as swap: AERO={position_event['aero_out']}, USDC={position_event['usdc_in']}")
+                    return TransactionType.UNKNOWN, details
+
                 # This is a swap: selling AERO for USDC
                 # Net amount is USDC received minus USDC sent
                 net_usdc = position_event["usdc_in"] - position_event["usdc_out"]
