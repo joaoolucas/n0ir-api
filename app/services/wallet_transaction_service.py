@@ -485,10 +485,18 @@ class WalletTransactionService:
 
                             # Check for ERC721 Transfer events (NFT minting, burning, and staking)
                             elif event_sig_normalized == ERC721_TRANSFER_EVENT.lower():
-                                # Check if this is from the NFT Position Manager contract
+                                # Check if this is from the NFT Position Manager contract or a gauge contract
                                 log_address = log.get("address", "").lower() if log.get("address") else ""
                                 logger.debug(f"Found ERC721 Transfer event from {log_address}, NFT Manager: {self.NFT_POSITION_MANAGER}")
-                                if log_address == self.NFT_POSITION_MANAGER:
+
+                                # Known gauge contracts that can mint NFTs
+                                KNOWN_GAUGES = [
+                                    "0x827922686190790b37229fd06084350e74485b72",  # WETH/USDC gauge
+                                    # Add more gauge addresses here as needed
+                                ]
+
+                                # Accept NFTs from either Position Manager or known gauges
+                                if log_address == self.NFT_POSITION_MANAGER or log_address in KNOWN_GAUGES:
                                     # ERC721 Transfer has 3 indexed params: from, to, tokenId
                                     # topics[0] = event signature
                                     # topics[1] = from address (padded)
@@ -509,10 +517,17 @@ class WalletTransactionService:
                                             # Check for MINT (position creation) - from address 0x0 to CDP wallet
                                             zero_address = "0x" + "0" * 40
                                             if from_addr == zero_address and to_addr == cdp_wallet and nft_token_id:
-                                                logger.debug(f"Detected NFT mint to CDP wallet: token {nft_token_id}")
+                                                # Check if it's from a gauge
+                                                is_from_gauge = log_address in KNOWN_GAUGES
+                                                mint_source = "gauge" if is_from_gauge else "position manager"
+                                                logger.debug(f"Detected NFT mint to CDP wallet from {mint_source}: token {nft_token_id}")
+
                                                 # Don't override if we already have a position event, just add the NFT ID
                                                 if position_event and position_event.get("method_name") == "openPosition":
                                                     position_event["nft_token_id"] = nft_token_id
+                                                    if is_from_gauge:
+                                                        position_event["minted_by_gauge"] = True
+                                                        position_event["gauge_address"] = log_address
                                                 else:
                                                     position_event = {
                                                         "method_sig": "0x3a1e3569",  # openPosition method signature
@@ -521,6 +536,9 @@ class WalletTransactionService:
                                                         "event_detected": "ERC721Mint",
                                                         "event_signature": event_sig_normalized
                                                     }
+                                                    if is_from_gauge:
+                                                        position_event["minted_by_gauge"] = True
+                                                        position_event["gauge_address"] = log_address
 
                                             # Check for BURN (position close) - from CDP wallet to address 0x0
                                             elif from_addr == cdp_wallet and to_addr == zero_address and nft_token_id:
@@ -894,6 +912,11 @@ class WalletTransactionService:
                 details["pool"] = position_event.get("pool")  # Include pool address
                 details["nft_token_id"] = position_event.get("nft_token_id")  # Include NFT token ID
 
+                # Add gauge info if minted by gauge
+                if position_event.get("minted_by_gauge"):
+                    details["gauge_address"] = position_event.get("gauge_address")
+                    details["minted_by_gauge"] = True
+
                 # Try to get pool name
                 if position_event.get("pool"):
                     details["pool_name"] = await self._get_pool_name(position_event["pool"])
@@ -1170,9 +1193,12 @@ class WalletTransactionService:
                 if details.get("pool"):
                     event_data["pool"] = details["pool"]
 
-                # Add gauge address for STAKING transactions
+                # Add gauge address for STAKING transactions or gauge-minted positions
                 if tx_type == "STAKING" and details.get("gauge_address"):
                     event_data["gauge_address"] = details["gauge_address"]
+                elif tx_type == "POSITION_CREATED" and details.get("gauge_address"):
+                    event_data["gauge_address"] = details["gauge_address"]
+                    event_data["minted_by_gauge"] = details.get("minted_by_gauge", False)
 
                 # Add fee recipient for FEE_TRANSFER transactions
                 if tx_type == "FEE_TRANSFER" and details.get("fee_recipient"):
