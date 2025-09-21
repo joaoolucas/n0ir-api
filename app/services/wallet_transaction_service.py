@@ -1348,7 +1348,7 @@ class WalletTransactionService:
                 # Save to database if it's a financial or position transaction
                 if tx_type in [TransactionType.DEPOSIT, TransactionType.WITHDRAW,
                               TransactionType.POSITION_CREATED, TransactionType.POSITION_CLOSED,
-                              TransactionType.SWAP, TransactionType.STAKING]:
+                              TransactionType.SWAP, TransactionType.STAKING, TransactionType.FEE_TRANSFER]:
                     await self._save_transaction(
                         user_id=user_id,
                         tx_type=tx_type.value,
