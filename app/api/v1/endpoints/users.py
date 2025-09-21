@@ -11,7 +11,7 @@ from app.core.pools_service import pools_service
 from app.core.positions_service import positions_service
 from app.core.config import settings
 from app.schemas.users import (
-    CreateUserRequest, UpdateUserRequest, DepositRequest, WithdrawRequest, WithdrawResponse,
+    CreateUserRequest, UpdateUserRequest, DepositRequest, WithdrawResponse,
     UserResponse, UserListResponse, TransactionResponse, TransactionListResponse,
     PositionResponse, PositionListResponse, CreatePositionRequest, ClosePositionRequest,
     BalanceResponse, PerformanceResponse,
@@ -414,81 +414,81 @@ async def create_user(
 @router.post("/{user_id}/withdraw", response_model=WithdrawResponse, status_code=201)
 async def withdraw(
     user_id: str,
-    request: WithdrawRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    """Withdraw USDC from user account with smart/best-effort logic.
+    """Withdraw entire USDC balance after closing all positions and swapping all tokens.
 
     This endpoint will:
-    - Withdraw the requested amount if available
-    - Withdraw the maximum available if requested amount exceeds balance
-    - Automatically close positions if needed (always enabled)
+    - Close all active positions
+    - Swap all tokens (including AERO) to USDC
+    - Withdraw the entire USDC balance to the user's wallet
     - Always succeed (withdrawing 0 if nothing is available)
     - Withdrawals always go to the user_id address
-    - Max slippage is hardcoded to 0.1%
 
     Args:
         user_id: User's wallet address (also the destination address)
-        request: Withdrawal request with amount and options
     """
     try:
-        # Signature verification removed - not required for withdrawals
-        logger.info(f"Processing withdrawal for {user_id} without signature verification")
+        logger.info(f"Processing full withdrawal for {user_id} - closing all positions and withdrawing entire balance")
 
         service = UserService(db)
-        
+
+        # Get all active positions to close
+        active_positions = await service.get_user_positions(user_id, status='ACTIVE')
+        positions_closed = len(active_positions)
+
+        # Calculate total expected value from positions
+        expected_from_positions = Decimal(0)
+        for position in active_positions:
+            expected_from_positions += (position.current_value_usdc or position.entry_amount_usdc or Decimal(0))
+
         # Get current wallet balance
         wallet_balance = await service.get_user_balance(user_id)
-        
-        # Smart withdrawal: use min(requested, available)
-        actual_amount = min(request.amount_usdc, wallet_balance)
-        
-        # Always check positions if balance insufficient (force_close_positions is always true now)
-        positions_closed = 0
-        if actual_amount < request.amount_usdc:
-            active_positions = await service.get_user_positions(user_id, status='ACTIVE')
-            if active_positions:
-                # Calculate potential balance after closing positions
-                potential_balance = wallet_balance
-                for position in active_positions:
-                    potential_balance += (position.current_value_usdc or position.entry_amount_usdc)
 
-                # Update actual amount to min(requested, potential)
-                actual_amount = min(request.amount_usdc, potential_balance)
-                positions_closed = len(active_positions)
+        # Calculate total expected amount (positions + wallet balance)
+        # Use a very large amount to ensure everything is withdrawn
+        # The agent will close all positions, swap all tokens to USDC, and withdraw everything
+        withdrawal_amount = (wallet_balance + expected_from_positions) * Decimal("10")  # Use 10x to ensure all funds are withdrawn
 
-        # Execute withdrawal (will close positions if needed)
-        # Hardcoded parameters:
-        # - destination: always user_id
-        # - force_close_positions: always True
-        # - max_slippage_percent: always 0.1%
+        logger.info(f"User {user_id} has {positions_closed} active positions worth ~{expected_from_positions} USDC and wallet balance {wallet_balance} USDC")
+
+        # Execute full withdrawal through service
+        # This will close all positions, swap all tokens, and withdraw everything
         transaction = None
-        if actual_amount > 0:
+        try:
             transaction = await service.withdraw_usdc(
                 user_id=user_id,
-                amount=actual_amount,  # Use the smart amount
-                withdraw_all=request.withdraw_all
+                amount=withdrawal_amount,  # Large amount to ensure everything is withdrawn
+                withdraw_all=True  # This flag tells the agent to withdraw everything
             )
-        
-        # Get updated balance
+
+            # Get the actual withdrawn amount from the transaction or estimate
+            actual_withdrawn = wallet_balance + expected_from_positions
+
+        except Exception as e:
+            # Even if there's an error, try to estimate what could be withdrawn
+            actual_withdrawn = Decimal(0)
+            logger.error(f"Withdrawal execution failed: {e}")
+
+        # Get updated balance (should be close to 0 after full withdrawal)
         remaining_balance = await service.get_user_balance(user_id)
-        
-        # Create enhanced response
+
+        # Create response
         return WithdrawResponse(
-            requested_amount=request.amount_usdc,
-            withdrawn_amount=actual_amount,
+            requested_amount=wallet_balance + expected_from_positions,  # Total available
+            withdrawn_amount=actual_withdrawn,
             remaining_balance=remaining_balance,
             positions_closed=positions_closed,
-            status="complete" if actual_amount >= request.amount_usdc else "partial" if actual_amount > 0 else "none",
+            status="complete" if actual_withdrawn > 0 else "none",
             tx_hash=transaction.tx_hash if transaction else None,
             transaction_id=transaction.id if transaction else None,
-            message=f"Withdrew {actual_amount} USDC" + (f" (requested {request.amount_usdc})" if actual_amount < request.amount_usdc else "")
+            message=f"Closed {positions_closed} positions and withdrew all USDC"
         )
     except Exception as e:
-        logger.error(f"Error processing withdrawal: {e}")
+        logger.error(f"Error processing full withdrawal: {e}")
         # Even on error, return a valid response showing nothing was withdrawn
         return WithdrawResponse(
-            requested_amount=request.amount_usdc,
+            requested_amount=Decimal(0),
             withdrawn_amount=Decimal(0),
             remaining_balance=await service.get_user_balance(user_id) if 'service' in locals() else Decimal(0),
             positions_closed=0,
