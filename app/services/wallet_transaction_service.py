@@ -377,11 +377,32 @@ class WalletTransactionService:
         
         return None
     
-    def _analyze_position_event(
+    async def _fetch_rpc_logs(self, tx_hash: str) -> List[Dict]:
+        """Fetch transaction logs directly from RPC when CDP data is incomplete."""
+        try:
+            from web3 import Web3
+            w3 = Web3(Web3.HTTPProvider(settings.rpc_url))
+            receipt = w3.eth.get_transaction_receipt(tx_hash)
+
+            # Convert logs to dict format similar to CDP traces
+            logs = []
+            for log in receipt.logs:
+                logs.append({
+                    "address": log.address.lower(),
+                    "topics": [topic.hex() if hasattr(topic, 'hex') else str(topic) for topic in log.topics],
+                    "data": log.data.hex() if hasattr(log.data, 'hex') else log.data
+                })
+            return logs
+        except Exception as e:
+            logger.warning(f"Failed to fetch RPC logs for {tx_hash}: {e}")
+            return []
+
+    async def _analyze_position_event(
         self,
         traces: List[Dict],
         cdp_wallet: str,
-        owner_wallet: str = None
+        owner_wallet: str = None,
+        tx_hash: str = None
     ) -> Optional[Dict[str, Any]]:
         """Analyze traces to extract position event details.
 
@@ -610,6 +631,43 @@ class WalletTransactionService:
                                         except (ValueError, TypeError, IndexError) as e:
                                             logger.warning(f"Failed to parse ERC721 Transfer event: {e}")
 
+        # PRIORITY 1.5: If no position event found in CDP traces and we have a tx_hash,
+        # fetch logs directly from RPC as CDP might not include all events
+        if not position_event and tx_hash:
+            logger.info(f"No position event in CDP data for {tx_hash[:10]}..., fetching from RPC")
+            rpc_logs = await self._fetch_rpc_logs(tx_hash)
+
+            # Check RPC logs for PositionCreated event from Liquidity Manager
+            for log in rpc_logs:
+                if not log.get("topics"):
+                    continue
+
+                event_sig = log["topics"][0].lower() if log["topics"] else None
+                log_address = log["address"].lower()
+
+                # Check for PositionCreated event (0x8d53117d...)
+                if event_sig == "0x8d53117d19441d0a7f168d2728ff066eed66d078efdaf9bf249eef6e20887ae5" and log_address == self.LIQUIDITY_MANAGER:
+                    if len(log["topics"]) >= 4:
+                        try:
+                            # Extract position details from PositionCreated event
+                            user_addr = ("0x" + log["topics"][1][-40:]).lower()
+                            position_id = int(log["topics"][2], 16)
+                            pool_addr = ("0x" + log["topics"][3][-40:]).lower()
+
+                            if user_addr == cdp_wallet:
+                                logger.info(f"✅ Found PositionCreated in RPC logs: position {position_id} in pool {pool_addr}")
+                                position_event = {
+                                    "method_sig": "0x3a1e3569",
+                                    "method_name": "openPosition",
+                                    "nft_token_id": position_id,
+                                    "pool": pool_addr,
+                                    "event_detected": "PositionCreated_RPC",
+                                    "event_signature": event_sig
+                                }
+                                break
+                        except Exception as e:
+                            logger.warning(f"Failed to parse RPC PositionCreated event: {e}")
+
         # PRIORITY 2: If no events found, fall back to method signature analysis
         # But only if we didn't already find a position event
         if not position_event:
@@ -809,7 +867,9 @@ class WalletTransactionService:
         withdrawal_amount = 0
         
         # Check for position events first (highest priority)
-        position_event = self._analyze_position_event(traces, cdp_wallet, owner_wallet)
+        # Extract tx_hash from details for RPC fallback
+        tx_hash = details.get("tx_hash")
+        position_event = await self._analyze_position_event(traces, cdp_wallet, owner_wallet, tx_hash)
 
         # Debug logging for transactions that might be position events but weren't detected
         if not position_event:
