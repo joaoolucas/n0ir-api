@@ -807,19 +807,39 @@ class WalletTransactionService:
             # Prioritize flow patterns over method signatures as they're more reliable
 
             # Pattern 1: Both USDC and AERO coming IN (classic position close)
+            # BUT: Must have an NFT burn or a valid position_id to be a real close
             if position_event["usdc_in"] > 0 and position_event["aero_in"] > 0:
-                # This is definitely a position close, regardless of method signature
-                method_name = "closePosition"
-                position_event["method_name"] = "closePosition"
-                logger.info(f"Overriding method based on flows: USDC+AERO IN indicates close (was {method_name})")
+                # Check if we have evidence of an actual position being closed
+                has_nft_burn = position_event.get("event_detected") == "ERC721Burn"
+                has_position_id = position_event.get("nft_token_id") is not None
+
+                if has_nft_burn or has_position_id:
+                    # This is definitely a position close
+                    method_name = "closePosition"
+                    position_event["method_name"] = "closePosition"
+                    logger.info(f"Overriding method based on flows: USDC+AERO IN with NFT indicates close (was {method_name})")
+                else:
+                    # Tokens coming in but no NFT activity - likely a failed tx or swap
+                    logger.warning(f"USDC+AERO IN but no NFT burn/ID - not a position close: {details['tx_hash'][:10]}...")
+                    return TransactionType.UNKNOWN, details
 
             # Pattern 2: Significant USDC coming IN with minimal/no USDC OUT
             # This happens when closing a position that only had USDC liquidity
+            # BUT: Must have NFT evidence to be a real position close
             elif position_event["usdc_in"] > 1000 and position_event["usdc_out"] < position_event["usdc_in"] * 0.1:
-                # Net positive USDC flow of >1000 USDC suggests position close
-                method_name = "closePosition"
-                position_event["method_name"] = "closePosition"
-                logger.info(f"Overriding method based on large USDC return: {position_event['usdc_in']} USDC IN (was {method_name})")
+                # Check for NFT evidence
+                has_nft_burn = position_event.get("event_detected") == "ERC721Burn"
+                has_position_id = position_event.get("nft_token_id") is not None
+
+                if has_nft_burn or has_position_id:
+                    # Net positive USDC flow with NFT activity suggests position close
+                    method_name = "closePosition"
+                    position_event["method_name"] = "closePosition"
+                    logger.info(f"Overriding method based on large USDC return with NFT: {position_event['usdc_in']} USDC IN (was {method_name})")
+                else:
+                    # Large USDC in but no NFT - might be a deposit or failed tx
+                    logger.warning(f"Large USDC IN but no NFT activity - not a position close: {details['tx_hash'][:10]}...")
+                    # Don't mark as UNKNOWN yet, let it fall through to other checks
 
             # SWAP: AERO (and possibly USDC) goes OUT and net USDC comes IN
             # This happens when swapping tokens, potentially with some USDC out too
