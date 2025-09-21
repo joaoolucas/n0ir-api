@@ -1694,6 +1694,107 @@ class WalletTransactionService:
             logger.error(f"Error finding position to close: {e}")
             return None
 
+    async def ensure_positions_for_transactions(self, user_id: str) -> None:
+        """Ensure all POSITION_CREATED transactions have corresponding Position records."""
+        from app.database.models import Transaction, Position
+        from sqlalchemy import select, and_
+
+        try:
+            # Get all POSITION_CREATED transactions for user
+            stmt = select(Transaction).where(
+                and_(
+                    Transaction.user_id == user_id,
+                    Transaction.tx_type == "POSITION_CREATED"
+                )
+            )
+            result = await self.db.execute(stmt)
+            position_created_txs = result.scalars().all()
+
+            for tx in position_created_txs:
+                # Get position_id from either column or event_data
+                position_id = tx.position_id
+                if not position_id and tx.event_data:
+                    position_id = tx.event_data.get('position_id') or tx.event_data.get('nft_token_id') or tx.event_data.get('token_id')
+
+                # Convert to int if string
+                if position_id and isinstance(position_id, str):
+                    try:
+                        position_id = int(position_id)
+                    except (ValueError, TypeError):
+                        continue
+
+                if position_id:
+                    # Check if position exists
+                    check_stmt = select(Position).where(
+                        and_(
+                            Position.token_id == position_id,
+                            Position.user_id == user_id
+                        )
+                    )
+                    result = await self.db.execute(check_stmt)
+                    position = result.scalar_one_or_none()
+
+                    if not position:
+                        # Create position
+                        logger.info(f"Creating missing position {position_id} for user {user_id}")
+                        amount_usdc = Decimal(str(tx.event_data.get('amount_usdc', 0))) if tx.event_data else Decimal(0)
+                        pool_address = tx.event_data.get('pool') if tx.event_data else None
+                        pool_name = tx.event_data.get('pool_name') if tx.event_data else None
+
+                        await self._create_position_if_needed(
+                            user_id=user_id,
+                            position_id=position_id,
+                            pool_address=pool_address,
+                            pool_name=pool_name,
+                            tx_hash=tx.tx_hash,
+                            amount_usdc=amount_usdc
+                        )
+
+            # Also check STAKING transactions to update positions
+            stmt = select(Transaction).where(
+                and_(
+                    Transaction.user_id == user_id,
+                    Transaction.tx_type == "STAKING"
+                )
+            )
+            result = await self.db.execute(stmt)
+            staking_txs = result.scalars().all()
+
+            for tx in staking_txs:
+                # Get position_id
+                position_id = tx.position_id
+                if not position_id and tx.event_data:
+                    position_id = tx.event_data.get('position_id') or tx.event_data.get('nft_token_id') or tx.event_data.get('token_id')
+
+                # Convert to int if string
+                if position_id and isinstance(position_id, str):
+                    try:
+                        position_id = int(position_id)
+                    except (ValueError, TypeError):
+                        continue
+
+                if position_id:
+                    # Check if position exists and needs staking update
+                    check_stmt = select(Position).where(
+                        and_(
+                            Position.token_id == position_id,
+                            Position.user_id == user_id
+                        )
+                    )
+                    result = await self.db.execute(check_stmt)
+                    position = result.scalar_one_or_none()
+
+                    if position and not position.staked:
+                        gauge_address = tx.event_data.get('gauge_address') if tx.event_data else None
+                        await self._update_position_staking(
+                            user_id=user_id,
+                            position_id=position_id,
+                            gauge_address=gauge_address
+                        )
+
+        except Exception as e:
+            logger.error(f"Error ensuring positions for transactions: {e}")
+
     async def _update_position_staking(
         self,
         user_id: str,

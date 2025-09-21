@@ -549,10 +549,22 @@ async def get_transactions(
                 limit=100  # Sync more transactions to catch stake events
             )
             logger.info(f"Auto-synced {sync_result.get('transactions_synced', 0)} transactions for user {user_id}")
+
+            # Ensure positions exist for all POSITION_CREATED transactions
+            await wallet_service.ensure_positions_for_transactions(user_id)
+
         except Exception as e:
             logger.warning(f"Auto-sync failed for user {user_id}: {e}, using cached data")
             # Continue with local data if sync fails
-    
+
+    # Even if sync fails, try to ensure positions exist for existing transactions
+    if user and user.cdp_wallet_address:
+        try:
+            wallet_service = WalletTransactionService(db)
+            await wallet_service.ensure_positions_for_transactions(user_id)
+        except Exception as e:
+            logger.warning(f"Failed to ensure positions for user {user_id}: {e}")
+
     service = UserService(db)
     transactions = await service.get_user_transactions(
         user_id=user_id,
