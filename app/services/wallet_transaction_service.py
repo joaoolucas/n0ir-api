@@ -643,9 +643,9 @@ class WalletTransactionService:
             logger.info(f"No position event in CDP data for {tx_hash[:10]}..., fetching from RPC")
             rpc_logs = await self._fetch_rpc_logs(tx_hash)
 
-            # Check RPC logs for PositionCreated event from Liquidity Manager
+            # Check RPC logs for PositionCreated or PositionClosed events from Liquidity Manager
             liquidity_manager_lower = self.LIQUIDITY_MANAGER.lower()
-            logger.info(f"Looking for PositionCreated events from Liquidity Manager: {liquidity_manager_lower}")
+            logger.info(f"Looking for Position events from Liquidity Manager: {liquidity_manager_lower}")
 
             for i, log in enumerate(rpc_logs):
                 if not log.get("topics"):
@@ -660,8 +660,11 @@ class WalletTransactionService:
 
                 # Check for PositionCreated event (0x8d53117d...)
                 # Note: RPC returns signatures without 0x prefix, CDP with prefix
-                expected_sig = "8d53117d19441d0a7f168d2728ff066eed66d078efdaf9bf249eef6e20887ae5"
-                if (event_sig == expected_sig or event_sig == f"0x{expected_sig}") and log_address == liquidity_manager_lower:
+                position_created_sig = "8d53117d19441d0a7f168d2728ff066eed66d078efdaf9bf249eef6e20887ae5"
+                position_closed_sig = "f98d21d5137adb0b9f5e1aefb5c39fa87946c23d83391239e912a27362e2a3f5"
+
+                # Check for PositionCreated event
+                if (event_sig == position_created_sig or event_sig == f"0x{position_created_sig}") and log_address == liquidity_manager_lower:
                     if len(log["topics"]) >= 4:
                         try:
                             # Extract position details from PositionCreated event
@@ -682,6 +685,28 @@ class WalletTransactionService:
                                 break
                         except Exception as e:
                             logger.warning(f"Failed to parse RPC PositionCreated event: {e}")
+
+                # Check for PositionClosed event
+                if (event_sig == position_closed_sig or event_sig == f"0x{position_closed_sig}") and log_address == liquidity_manager_lower:
+                    if len(log["topics"]) >= 3:
+                        try:
+                            # Extract position details from PositionClosed event
+                            # PositionClosed(address indexed user, uint256 indexed positionId)
+                            user_addr = ("0x" + log["topics"][1][-40:]).lower()
+                            position_id = int(log["topics"][2], 16)
+
+                            if user_addr == cdp_wallet:
+                                logger.info(f"✅ Found PositionClosed in RPC logs: position {position_id}")
+                                position_event = {
+                                    "method_sig": "0xe0891d91",  # closePosition method signature
+                                    "method_name": "closePosition",
+                                    "nft_token_id": position_id,
+                                    "event_detected": "PositionClosed_RPC",
+                                    "event_signature": event_sig
+                                }
+                                break
+                        except Exception as e:
+                            logger.warning(f"Failed to parse RPC PositionClosed event: {e}")
 
         # PRIORITY 2: If no events found, fall back to method signature analysis
         # But only if we didn't already find a position event
