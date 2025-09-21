@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from decimal import Decimal
+import os
 from loguru import logger
 from app.database.session import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -757,7 +758,9 @@ async def get_performance(
             # TODO: Re-enable caching when redis_client is available
             if True:  # Always sync for now
                 # Initialize Web3 and USDC contract
-                w3 = Web3(Web3.HTTPProvider(settings.BASE_RPC_URL))
+                # Use base_rpc_url from settings or fallback to default
+                rpc_url = getattr(settings, 'base_rpc_url', None) or os.getenv('BASE_RPC_URL', 'https://mainnet.base.org')
+                w3 = Web3(Web3.HTTPProvider(rpc_url))
                 usdc_address = Web3.to_checksum_address("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
                 usdc_abi = [{"constant":True,"inputs":[{"name":"_owner","type":"address"}],"name":"balanceOf","outputs":[{"name":"balance","type":"uint256"}],"type":"function"}]
                 usdc_contract = w3.eth.contract(address=usdc_address, abi=usdc_abi)
@@ -816,15 +819,15 @@ async def get_performance(
             # Initialize transaction service with database session
             tx_service = WalletTransactionService(db)
 
-            # Fetch and categorize recent transactions
-            result = await tx_service.fetch_and_categorize(
+            # Use the correct method name: fetch_and_sync_transactions
+            result = await tx_service.fetch_and_sync_transactions(
                 user_id=user_id,
                 cdp_wallet_address=user.cdp_wallet_address,
                 limit=50  # Fetch last 50 transactions
             )
 
             if result.get("success"):
-                logger.info(f"Synced {result.get('total_stored', 0)} new transactions for {user_id} during performance check")
+                logger.info(f"Synced {result.get('transactions_synced', 0)} new transactions for {user_id} during performance check")
 
         except Exception as e:
             logger.warning(f"Failed to sync transactions for {user_id} in performance endpoint: {e}")
