@@ -28,12 +28,7 @@ router = APIRouter(prefix="/users")
 
 async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = None) -> dict:
     """Enrich position with pool information, PNL, APR, and calculated values from blockchain."""
-    # Ensure token addresses are not None before validation
-    if position.token0_address is None:
-        position.token0_address = ""
-    if position.token1_address is None:
-        position.token1_address = ""
-
+    # Convert position to dict, excluding token addresses and liquidity
     position_dict = PositionResponse.model_validate(position).model_dump()
     
     # Get the net entry amount from the POSITION_CREATED transaction if db is provided

@@ -227,14 +227,11 @@ class TransactionResponse(BaseModel):
 
 class PositionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    
+
     nft_token_id: int  # Primary key - Aerodrome NFT position ID
     user_id: str
     pool_address: str
     pool_name: Optional[str] = Field(None, description="Pool name (e.g. ZORA/USDC)")
-    token0_address: str
-    token1_address: str
-    liquidity: str
     staked: bool
     gauge_address: Optional[str]
     entry_amount_usdc: Decimal
