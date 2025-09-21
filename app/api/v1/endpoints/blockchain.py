@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Query, Path, Request, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from statistics import median
+from app.database.models import Position as DBPosition
 
 # Import schemas
 from app.schemas.pools import (
@@ -186,7 +187,6 @@ async def get_positions(
             # Query database to get user_id for this NFT token ID
             user_id = None
             try:
-                from app.database.models import Position as DBPosition
                 stmt = select(DBPosition.user_id).where(DBPosition.token_id == position_id)
                 result = await db.execute(stmt)
                 db_user_id = result.scalar_one_or_none()
