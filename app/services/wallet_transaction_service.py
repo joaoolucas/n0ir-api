@@ -754,7 +754,7 @@ class WalletTransactionService:
 
                 # Skip if net amount is 0 or negative (not a real position creation)
                 if net_amount <= 0:
-                    logger.warning(f"Skipping position event with zero/negative net amount: {details['tx_hash'][:10]}...")
+                    logger.warning(f"Skipping openPosition with zero/negative net amount: {details['tx_hash'][:10]}...")
                     return TransactionType.UNKNOWN, details
 
                 # IMPORTANT: Skip if no NFT was actually minted (no position created)
@@ -778,9 +778,17 @@ class WalletTransactionService:
                     details["pool_name"] = await self._get_pool_name(position_event["pool"])
 
                 return TransactionType.POSITION_CREATED, details
-            
+
             elif method_name == "closePosition":
-                details["amount"] = position_event["usdc_in"] if position_event["usdc_in"] > 0 else position_event["usdc_out"]
+                # For position closing, the amount received back is what matters
+                # This is typically usdc_in (what comes back to wallet) plus any AERO converted to USDC
+                amount_received = position_event["usdc_in"]
+
+                # Don't skip closePosition transactions even if amount is 0
+                # Some positions might close with only AERO rewards and no USDC
+                # The important indicator is the NFT burn or the method itself
+
+                details["amount"] = amount_received
                 details["description"] = f"Position closed via LiquidityManager"
                 details["method_sig"] = position_event["method_sig"]
                 details["usdc_in"] = position_event["usdc_in"]
@@ -794,6 +802,7 @@ class WalletTransactionService:
                 if position_event.get("pool"):
                     details["pool_name"] = await self._get_pool_name(position_event["pool"])
 
+                logger.info(f"Detected POSITION_CLOSED: {details['tx_hash'][:10]}... Amount: {amount_received} USDC, NFT: {details.get('nft_token_id')}")
                 return TransactionType.POSITION_CLOSED, details
         
         # Check all traces for patterns
