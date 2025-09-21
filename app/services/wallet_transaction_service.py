@@ -503,7 +503,7 @@ class WalletTransactionService:
                                             pool_addr = ("0x" + topics[3][-40:] if isinstance(topics[3], str) else "0x" + str(topics[3])[-40:]).lower()
 
                                             if user_addr == cdp_wallet:
-                                                logger.debug(f"Detected PositionCreated for CDP wallet: position {position_id} in pool {pool_addr}")
+                                                logger.info(f"✅ Detected PositionCreated for CDP wallet: position {position_id} in pool {pool_addr}")
                                                 position_event = {
                                                     "method_sig": "0x3a1e3569",  # openPosition method signature
                                                     "method_name": "openPosition",
@@ -512,6 +512,7 @@ class WalletTransactionService:
                                                     "event_detected": "PositionCreated",
                                                     "event_signature": event_sig_normalized
                                                 }
+                                                logger.info(f"✅ Position event created with NFT ID: {position_id}")
                                         except (ValueError, TypeError, AttributeError) as e:
                                             logger.warning(f"Failed to parse PositionCreated event: {e}")
 
@@ -739,13 +740,19 @@ class WalletTransactionService:
             # Don't use pool addresses from traces - they're often wrong
             # The actual pool address should be looked up from the position NFT
             # Only include pool if we're confident it's correct
+            # BUT: If we already have a pool from a PositionCreated event, keep it!
             position_event.update({
                 "usdc_in": usdc_flows["in"],
                 "usdc_out": usdc_flows["out"],
                 "aero_in": aero_flows["in"],
-                "aero_out": aero_flows["out"],
-                "pool": None  # Will be fetched from position data later
+                "aero_out": aero_flows["out"]
             })
+            # Only set pool to None if we don't already have one from an event
+            if "pool" not in position_event:
+                position_event["pool"] = None  # Will be fetched from position data later
+
+            # Log the complete position event for debugging
+            logger.info(f"✅ Final position_event: method={position_event.get('method_name')}, nft_id={position_event.get('nft_token_id')}, usdc_out={position_event.get('usdc_out')}, usdc_in={position_event.get('usdc_in')}")
             return position_event
 
         return None
