@@ -1413,9 +1413,9 @@ class WalletTransactionService:
 
             # If this is a POSITION_CLOSED transaction, update the position status
             elif tx_type == "POSITION_CLOSED":
-                if nft_id:
-                    logger.info(f"Closing position {nft_id} for tx {details['tx_hash'][:10]}...")
-                    await self._close_position_if_needed(user_id, nft_id, details["tx_hash"], amount_usdc)
+                if position_id_value:
+                    logger.info(f"Closing position {position_id_value} for tx {details['tx_hash'][:10]}...")
+                    await self._close_position_if_needed(user_id, position_id_value, details["tx_hash"], amount_usdc)
                 else:
                     # Try to find the position to close based on transaction timing and amount
                     logger.warning(f"POSITION_CLOSED detected without NFT ID, attempting to find position...")
