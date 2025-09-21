@@ -1290,6 +1290,7 @@ class WalletTransactionService:
             TransactionType.POSITION_CREATED: [],
             TransactionType.POSITION_CLOSED: [],
             TransactionType.SWAP: [],
+            TransactionType.FEE_TRANSFER: [],
             TransactionType.UNKNOWN: []
         }
         
@@ -1337,6 +1338,7 @@ class WalletTransactionService:
             "positions_opened": len(categorized[TransactionType.POSITION_CREATED]),
             "positions_closed": len(categorized[TransactionType.POSITION_CLOSED]),
             "swaps": len(categorized[TransactionType.SWAP]),
+            "fee_transfers": len(categorized[TransactionType.FEE_TRANSFER]),
             "unknown": len(categorized[TransactionType.UNKNOWN]),
             "total_deposited": total_deposited,
             "total_withdrawn": total_withdrawn
