@@ -1889,8 +1889,7 @@ class WalletTransactionService:
             # Create new position
             new_position = Position(
                 user_id=user_id,
-                token_id=position_id,
-                nft_token_id=position_id,  # Same as token_id for compatibility
+                token_id=position_id,  # This is the NFT token ID (nft_token_id is a computed property)
                 pool_address=pool_address or "",  # Ensure not None
                 pool_name=pool_name,
                 status='ACTIVE',
