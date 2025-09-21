@@ -45,7 +45,7 @@ class WalletTransactionService:
         self.LIQUIDITY_MANAGER = settings.liquidity_manager_address.lower()
 
         # NFT Position Manager - the ERC721 contract that holds position NFTs
-        self.NFT_POSITION_MANAGER = "0x827922686190790b37229fd06084350e74485b72".lower()  # Aerodrome NFT Position Manager
+        self.NFT_POSITION_MANAGER = "0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1".lower()  # Uniswap V3 NFT Position Manager
 
         # Position manager contracts (for staking detection)
         self.POSITION_MANAGERS = [
@@ -485,10 +485,20 @@ class WalletTransactionService:
 
                             # Check for ERC721 Transfer events (NFT minting, burning, and staking)
                             elif event_sig_normalized == ERC721_TRANSFER_EVENT.lower():
-                                # Check if this is from the NFT Position Manager contract
+                                # Check if this is from the NFT Position Manager contract OR a gauge contract
                                 log_address = log.get("address", "").lower() if log.get("address") else ""
-                                logger.debug(f"Found ERC721 Transfer event from {log_address}, NFT Manager: {self.NFT_POSITION_MANAGER}")
-                                if log_address == self.NFT_POSITION_MANAGER:
+
+                                # Known gauge addresses that can mint NFTs
+                                gauge_addresses = [
+                                    "0x827922686190790b37229fd06084350e74485b72".lower(),  # WETH/USDC gauge
+                                ]
+
+                                is_position_manager = log_address == self.NFT_POSITION_MANAGER
+                                is_gauge = log_address in gauge_addresses
+
+                                logger.debug(f"Found ERC721 Transfer event from {log_address}, NFT Manager: {is_position_manager}, Gauge: {is_gauge}")
+
+                                if is_position_manager or is_gauge:
                                     # ERC721 Transfer has 3 indexed params: from, to, tokenId
                                     # topics[0] = event signature
                                     # topics[1] = from address (padded)
@@ -519,7 +529,8 @@ class WalletTransactionService:
                                                         "method_name": "openPosition",
                                                         "nft_token_id": nft_token_id,
                                                         "event_detected": "ERC721Mint",
-                                                        "event_signature": event_sig_normalized
+                                                        "event_signature": event_sig_normalized,
+                                                        "minted_by": "gauge" if is_gauge else "position_manager"
                                                     }
 
                                             # Check for BURN (position close) - from CDP wallet to address 0x0
@@ -867,16 +878,22 @@ class WalletTransactionService:
                 # usdc_out is what left the wallet, usdc_in is what came back (if any)
                 net_amount = position_event["usdc_out"] - position_event["usdc_in"]
 
-                # Skip if net amount is 0 or negative (not a real position creation)
-                if net_amount <= 0:
-                    logger.warning(f"Skipping openPosition with zero/negative net amount: {details['tx_hash'][:10]}...")
-                    return TransactionType.UNKNOWN, details
+                # IMPORTANT: Check for NFT mint first - this is the most reliable indicator
+                has_nft_mint = position_event.get("nft_token_id") is not None
 
-                # IMPORTANT: Skip if no NFT was actually minted (no position created)
+                # Skip if no NFT was actually minted (no position created)
                 # This prevents saving empty/failed transactions as POSITION_CREATED
-                if not position_event.get("nft_token_id"):
+                if not has_nft_mint:
                     logger.warning(f"Skipping openPosition without NFT mint (likely failed/empty tx): {details['tx_hash'][:10]}...")
                     return TransactionType.UNKNOWN, details
+
+                # Allow 0-value positions if there's an NFT mint (e.g., gauge-minted positions)
+                # But skip negative amounts as those indicate errors
+                if net_amount < 0:
+                    logger.warning(f"Skipping openPosition with negative net amount: {details['tx_hash'][:10]}...")
+                    return TransactionType.UNKNOWN, details
+                elif net_amount == 0 and has_nft_mint:
+                    logger.info(f"Position created with 0 USDC (gauge-minted or special position): {details['tx_hash'][:10]}...")
 
                 details["amount"] = net_amount
                 details["description"] = f"Position opened via LiquidityManager"
