@@ -762,9 +762,7 @@ async def get_performance(
             from web3 import Web3
             from app.database.models import User
             from sqlalchemy import select
-            # Redis client removed - not available
-            # from app.core.redis_client import publish_balance_change_event
-            # from app.core.redis_client import redis_client
+            from app.services.balance_updater import publish_balance_change_event
             import time
 
             # Redis caching disabled - proceed with sync

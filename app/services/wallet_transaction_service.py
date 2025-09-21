@@ -1388,6 +1388,59 @@ class WalletTransactionService:
             self.db.add(transaction)
             logger.info(f"Saved {tx_type} transaction: {details['tx_hash'][:10]}... Amount: {amount_usdc} USDC, position_id: {position_id_value}")
 
+            # If this is a DEPOSIT transaction, publish balance change event for agent manager
+            if tx_type == "DEPOSIT":
+                try:
+                    # Get user's current balance to calculate the new balance
+                    from app.database.models import User
+                    from sqlalchemy import select
+
+                    stmt = select(User).where(User.user_id == user_id)
+                    result = await self.db.execute(stmt)
+                    user = result.scalar_one_or_none()
+
+                    if user:
+                        old_balance = Decimal(str(user.usdc_balance or 0))
+                        new_balance = old_balance + amount_usdc
+
+                        # Update user balance
+                        user.usdc_balance = new_balance
+
+                        # Check if this is first 50+ USDC deposit
+                        if not user.has_deposited_50_usdc and new_balance >= Decimal('50'):
+                            user.has_deposited_50_usdc = True
+
+                        # Publish balance change event for agent manager
+                        try:
+                            from app.services.balance_updater import publish_balance_change_event
+                            await publish_balance_change_event(
+                                user_id=user_id,
+                                old_balance=old_balance,
+                                new_balance=new_balance,
+                                event_type='DEPOSIT',
+                                has_deposited_50_usdc=user.has_deposited_50_usdc
+                            )
+                            logger.info(f"Published DEPOSIT event for {user_id}: {old_balance} -> {new_balance} USDC")
+                        except Exception as e:
+                            logger.error(f"Failed to publish deposit event: {e}")
+
+                        # Also try stream publishing as backup
+                        try:
+                            from app.services.balance_stream_publisher import publish_balance_change_to_stream
+                            await publish_balance_change_to_stream(
+                                user_id=user_id,
+                                old_balance=old_balance,
+                                new_balance=new_balance,
+                                event_type='DEPOSIT',
+                                has_deposited_50_usdc=user.has_deposited_50_usdc
+                            )
+                            logger.info(f"Published DEPOSIT event to stream for {user_id}")
+                        except Exception as e:
+                            logger.error(f"Failed to publish deposit event to stream: {e}")
+
+                except Exception as e:
+                    logger.error(f"Failed to process deposit event: {e}")
+
             # If this is a POSITION_CREATED transaction, create the position
             if tx_type == "POSITION_CREATED" and position_id_value:
                 try:
