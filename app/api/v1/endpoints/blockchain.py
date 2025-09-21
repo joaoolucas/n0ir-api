@@ -5,7 +5,6 @@ from fastapi import APIRouter, HTTPException, Query, Path, Request, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from statistics import median
-from app.database.models import Position as DBPosition
 
 # Import schemas
 from app.schemas.pools import (
@@ -187,12 +186,18 @@ async def get_positions(
             # Query database to get user_id for this NFT token ID
             user_id = None
             try:
+                # Import here to avoid module-level import issues
+                from app.database.models import Position as DBPosition
+
+                # Use the already imported select from sqlalchemy
                 stmt = select(DBPosition.user_id).where(DBPosition.token_id == position_id)
                 result = await db.execute(stmt)
                 db_user_id = result.scalar_one_or_none()
                 if db_user_id:
                     user_id = db_user_id
                     logger.info(f"Found user_id {user_id} for position {position_id}")
+            except ImportError as e:
+                logger.warning(f"Could not import Position model: {e}")
             except Exception as e:
                 logger.warning(f"Could not fetch user_id for position {position_id}: {e}")
 
@@ -295,7 +300,6 @@ async def get_positions(
 
         # Get all active positions from database
         try:
-            from sqlalchemy import select
             from app.database.models import Position
 
             stmt = select(Position).where(Position.status == "ACTIVE")
