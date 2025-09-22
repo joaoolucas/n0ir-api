@@ -86,7 +86,7 @@ class DeltaNeutralService:
                 return self._build_maintain_response(balance, positions)
             else:
                 # No positions - generate initial strategy using GPT
-                strategy = await self.gpt_service.generate_initial_strategy(
+                strategy = self.gpt_service.generate_initial_strategy(
                     balance=balance,
                     existing_positions=[],
                     pool_data=pool_data
@@ -226,7 +226,7 @@ class DeltaNeutralService:
         }
 
         # Get GPT recommendation
-        action = await self.gpt_service.evaluate_range_break(
+        action = self.gpt_service.evaluate_range_break(
             position_data=position_data,
             market_data=market_data,
             current_balance=balance
