@@ -24,10 +24,13 @@ class GPTStrategyService:
             logger.warning("OPENAI_API_KEY not set, GPT strategy service will use fallback logic")
             self.client = None
         else:
+            # Log that we have an API key (but not the key itself for security)
+            logger.info(f"OpenAI API key configured (length: {len(api_key)})")
             self.client = AsyncOpenAI(api_key=api_key)
 
-        # Model to use - GPT-5 Nano for fast, cost-effective decisions
-        self.model = "gpt-5-nano"
+        # Model to use - GPT-4 Turbo for intelligent decisions
+        # Using gpt-3.5-turbo for cost-effectiveness, or gpt-4-turbo-preview for better quality
+        self.model = "gpt-3.5-turbo"  # Change to "gpt-4-turbo-preview" if you want better quality
 
     async def generate_initial_strategy(
         self,
@@ -52,6 +55,7 @@ class GPTStrategyService:
         try:
             prompt = self._build_initial_strategy_prompt(balance, existing_positions, pool_data)
 
+            logger.info(f"Attempting to use OpenAI model: {self.model}")
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -64,11 +68,15 @@ class GPTStrategyService:
             )
 
             result = json.loads(response.choices[0].message.content)
-            logger.info(f"GPT strategy generated: {result}")
+            logger.info(f"GPT strategy generated successfully")
             return result
 
+        except openai.RateLimitError as e:
+            logger.error(f"OpenAI rate limit or quota error: {e}")
+            logger.info("Using fallback strategy due to OpenAI quota issue")
+            return self._fallback_initial_strategy(balance, existing_positions, pool_data)
         except Exception as e:
-            logger.error(f"GPT strategy generation failed: {e}")
+            logger.error(f"GPT strategy generation failed with model {self.model}: {e}")
             return self._fallback_initial_strategy(balance, existing_positions, pool_data)
 
     async def evaluate_range_break(
