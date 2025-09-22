@@ -1725,11 +1725,28 @@ class WalletTransactionService:
                         logger.error(f"Could not find position to close for tx {details['tx_hash'][:10]}... Amount: {amount_usdc}")
         else:
             # Update existing transaction if needed
+            # Allow recategorization of UNKNOWN transactions OR if the new category is WITHDRAW/DEPOSIT
+            # This handles Account Abstraction transactions that may be initially miscategorized
+            should_update = False
             if existing_tx.tx_type == "UNKNOWN" and tx_type != "UNKNOWN":
+                should_update = True
+            elif tx_type in ["WITHDRAW", "DEPOSIT"] and existing_tx.tx_type not in ["WITHDRAW", "DEPOSIT"]:
+                # Allow updating to WITHDRAW/DEPOSIT if current type is not already a financial transaction
+                should_update = True
+                logger.info(f"Updating transaction {details['tx_hash'][:10]}... from {existing_tx.tx_type} to {tx_type}")
+
+            if should_update:
                 existing_tx.tx_type = tx_type
                 existing_tx.event_data = existing_tx.event_data or {}
                 existing_tx.event_data["recategorized"] = True
                 existing_tx.event_data["description"] = details.get("description", "")
+                existing_tx.event_data["previous_type"] = existing_tx.tx_type if existing_tx.tx_type != tx_type else None
+
+                # Update amount for withdrawals/deposits
+                if tx_type in ["WITHDRAW", "DEPOSIT"] and details.get("amount"):
+                    amount_usdc = Decimal(details["amount"]) / Decimal(1_000_000)
+                    existing_tx.event_data["amount_usdc"] = float(amount_usdc)
+
                 logger.info(f"Recategorized transaction {details['tx_hash'][:10]}... as {tx_type}")
 
             # IMPORTANT: Check if this is a POSITION_CREATED transaction that hasn't created its position yet
