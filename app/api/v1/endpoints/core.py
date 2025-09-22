@@ -127,9 +127,7 @@ async def withdraw_funds(
             # For now, return partial withdrawal
             withdrawn = Decimal(str(wallet_balance))
         else:
-            # Keep small buffer for gas
-            gas_buffer = Decimal("0.1")  # $0.10 for gas
-            withdrawn = max(Decimal("0"), requested_amount - gas_buffer)
+            withdrawn = requested_amount
 
         # Execute withdrawal (simplified - actual implementation would call CDP API)
         # Record transaction
