@@ -435,6 +435,29 @@ async def get_performance(
     if user.cdp_wallet_address:
         try:
             wallet_balance = await blockchain_service.get_usdc_balance(user.cdp_wallet_address)
+
+            # Always publish balance event when performance is checked
+            # This ensures agent manager is aware of current balance
+            if wallet_balance > 0:
+                try:
+                    from app.services.agent_management_service import get_agent_service
+                    agent_service = get_agent_service()
+
+                    # Check if user has deposited 50+ USDC
+                    has_deposited_50 = wallet_balance >= 50 or (hasattr(user, 'has_deposited_50_usdc') and user.has_deposited_50_usdc)
+
+                    # Publish balance event to trigger agent if needed
+                    await agent_service.publish_balance_event(
+                        user_id=user_id,
+                        balance=wallet_balance,
+                        event_type="BALANCE_CHECK",
+                        has_deposited_50_usdc=has_deposited_50
+                    )
+                    logger.info(f"Published balance check event for {user_id}: {wallet_balance} USDC")
+                except Exception as e:
+                    logger.warning(f"Could not publish balance event: {e}")
+                    # Continue even if event publishing fails
+
         except Exception as e:
             logger.warning(f"Could not fetch wallet balance: {e}")
             wallet_balance = 0
