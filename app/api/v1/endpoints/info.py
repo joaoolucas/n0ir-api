@@ -345,14 +345,16 @@ async def get_transactions(
 
         enriched_transactions.append(tx_dict)
 
-    # Get total count for pagination
-    total_count = await service.get_user_transactions_count(
-        user_id=user_id,
-        transaction_type=transaction_type
-    )
+    # Get total count for pagination (transactions are already fetched without limit)
+    # For proper pagination, we'll need to add a separate count method later
+    # For now, use the length of all transactions before slicing
+    total_count = len(enriched_transactions)
+
+    # Apply pagination to enriched transactions
+    paginated_transactions = enriched_transactions[offset:offset + limit]
 
     return TransactionListResponse(
-        transactions=enriched_transactions,
+        transactions=paginated_transactions,
         total_count=total_count,
         limit=limit,
         offset=offset
