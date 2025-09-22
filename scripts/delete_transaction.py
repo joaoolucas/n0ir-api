@@ -33,5 +33,5 @@ async def delete_transaction(tx_id: str):
 
 if __name__ == "__main__":
     # Transaction ID to delete
-    tx_id = "044daa11-c7ad-4fea-9de1-f7f3e11f4336"
+    tx_id = "c2747b79-fd0d-41e6-8ad0-81eca79b8056"
     asyncio.run(delete_transaction(tx_id))

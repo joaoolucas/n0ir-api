@@ -22,13 +22,7 @@ async def get_redis_client() -> aioredis.Redis:
             settings.redis_url,
             encoding="utf-8",
             decode_responses=True,
-            socket_connect_timeout=10,
-            socket_keepalive=True,
-            socket_keepalive_options={
-                1: 1,  # TCP_KEEPIDLE
-                2: 3,  # TCP_KEEPINTVL
-                3: 5,  # TCP_KEEPCNT
-            }
+            socket_connect_timeout=10
         )
         # Test the connection
         await _redis_client.ping()
