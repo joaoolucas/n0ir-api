@@ -15,7 +15,8 @@ from app.schemas.users import (
     UserResponse, UserListResponse, TransactionResponse, TransactionListResponse,
     PositionResponse, PositionListResponse, CreatePositionRequest, ClosePositionRequest,
     BalanceResponse, PerformanceResponse,
-    UserStatus, TransactionType, TransactionStatus, PositionStatus, TimePeriod
+    UserStatus, TransactionType, TransactionStatus, PositionStatus, TimePeriod,
+    DeltaNeutralStrategyRequest, DeltaNeutralStrategyResponse, RangeBreakAction
 )
 # Enums are already imported from schemas above
 DBTransactionType = TransactionType
@@ -1186,3 +1187,78 @@ async def get_performance(
 # NOTE: Protocol fees endpoint removed - fees are included in performance endpoint
 
 # NOTE: sync-positions endpoint removed - position syncing happens automatically via blockchain events
+
+
+@router.post("/{user_id}/strategy", response_model=DeltaNeutralStrategyResponse)
+async def get_delta_neutral_strategy(
+    user_id: str,
+    db: AsyncSession = Depends(get_db)
+) -> DeltaNeutralStrategyResponse:
+    """
+    Generate delta-neutral strategy recommendations for a user.
+
+    This endpoint:
+    1. Checks user's CDP wallet balance and positions
+    2. Uses GPT-5 to determine optimal LP allocations and hedge sizes
+    3. Provides recommendations for delta-neutral positioning
+    4. Handles range break scenarios with rebalancing suggestions
+
+    Strategy rules:
+    - < $2k: Single position (WETH/USDC) + hedge
+    - >= $2k: Two positions (WETH priority + cbBTC for stability)
+    - 90% to LP, 10% to 5x leveraged short for delta neutrality
+    - Monitors positions and suggests actions when out of range
+    """
+    from app.core.delta_neutral_service import delta_neutral_service
+
+    try:
+        # Generate strategy using delta-neutral service
+        strategy = await delta_neutral_service.analyze_user_portfolio(
+            user_id=user_id,
+            db=db
+        )
+
+        return strategy
+
+    except ValueError as e:
+        # User not found or no CDP wallet
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error generating strategy for user {user_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate strategy: {str(e)}"
+        )
+
+
+@router.get("/{user_id}/strategy/monitor", response_model=List[RangeBreakAction])
+async def monitor_strategy_positions(
+    user_id: str,
+    db: AsyncSession = Depends(get_db)
+) -> List[RangeBreakAction]:
+    """
+    Monitor existing positions for range breaks and get action recommendations.
+
+    Returns a list of recommended actions for positions that are out of range.
+    GPT-5 evaluates whether to:
+    - Close and reopen with new range
+    - Wait for price to return
+    - Adjust hedge only
+    """
+    from app.core.delta_neutral_service import delta_neutral_service
+
+    try:
+        # Monitor positions and get recommendations
+        actions = await delta_neutral_service.monitor_positions(
+            user_id=user_id,
+            db=db
+        )
+
+        return actions
+
+    except Exception as e:
+        logger.error(f"Error monitoring positions for user {user_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to monitor positions: {str(e)}"
+        )

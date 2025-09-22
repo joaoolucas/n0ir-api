@@ -42,6 +42,44 @@ class TimePeriod(str, enum.Enum):
     ALL_TIME = "all"
 
 
+# Delta-Neutral Strategy Models
+class LPAllocation(BaseModel):
+    """LP position allocation details"""
+    pair: str = Field(..., description="Trading pair (e.g., 'WETH/USDC')")
+    amount_usd: Decimal = Field(..., description="Amount to allocate in USD")
+    range_pct: float = Field(..., description="Range percentage around current price")
+    pool_address: Optional[str] = Field(None, description="Pool contract address")
+
+class Hedge(BaseModel):
+    """Hedge position details for delta neutrality"""
+    asset: str = Field(..., description="Asset to hedge (e.g., 'ETH', 'BTC')")
+    side: str = Field(..., description="Position side (typically 'short')")
+    collateral_usd: Decimal = Field(..., description="Collateral amount in USD")
+    leverage: int = Field(..., description="Leverage multiplier")
+    notional_exposure_usd: Decimal = Field(..., description="Total notional exposure")
+
+class DeltaNeutralStrategyRequest(BaseModel):
+    """Request for delta-neutral strategy - takes user_id from path"""
+    pass  # Empty body, user_id is path parameter
+
+class DeltaNeutralStrategyResponse(BaseModel):
+    """Delta-neutral strategy recommendations"""
+    lp_allocations: List[LPAllocation] = Field(..., description="LP position allocations")
+    hedges: List[Hedge] = Field(..., description="Hedge positions for delta neutrality")
+    notes: str = Field(..., description="Strategy reasoning and notes")
+    total_capital_deployed: Decimal = Field(..., description="Total capital to be deployed")
+    remaining_balance: Decimal = Field(..., description="Remaining balance after allocations")
+    current_positions: Optional[List[Dict[str, Any]]] = Field(None, description="Current user positions")
+
+class RangeBreakAction(BaseModel):
+    """Action to take when position goes out of range"""
+    action: str = Field(..., description="Action type: 'close_and_reopen', 'wait', 'adjust_hedge'")
+    new_lp_allocation: Optional[LPAllocation] = Field(None, description="New LP allocation if reopening")
+    hedge: Optional[Hedge] = Field(None, description="Hedge adjustment details")
+    reason: str = Field(..., description="Reasoning for the action")
+    position_id: Optional[int] = Field(None, description="Position NFT token ID being acted upon")
+
+
 # Request Models
 class CreateUserRequest(BaseModel):
     pass  # Empty body, user_id is now a path parameter
