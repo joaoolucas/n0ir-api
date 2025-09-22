@@ -1568,54 +1568,80 @@ class WalletTransactionService:
             logger.info(f"Saved {tx_type} transaction: {details['tx_hash'][:10]}... Amount: {amount_usdc} USDC, position_id: {position_id_value}")
 
             # If this is a DEPOSIT transaction, publish balance change event for agent manager
+            # NOTE: Only update balance if it hasn't been recently synced to avoid duplicates
             if tx_type == "DEPOSIT":
                 try:
                     # Get user's current balance to calculate the new balance
                     from app.database.models import User
                     from sqlalchemy import select
+                    from web3 import Web3
+                    import os
 
                     stmt = select(User).where(User.user_id == user_id)
                     result = await self.db.execute(stmt)
                     user = result.scalar_one_or_none()
 
-                    if user:
-                        old_balance = Decimal(str(user.usdc_balance or 0))
-                        new_balance = old_balance + amount_usdc
-
-                        # Update user balance
-                        user.usdc_balance = new_balance
-
-                        # Check if this is first 50+ USDC deposit
-                        if not user.has_deposited_50_usdc and new_balance >= Decimal('50'):
-                            user.has_deposited_50_usdc = True
-
-                        # Publish balance change event for agent manager
+                    if user and user.cdp_wallet_address:
+                        # Get current on-chain balance to avoid duplicate updates
                         try:
-                            from app.services.balance_updater import publish_balance_change_event
-                            await publish_balance_change_event(
-                                user_id=user_id,
-                                old_balance=old_balance,
-                                new_balance=new_balance,
-                                event_type='DEPOSIT',
-                                has_deposited_50_usdc=user.has_deposited_50_usdc
-                            )
-                            logger.info(f"Published DEPOSIT event for {user_id}: {old_balance} -> {new_balance} USDC")
-                        except Exception as e:
-                            logger.error(f"Failed to publish deposit event: {e}")
+                            rpc_url = os.getenv('RPC_URL', 'https://mainnet.base.org')
+                            w3 = Web3(Web3.HTTPProvider(rpc_url))
+                            usdc_address = Web3.to_checksum_address("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
+                            usdc_abi = [{"constant":True,"inputs":[{"name":"_owner","type":"address"}],"name":"balanceOf","outputs":[{"name":"balance","type":"uint256"}],"type":"function"}]
+                            usdc_contract = w3.eth.contract(address=usdc_address, abi=usdc_abi)
 
-                        # Also try stream publishing as backup
-                        try:
-                            from app.services.balance_stream_publisher import publish_balance_change_to_stream
-                            await publish_balance_change_to_stream(
-                                user_id=user_id,
-                                old_balance=old_balance,
-                                new_balance=new_balance,
-                                event_type='DEPOSIT',
-                                has_deposited_50_usdc=user.has_deposited_50_usdc
-                            )
-                            logger.info(f"Published DEPOSIT event to stream for {user_id}")
+                            checksum_address = Web3.to_checksum_address(user.cdp_wallet_address)
+                            balance_wei = usdc_contract.functions.balanceOf(checksum_address).call()
+                            onchain_balance = Decimal(balance_wei) / Decimal(10 ** 6)
+
+                            db_balance = Decimal(str(user.usdc_balance or 0))
+
+                            # Only update if the database balance is significantly different from on-chain
+                            # This prevents duplicate events when balance was already synced
+                            if abs(onchain_balance - db_balance) > Decimal('0.01'):
+                                old_balance = db_balance
+                                new_balance = onchain_balance
+
+                                # Update user balance
+                                user.usdc_balance = new_balance
+
+                                # Check if this is first 50+ USDC deposit
+                                if not user.has_deposited_50_usdc and new_balance >= Decimal('50'):
+                                    user.has_deposited_50_usdc = True
+
+                                # Publish balance change event for agent manager
+                                try:
+                                    from app.services.balance_updater import publish_balance_change_event
+                                    await publish_balance_change_event(
+                                        user_id=user_id,
+                                        old_balance=old_balance,
+                                        new_balance=new_balance,
+                                        event_type='DEPOSIT',
+                                        has_deposited_50_usdc=user.has_deposited_50_usdc
+                                    )
+                                    logger.info(f"Published DEPOSIT event for {user_id}: {old_balance} -> {new_balance} USDC")
+                                except Exception as e:
+                                    logger.error(f"Failed to publish deposit event: {e}")
+
+                                # Also try stream publishing as backup
+                                try:
+                                    from app.services.balance_stream_publisher import publish_balance_change_to_stream
+                                    await publish_balance_change_to_stream(
+                                        user_id=user_id,
+                                        old_balance=old_balance,
+                                        new_balance=new_balance,
+                                        event_type='DEPOSIT',
+                                        has_deposited_50_usdc=user.has_deposited_50_usdc
+                                    )
+                                    logger.info(f"Published DEPOSIT event to stream for {user_id}")
+                                except Exception as e:
+                                    logger.error(f"Failed to publish deposit event to stream: {e}")
+                            else:
+                                logger.info(f"Skipping duplicate deposit event for {user_id} - balance already synced: {db_balance} USDC")
+
                         except Exception as e:
-                            logger.error(f"Failed to publish deposit event to stream: {e}")
+                            logger.warning(f"Failed to check on-chain balance for deduplication: {e}")
+                            # Fall back to not publishing to avoid duplicates
 
                 except Exception as e:
                     logger.error(f"Failed to process deposit event: {e}")
