@@ -319,11 +319,46 @@ async def get_transactions(
         sort_order=sort_order
     )
 
-    # Enrich transactions with pool names
+    # Enrich transactions with pool names and in_range status
     enriched_transactions = []
+
+    # Get current positions to check if they're in range
+    from app.database.models import Position
+    from sqlalchemy import select, and_
+    positions_stmt = select(Position).where(
+        and_(
+            Position.user_id == user_id,
+            Position.status == 'ACTIVE'
+        )
+    )
+    positions_result = await db.execute(positions_stmt)
+    active_positions = {p.token_id: p for p in positions_result.scalars().all()}
+
     for tx in transactions:
-        # Convert to dict to add pool_name
+        # Convert to dict to add pool_name and in_range
         tx_dict = TransactionResponse.model_validate(tx).model_dump()
+
+        # Check if position is in range for position-related transactions
+        if tx.position_id and tx.tx_type in ['POSITION_CREATED', 'POSITION_CLOSED', 'STAKING']:
+            # Check if this position is still active
+            position = active_positions.get(tx.position_id)
+            if position:
+                # Check if position is in range
+                try:
+                    from app.core.positions_service import positions_service
+                    position_info = await positions_service.get_position_by_id(tx.position_id)
+                    if position_info:
+                        tx_dict['in_range'] = position_info.in_range
+                    else:
+                        tx_dict['in_range'] = None
+                except Exception as e:
+                    logger.debug(f"Could not check in_range for position {tx.position_id}: {e}")
+                    tx_dict['in_range'] = None
+            else:
+                # Position is closed or doesn't exist
+                tx_dict['in_range'] = False if tx.tx_type == 'POSITION_CLOSED' else None
+        else:
+            tx_dict['in_range'] = None
 
         # Get pool name from event_data for position transactions
         if tx.tx_type in ['POSITION_CREATED', 'POSITION_CLOSED'] and tx.event_data:

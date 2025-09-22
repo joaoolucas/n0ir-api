@@ -209,6 +209,7 @@ class TransactionResponse(BaseModel):
     amount_usdc: Decimal
     position_id: Optional[int] = Field(None, description="NFT token ID for position-related transactions")  # Comes from DB column
     pool_name: Optional[str] = Field(None, description="Pool name for position transactions")
+    in_range: Optional[bool] = Field(None, description="Whether the position is in range (for position-related transactions)")
     tx_hash: Optional[str]
     status: TransactionStatus
     event_data: Optional[Dict[str, Any]] = Field(default=None, description="Event data from blockchain")
