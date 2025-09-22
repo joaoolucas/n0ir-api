@@ -78,15 +78,16 @@ async def withdraw_funds(
         Withdrawal status and transaction details
 
     The endpoint will:
-    1. Check available balance
-    2. Close positions if needed to free up funds
-    3. Execute withdrawal to user's main wallet
-    4. Record transaction in database
+    1. Check user exists and has CDP wallet
+    2. Send withdrawal command to agent manager
+    3. Agent manager will close positions and execute withdrawal
+    4. Return transaction details
     """
-    from app.core.positions_service import positions_service
+    from app.services.agent_management_service import get_agent_service
     from app.core.blockchain_service import blockchain_service
-    from app.services.wallet_transaction_service import WalletTransactionService
     from sqlalchemy import select
+    import uuid
+    from datetime import datetime
 
     try:
         # Get user
@@ -101,70 +102,54 @@ async def withdraw_funds(
         if not user.cdp_wallet_address:
             raise HTTPException(status_code=400, detail="User has no CDP wallet")
 
-        # Get current balance
+        # Get current balance to show in response
         wallet_balance = await blockchain_service.get_usdc_balance(user.cdp_wallet_address)
 
-        # Always withdraw all available funds
-        requested_amount = Decimal(str(wallet_balance))
+        # Send withdrawal command to agent manager
+        # The agent manager will handle closing positions and withdrawing all funds
+        agent_service = get_agent_service()
 
-        # Check if we need to close positions (should not happen as we're withdrawing available balance)
-        if requested_amount > wallet_balance:
-            # Need to close positions
-            positions = await positions_service.get_positions_by_owner(user.cdp_wallet_address)
-            active_positions = [p for p in positions if p.status == 'ACTIVE']
+        # Request withdrawal of all funds through agent manager
+        result = await agent_service.withdraw_usdc(
+            user_id=user_id,
+            amount=float(wallet_balance),  # Request full balance
+            positions_to_close=None,  # Let agent manager determine which positions to close
+            withdraw_all=True  # Withdraw everything
+        )
 
-            if not active_positions:
-                return WithdrawResponse(
-                    requested_amount=requested_amount,
-                    withdrawn_amount=Decimal(str(wallet_balance)),
-                    remaining_balance=Decimal(0),
-                    positions_closed=0,
-                    status="partial",
-                    message=f"Insufficient balance. Only ${wallet_balance:.2f} available"
-                )
+        if not result.get('success'):
+            error_msg = result.get('error', 'Unknown error')
+            logger.error(f"Agent manager withdrawal failed for {user_id}: {error_msg}")
+            raise HTTPException(status_code=500, detail=f"Withdrawal failed: {error_msg}")
 
-            # TODO: Implement position closing logic
-            # For now, return partial withdrawal
-            withdrawn = Decimal(str(wallet_balance))
-        else:
-            withdrawn = requested_amount
+        # Generate unique tx_hash with timestamp/UUID to avoid duplicates
+        tx_hash = result.get('tx_hash') or f"withdraw_{user_id}_{uuid.uuid4().hex[:8]}_{datetime.utcnow().timestamp():.0f}"
 
-        # Execute withdrawal (simplified - actual implementation would call CDP API)
-        # Record transaction
-        wallet_service = WalletTransactionService(db)
-        tx_data = {
-            "type": "WITHDRAW",
-            "amount_usdc": float(withdrawn),
-            "from_address": user.cdp_wallet_address,
-            "to_address": user_id,  # Main wallet
-            "status": "confirmed"
-        }
-
-        # Create transaction record
+        # Record transaction in database
         from app.database.models import Transaction
         transaction = Transaction(
             user_id=user_id,
-            tx_hash=f"withdraw_{user_id}_{Decimal(withdrawn):.2f}",  # Mock hash
+            tx_hash=tx_hash,
             tx_type="WITHDRAW",
-            status="CONFIRMED",
+            status="PENDING",  # Will be updated by agent manager
             event_data={
-                "amount_usdc": float(withdrawn),
-                "to_address": user_id  # Main wallet
+                "amount_usdc": float(wallet_balance),
+                "to_address": user_id,  # Main wallet
+                "withdraw_all": True
             }
         )
         db.add(transaction)
         await db.commit()
 
-        new_balance = Decimal(str(wallet_balance)) - withdrawn
-
         return WithdrawResponse(
-            requested_amount=requested_amount,
-            withdrawn_amount=withdrawn,
-            remaining_balance=new_balance,
-            positions_closed=0,
-            status="complete",
+            requested_amount=Decimal(str(wallet_balance)),
+            withdrawn_amount=Decimal(str(wallet_balance)),
+            remaining_balance=Decimal(0),  # Withdrawing all
+            positions_closed=0,  # Will be handled by agent manager
+            status="pending",  # Transaction is being processed
             transaction_id=transaction.id,
-            message=f"Successfully withdrawn ${withdrawn:.2f}"
+            tx_hash=tx_hash,  # Use tx_hash field from schema
+            message=f"Withdrawal of ${wallet_balance:.2f} initiated. Closing positions and processing..."
         )
 
     except HTTPException:
