@@ -154,7 +154,7 @@ async def withdraw_funds(
             tx_type="WITHDRAW",
             status=tx_status,
             created_at=datetime.utcnow(),  # Explicitly set created_at
-            processed_at=datetime.utcnow() if tx_status == "CONFIRMED" else None,
+            confirmed_at=datetime.utcnow() if tx_status == "CONFIRMED" else None,  # Use confirmed_at, not processed_at
             event_data={
                 "amount_usdc": total_portfolio_value,
                 "to_address": user_id,  # Main wallet
