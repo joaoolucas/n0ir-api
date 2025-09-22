@@ -146,8 +146,11 @@ async def withdraw_funds(
             user_id=user_id,
             tx_hash=f"withdraw_{user_id}_{Decimal(withdrawn):.2f}",  # Mock hash
             tx_type="WITHDRAW",
-            amount_usdc=withdrawn,
-            status="CONFIRMED"
+            status="CONFIRMED",
+            event_data={
+                "amount_usdc": float(withdrawn),
+                "to_address": user_id  # Main wallet
+            }
         )
         db.add(transaction)
         await db.commit()
