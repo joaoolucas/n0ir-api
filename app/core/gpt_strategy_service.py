@@ -28,9 +28,8 @@ class GPTStrategyService:
             logger.info(f"OpenAI API key configured (length: {len(api_key)})")
             self.client = AsyncOpenAI(api_key=api_key)
 
-        # Model to use - GPT-4 Turbo for intelligent decisions
-        # Using gpt-3.5-turbo for cost-effectiveness, or gpt-4-turbo-preview for better quality
-        self.model = "gpt-3.5-turbo"  # Change to "gpt-4-turbo-preview" if you want better quality
+        # Model to use - GPT-5 Nano for fast, cost-effective decisions
+        self.model = "gpt-5-nano"
 
     async def generate_initial_strategy(
         self,
