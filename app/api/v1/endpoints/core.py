@@ -105,14 +105,27 @@ async def withdraw_funds(
         # Get current balance to show in response
         wallet_balance = await blockchain_service.get_usdc_balance(user.cdp_wallet_address)
 
+        # Get total portfolio value including positions
+        from app.services.user_service import UserService
+        user_service = UserService(db)
+        positions = await user_service.get_user_positions(user_id, status='ACTIVE')
+
+        # Calculate total portfolio value (wallet + positions)
+        total_portfolio_value = float(wallet_balance)
+        for position in positions:
+            if position.current_value_usdc:
+                total_portfolio_value += float(position.current_value_usdc)
+
+        logger.info(f"User {user_id} withdrawal - Wallet: ${wallet_balance}, Positions: {len(positions)}, Total: ${total_portfolio_value}")
+
         # Send withdrawal command to agent manager
         # The agent manager will handle closing positions and withdrawing all funds
         agent_service = get_agent_service()
 
-        # Request withdrawal of all funds through agent manager
+        # Request withdrawal of total portfolio value (wallet + positions)
         result = await agent_service.withdraw_usdc(
             user_id=user_id,
-            amount=float(wallet_balance),  # Request full balance
+            amount=total_portfolio_value,  # Request total portfolio value
             positions_to_close=None,  # Let agent manager determine which positions to close
             withdraw_all=True  # Withdraw everything
         )
@@ -133,23 +146,26 @@ async def withdraw_funds(
             tx_type="WITHDRAW",
             status="PENDING",  # Will be updated by agent manager
             event_data={
-                "amount_usdc": float(wallet_balance),
+                "amount_usdc": total_portfolio_value,
                 "to_address": user_id,  # Main wallet
-                "withdraw_all": True
+                "withdraw_all": True,
+                "wallet_balance": float(wallet_balance),
+                "positions_value": total_portfolio_value - float(wallet_balance),
+                "positions_count": len(positions)
             }
         )
         db.add(transaction)
         await db.commit()
 
         return WithdrawResponse(
-            requested_amount=Decimal(str(wallet_balance)),
-            withdrawn_amount=Decimal(str(wallet_balance)),
+            requested_amount=Decimal(str(total_portfolio_value)),
+            withdrawn_amount=Decimal(str(total_portfolio_value)),
             remaining_balance=Decimal(0),  # Withdrawing all
-            positions_closed=0,  # Will be handled by agent manager
+            positions_closed=len(positions),  # Number of positions to be closed
             status="pending",  # Transaction is being processed
             transaction_id=transaction.id,
             tx_hash=tx_hash,  # Use tx_hash field from schema
-            message=f"Withdrawal of ${wallet_balance:.2f} initiated. Closing positions and processing..."
+            message=f"Withdrawal of ${total_portfolio_value:.2f} initiated. Closing {len(positions)} positions and processing..."
         )
 
     except HTTPException:
