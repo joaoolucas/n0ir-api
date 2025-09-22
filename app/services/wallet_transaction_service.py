@@ -1360,20 +1360,58 @@ class WalletTransactionService:
                             # It's just some other interaction with the position manager
                             logger.debug(f"CDP wallet interacted with position manager {to_addr} but no NFT transfer found - not classifying as STAKING")
         
+        # Also check event logs for USDC transfers (handles Account Abstraction txs)
+        # This is crucial for detecting transfers in smart contract wallet transactions
+        if not found_deposit and not found_withdrawal:
+            logs = content.get("logs", [])
+            for log in logs:
+                # Check for USDC Transfer events
+                if log.get("address", "").lower() == self.USDC_ADDRESS:
+                    topics = log.get("topics", [])
+                    if topics and len(topics) >= 3:
+                        # ERC20 Transfer event signature
+                        transfer_sig = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+                        if topics[0] == transfer_sig:
+                            # Extract from and to addresses from topics
+                            from_addr_log = "0x" + topics[1][-40:] if len(topics[1]) > 40 else topics[1]
+                            to_addr_log = "0x" + topics[2][-40:] if len(topics[2]) > 40 else topics[2]
+
+                            from_addr_log = from_addr_log.lower()
+                            to_addr_log = to_addr_log.lower()
+
+                            # Extract amount from data field
+                            data = log.get("data", "0x0")
+                            try:
+                                amount = int(data, 16) if data.startswith("0x") else int(data)
+
+                                # Check for deposit: owner -> CDP wallet
+                                if from_addr_log == owner_wallet and to_addr_log == cdp_wallet and amount > 0:
+                                    found_deposit = True
+                                    deposit_amount += amount
+                                    logger.info(f"Found deposit in logs: {amount / 1_000_000:.2f} USDC from owner to CDP")
+
+                                # Check for withdrawal: CDP wallet -> owner
+                                elif from_addr_log == cdp_wallet and to_addr_log == owner_wallet and amount > 0:
+                                    found_withdrawal = True
+                                    withdrawal_amount += amount
+                                    logger.info(f"Found withdrawal in logs: {amount / 1_000_000:.2f} USDC from CDP to owner")
+                            except Exception as e:
+                                logger.warning(f"Failed to parse USDC transfer amount: {e}")
+
         # Return based on what we found (prioritize financial transactions)
         if found_deposit:
             details["amount"] = deposit_amount
             details["description"] = f"USDC deposit from owner wallet"
             details["cdp_wallet"] = cdp_wallet
             return TransactionType.DEPOSIT, details
-        
+
         if found_withdrawal:
             details["amount"] = withdrawal_amount
             details["description"] = f"USDC withdrawal to owner wallet"
             details["cdp_wallet"] = cdp_wallet
             return TransactionType.WITHDRAW, details
-        
-        
+
+
         details["cdp_wallet"] = cdp_wallet
         return TransactionType.UNKNOWN, details
     
