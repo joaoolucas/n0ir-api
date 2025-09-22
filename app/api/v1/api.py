@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from app.api.v1.endpoints import blockchain, health, strategy, users
+from app.api.v1.endpoints import blockchain, health, core, info
 from app.core.auth import verify_bearer_token
 
 api_router = APIRouter()
@@ -17,14 +17,16 @@ api_router.include_router(
     dependencies=[Depends(verify_bearer_token)]
 )
 
+# Include Core endpoints for essential operations
 api_router.include_router(
-    strategy.router,
-    tags=["Strategy"],
+    core.router,
+    tags=["Core"],
     dependencies=[Depends(verify_bearer_token)]
 )
 
+# Include Info endpoints for querying data
 api_router.include_router(
-    users.router,
-    tags=["Users"],
+    info.router,
+    tags=["Info"],
     dependencies=[Depends(verify_bearer_token)]
 )

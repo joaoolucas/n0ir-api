@@ -10,7 +10,6 @@ from app.core.gpt_strategy_service import gpt_strategy_service
 from app.core.blockchain_service import blockchain_service
 from app.core.positions_service import positions_service
 from app.core.pools_service import pools_service
-from app.core.strategy_service import strategy_service
 from app.schemas.users import (
     DeltaNeutralStrategyResponse,
     LPAllocation,
@@ -38,7 +37,6 @@ class DeltaNeutralService:
         self.blockchain = blockchain_service
         self.positions = positions_service
         self.pools = pools_service
-        self.strategy = strategy_service
 
     async def analyze_user_portfolio(
         self,
