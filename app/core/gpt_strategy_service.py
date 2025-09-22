@@ -55,20 +55,32 @@ class GPTStrategyService:
             prompt = self._build_initial_strategy_prompt(balance, existing_positions, pool_data)
 
             logger.info(f"Attempting to use OpenAI model: {self.model}")
+            # Try without response_format for GPT-5 nano compatibility
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": "You are a DeFi strategy expert specializing in delta-neutral strategies. Provide responses in valid JSON format only."},
-                    {"role": "user", "content": prompt}
+                    {"role": "system", "content": "You are a DeFi strategy expert. Reply with valid JSON only, no other text."},
+                    {"role": "user", "content": prompt + "\n\nIMPORTANT: Reply with valid JSON only."}
                 ],
-                response_format={"type": "json_object"},
+                # Removed response_format as it might not be supported by GPT-5 nano
                 # temperature=1 is default, GPT-5 nano only supports default
                 max_completion_tokens=1000  # Changed from max_tokens for GPT-5 nano
             )
 
-            result = json.loads(response.choices[0].message.content)
-            logger.info(f"GPT strategy generated successfully")
-            return result
+            # Debug log the raw response
+            if response.choices and len(response.choices) > 0:
+                content = response.choices[0].message.content
+                logger.info(f"GPT response content length: {len(content) if content else 0}")
+                if not content or content.strip() == "":
+                    logger.warning("GPT returned empty response, using fallback")
+                    return self._fallback_initial_strategy(balance, existing_positions, pool_data)
+
+                result = json.loads(content)
+                logger.info(f"GPT strategy generated successfully")
+                return result
+            else:
+                logger.warning("GPT returned no choices, using fallback")
+                return self._fallback_initial_strategy(balance, existing_positions, pool_data)
 
         except openai.RateLimitError as e:
             logger.error(f"OpenAI rate limit or quota error: {e}")
@@ -101,20 +113,31 @@ class GPTStrategyService:
         try:
             prompt = self._build_range_break_prompt(position_data, market_data, current_balance)
 
+            # Try without response_format for GPT-5 nano compatibility
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": "You are a DeFi position manager. Evaluate range breaks and recommend actions. Provide responses in valid JSON format only."},
-                    {"role": "user", "content": prompt}
+                    {"role": "system", "content": "You are a DeFi position manager. Reply with valid JSON only, no other text."},
+                    {"role": "user", "content": prompt + "\n\nIMPORTANT: Reply with valid JSON only."}
                 ],
-                response_format={"type": "json_object"},
+                # Removed response_format as it might not be supported by GPT-5 nano
                 # temperature=1 is default, GPT-5 nano only supports default
                 max_completion_tokens=800  # Changed from max_tokens for GPT-5 nano
             )
 
-            result = json.loads(response.choices[0].message.content)
-            logger.info(f"GPT range break evaluation: {result}")
-            return result
+            # Check for empty response
+            if response.choices and len(response.choices) > 0:
+                content = response.choices[0].message.content
+                if not content or content.strip() == "":
+                    logger.warning("GPT returned empty response for range break, using fallback")
+                    return self._fallback_range_break_action(position_data, market_data)
+
+                result = json.loads(content)
+                logger.info(f"GPT range break evaluation completed")
+                return result
+            else:
+                logger.warning("GPT returned no choices for range break, using fallback")
+                return self._fallback_range_break_action(position_data, market_data)
 
         except Exception as e:
             logger.error(f"GPT range break evaluation failed: {e}")
