@@ -144,11 +144,17 @@ async def withdraw_funds(
 
         # Record transaction in database
         from app.database.models import Transaction
+
+        # Determine status based on agent manager result
+        tx_status = "CONFIRMED" if result.get('success') else "PENDING"
+
         transaction = Transaction(
             user_id=user_id,
             tx_hash=tx_hash,
             tx_type="WITHDRAW",
-            status="PENDING",  # Will be updated by agent manager
+            status=tx_status,
+            created_at=datetime.utcnow(),  # Explicitly set created_at
+            processed_at=datetime.utcnow() if tx_status == "CONFIRMED" else None,
             event_data={
                 "amount_usdc": total_portfolio_value,
                 "to_address": user_id,  # Main wallet
@@ -160,6 +166,7 @@ async def withdraw_funds(
         )
         db.add(transaction)
         await db.commit()
+        await db.refresh(transaction)  # Refresh to get the generated ID and timestamps
 
         return WithdrawResponse(
             requested_amount=Decimal(str(total_portfolio_value)),
