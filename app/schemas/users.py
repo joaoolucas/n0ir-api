@@ -213,13 +213,20 @@ class TransactionResponse(BaseModel):
     tx_hash: Optional[str]
     status: TransactionStatus
     event_data: Optional[Dict[str, Any]] = Field(default=None, description="Event data from blockchain")
-    created_at: Optional[datetime] = Field(validation_alias='block_timestamp', description="Block timestamp of transaction")
-    
+    created_at: Optional[datetime] = Field(None, description="Transaction timestamp")
+
     @model_validator(mode='before')
     @classmethod
     def normalize_transaction_type(cls, values):
         """Normalize transaction type from database to match enum and extract fields from event_data."""
         if isinstance(values, dict):
+            # Use block_timestamp if available, otherwise fall back to created_at
+            if 'block_timestamp' in values and values['block_timestamp']:
+                values['created_at'] = values['block_timestamp']
+            elif 'created_at' not in values or values['created_at'] is None:
+                # If neither block_timestamp nor created_at is set, check confirmed_at
+                if 'confirmed_at' in values and values['confirmed_at']:
+                    values['created_at'] = values['confirmed_at']
             event_data = values.get('event_data', {})
 
             # Parse event_data if it's a string (JSON)

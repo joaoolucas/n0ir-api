@@ -15,9 +15,9 @@ async def check_transaction():
 
         # Get the transaction
         query = """
-        SELECT id, tx_hash, tx_type, event_data, position_id
+        SELECT id, tx_hash, tx_type, event_data, position_id, created_at, confirmed_at, block_timestamp
         FROM transactions
-        WHERE id = '1b3bf91d-2734-4718-a17f-54aea877cdc8'
+        WHERE id = 'd8348383-f4b4-45f0-9630-a7369cc47201'
         """
         tx = await conn.fetchrow(query)
 
@@ -26,6 +26,9 @@ async def check_transaction():
             print(f"TX Hash: {tx['tx_hash']}")
             print(f"Type: {tx['tx_type']}")
             print(f"Position ID: {tx['position_id']}")
+            print(f"Created at: {tx['created_at']}")
+            print(f"Confirmed at: {tx['confirmed_at']}")
+            print(f"Block timestamp: {tx['block_timestamp']}")
 
             event_data = tx['event_data']
             if isinstance(event_data, str):
