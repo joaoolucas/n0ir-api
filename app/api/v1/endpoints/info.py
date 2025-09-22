@@ -183,7 +183,7 @@ async def list_users(
     - Agent status
     """
     service = UserService(db)
-    users = await service.list_users()
+    users = await service.list_all_users()
 
     # Enrich with balance data
     from app.core.blockchain_service import blockchain_service
