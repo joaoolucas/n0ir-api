@@ -14,8 +14,7 @@ from app.core.strategy_service import strategy_service
 from app.schemas.users import (
     DeltaNeutralStrategyResponse,
     LPAllocation,
-    Hedge,
-    RangeBreakAction
+    Hedge
 )
 from app.database.session import get_db
 from app.database.models import User
@@ -81,29 +80,31 @@ class DeltaNeutralService:
                     out_of_range_positions[0],  # Handle first out of range position
                     balance,
                     pool_data,
-                    positions
+                    positions,
+                    out_of_range_positions
+                )
+            elif positions:
+                # Have positions but all are in range - return maintain action
+                return self._build_maintain_response(balance, positions)
+            else:
+                # No positions - generate initial strategy using GPT
+                strategy = await self.gpt_service.generate_initial_strategy(
+                    balance=balance,
+                    existing_positions=[],
+                    pool_data=pool_data
                 )
 
-            # Generate initial strategy using GPT
-            strategy = await self.gpt_service.generate_initial_strategy(
-                balance=balance,
-                existing_positions=self._format_positions(positions),
-                pool_data=pool_data
-            )
-
-            # Convert to response format
-            return self._build_strategy_response(strategy, balance, positions)
+                # Convert to response format for initial allocation
+                return self._build_initial_strategy_response(strategy, balance)
 
         except Exception as e:
             logger.error(f"Error analyzing portfolio for user {user_id}: {e}")
             # Return error strategy
             return DeltaNeutralStrategyResponse(
-                lp_allocations=[],
-                hedges=[],
+                action="error",
                 notes=f"Error generating strategy: {str(e)}",
                 total_capital_deployed=Decimal(0),
-                remaining_balance=Decimal(0),
-                current_positions=[]
+                remaining_balance=Decimal(balance) if balance else Decimal(0)
             )
 
     async def _get_user_and_wallet(
@@ -205,7 +206,8 @@ class DeltaNeutralService:
         position: Any,
         balance: float,
         pool_data: Dict,
-        all_positions: List[Any]
+        all_positions: List[Any],
+        out_of_range_positions: List[Any]
     ) -> DeltaNeutralStrategyResponse:
         """Handle position that's out of range."""
 
@@ -232,18 +234,17 @@ class DeltaNeutralService:
             current_balance=balance
         )
 
-        # Build response based on action
-        response_data = {
-            "lp_allocations": [],
-            "hedges": [],
-            "notes": action.get("reason", "Range break detected"),
-            "total_capital_deployed": Decimal(0),
-            "remaining_balance": Decimal(balance)
-        }
+        # Extract position IDs that are out of range
+        out_of_range_ids = [getattr(p, 'id', None) for p in out_of_range_positions if hasattr(p, 'id')]
+
+        # Build response based on action type
+        lp_allocations = []
+        hedges = []
+        total_deployed = Decimal(0)
 
         if action.get("action") == "close_and_reopen" and action.get("new_lp_allocation"):
             lp = action["new_lp_allocation"]
-            response_data["lp_allocations"].append(
+            lp_allocations.append(
                 LPAllocation(
                     pair=lp["pair"],
                     amount_usd=Decimal(str(lp["amount_usd"])),
@@ -251,11 +252,11 @@ class DeltaNeutralService:
                     pool_address=WHITELISTED_POOLS.get(lp["pair"])
                 )
             )
-            response_data["total_capital_deployed"] += Decimal(str(lp["amount_usd"]))
+            total_deployed += Decimal(str(lp["amount_usd"]))
 
         if action.get("hedge"):
             hedge = action["hedge"]
-            response_data["hedges"].append(
+            hedges.append(
                 Hedge(
                     asset=hedge["asset"],
                     side=hedge["side"],
@@ -264,20 +265,27 @@ class DeltaNeutralService:
                     notional_exposure_usd=Decimal(str(hedge["notional_exposure_usd"]))
                 )
             )
-            response_data["total_capital_deployed"] += Decimal(str(hedge["collateral_usd"]))
+            total_deployed += Decimal(str(hedge["collateral_usd"]))
 
-        response_data["remaining_balance"] = Decimal(balance) - response_data["total_capital_deployed"]
-        response_data["current_positions"] = self._format_positions(all_positions)
+        return DeltaNeutralStrategyResponse(
+            action=action.get("action", "wait"),
+            notes=action.get("reason", "Range break detected"),
+            lp_allocations=lp_allocations,
+            hedges=hedges,
+            total_capital_deployed=total_deployed,
+            remaining_balance=Decimal(balance) - total_deployed,
+            current_positions=self._format_positions(all_positions),
+            out_of_range_positions=out_of_range_ids,
+            position_id=getattr(position, 'id', None),
+            reason=action.get("reason")
+        )
 
-        return DeltaNeutralStrategyResponse(**response_data)
-
-    def _build_strategy_response(
+    def _build_initial_strategy_response(
         self,
         strategy: Dict[str, Any],
-        balance: float,
-        positions: List[Any]
+        balance: float
     ) -> DeltaNeutralStrategyResponse:
-        """Build strategy response from GPT output."""
+        """Build initial strategy response from GPT output."""
 
         lp_allocations = []
         total_lp = Decimal(0)
@@ -310,103 +318,38 @@ class DeltaNeutralService:
         remaining = Decimal(str(balance)) - total_deployed
 
         return DeltaNeutralStrategyResponse(
+            action="initial_allocation",
+            notes=strategy.get("notes", "Delta-neutral strategy generated"),
             lp_allocations=lp_allocations,
             hedges=hedges,
-            notes=strategy.get("notes", "Delta-neutral strategy generated"),
             total_capital_deployed=total_deployed,
             remaining_balance=max(Decimal(0), remaining),
-            current_positions=self._format_positions(positions)
+            current_positions=None
         )
 
-    async def monitor_positions(
+    def _build_maintain_response(
         self,
-        user_id: str,
-        db: AsyncSession
-    ) -> List[RangeBreakAction]:
-        """
-        Monitor existing positions for range breaks.
+        balance: float,
+        positions: List[Any]
+    ) -> DeltaNeutralStrategyResponse:
+        """Build response when all positions are in range - maintain current strategy."""
 
-        Args:
-            user_id: User identifier
-            db: Database session
+        # Calculate total value in positions
+        total_position_value = sum(
+            float(getattr(p, 'current_value_usd', 0)) for p in positions
+        )
 
-        Returns:
-            List of range break actions to take
-        """
-        try:
-            # Get user and wallet
-            user_data = await self._get_user_and_wallet(user_id, db)
-            if not user_data or not user_data['cdp_wallet']:
-                return []
+        return DeltaNeutralStrategyResponse(
+            action="maintain",
+            notes=f"All {len(positions)} positions are in range and performing well. Maintain current strategy.",
+            lp_allocations=[],
+            hedges=[],
+            total_capital_deployed=Decimal(str(total_position_value)),
+            remaining_balance=Decimal(str(balance)),
+            current_positions=self._format_positions(positions),
+            out_of_range_positions=[]
+        )
 
-            # Get positions
-            _, positions = await self._fetch_portfolio_data(user_data['cdp_wallet'])
-
-            # Check for out of range positions
-            out_of_range = self._check_out_of_range_positions(positions)
-
-            if not out_of_range:
-                return []
-
-            # Get pool and market data
-            pool_data = await self._fetch_pool_data()
-
-            actions = []
-            for position in out_of_range:
-                # Evaluate each out of range position
-                position_data = {
-                    "pool_name": getattr(position, 'pool_name', 'Unknown'),
-                    "current_value": float(getattr(position, 'current_value_usd', 0)),
-                    "time_out_of_range": 6,  # Would calculate properly
-                    "apr_in_range": float(getattr(position, 'current_apr', 0))
-                }
-
-                market_data = {
-                    "current_price": pool_data.get("eth_price", 3500),
-                    "price_change_24h": 2.5,
-                    "volatility": "medium",
-                    "trend": "neutral"
-                }
-
-                action = await self.gpt_service.evaluate_range_break(
-                    position_data=position_data,
-                    market_data=market_data,
-                    current_balance=0  # Will fetch if needed
-                )
-
-                # Convert to RangeBreakAction
-                range_action = RangeBreakAction(
-                    action=action.get("action", "wait"),
-                    reason=action.get("reason", ""),
-                    position_id=getattr(position, 'id', None)
-                )
-
-                if action.get("new_lp_allocation"):
-                    lp = action["new_lp_allocation"]
-                    range_action.new_lp_allocation = LPAllocation(
-                        pair=lp["pair"],
-                        amount_usd=Decimal(str(lp["amount_usd"])),
-                        range_pct=lp.get("range_pct", 5),
-                        pool_address=WHITELISTED_POOLS.get(lp["pair"])
-                    )
-
-                if action.get("hedge"):
-                    hedge = action["hedge"]
-                    range_action.hedge = Hedge(
-                        asset=hedge["asset"],
-                        side=hedge.get("side", "short"),
-                        collateral_usd=Decimal(str(hedge["collateral_usd"])),
-                        leverage=hedge.get("leverage", 5),
-                        notional_exposure_usd=Decimal(str(hedge["notional_exposure_usd"]))
-                    )
-
-                actions.append(range_action)
-
-            return actions
-
-        except Exception as e:
-            logger.error(f"Error monitoring positions for user {user_id}: {e}")
-            return []
 
 
 # Singleton instance

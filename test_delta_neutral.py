@@ -77,9 +77,9 @@ async def test_gpt_strategy():
     return True
 
 
-async def test_schema_validation():
-    """Test schema validation."""
-    print("\n=== Testing Schema Validation ===")
+async def test_unified_response():
+    """Test unified response handling different scenarios."""
+    print("\n=== Testing Unified Response Structure ===")
 
     from app.schemas.users import (
         LPAllocation,
@@ -87,16 +87,13 @@ async def test_schema_validation():
         DeltaNeutralStrategyResponse
     )
 
-    # Test LP Allocation
+    # Test Initial Allocation Response
     lp = LPAllocation(
         pair="WETH/USDC",
         amount_usd=Decimal("1000.50"),
-        range_pct=5.0,
-        pool_address="0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59"
+        range_pct=5.0
     )
-    print(f"LP Allocation created: {lp.pair} - ${lp.amount_usd}")
 
-    # Test Hedge
     hedge = Hedge(
         asset="ETH",
         side="short",
@@ -104,17 +101,41 @@ async def test_schema_validation():
         leverage=5,
         notional_exposure_usd=Decimal("500")
     )
-    print(f"Hedge created: {hedge.asset} {hedge.side} - ${hedge.notional_exposure_usd} notional")
 
-    # Test full response
-    response = DeltaNeutralStrategyResponse(
+    initial_response = DeltaNeutralStrategyResponse(
+        action="initial_allocation",
+        notes="Initial delta-neutral strategy for new user",
         lp_allocations=[lp],
         hedges=[hedge],
-        notes="Test strategy",
         total_capital_deployed=Decimal("1100.50"),
         remaining_balance=Decimal("399.50")
     )
-    print(f"Strategy Response created: Total deployed ${response.total_capital_deployed}")
+    print(f"✓ Initial allocation response: action={initial_response.action}, deployed=${initial_response.total_capital_deployed}")
+
+    # Test Range Break Response
+    range_break_response = DeltaNeutralStrategyResponse(
+        action="close_and_reopen",
+        notes="ETH broke out of range. Closing old LP and re-entering at adjusted range.",
+        lp_allocations=[lp],
+        hedges=[hedge],
+        total_capital_deployed=Decimal("1100.50"),
+        remaining_balance=Decimal("399.50"),
+        out_of_range_positions=[123456],
+        position_id=123456,
+        reason="Position out of range for 24h, reopening to capture APR"
+    )
+    print(f"✓ Range break response: action={range_break_response.action}, out_of_range={range_break_response.out_of_range_positions}")
+
+    # Test Maintain Response
+    maintain_response = DeltaNeutralStrategyResponse(
+        action="maintain",
+        notes="All positions in range and performing well",
+        total_capital_deployed=Decimal("5000"),
+        remaining_balance=Decimal("100"),
+        current_positions=[{"id": 123, "pool": "WETH/USDC", "value": 5000}],
+        out_of_range_positions=[]
+    )
+    print(f"✓ Maintain response: action={maintain_response.action}")
 
     return True
 
@@ -125,8 +146,8 @@ async def main():
     print("=" * 50)
 
     try:
-        # Test schemas
-        await test_schema_validation()
+        # Test unified response structure
+        await test_unified_response()
 
         # Test GPT strategy
         await test_gpt_strategy()

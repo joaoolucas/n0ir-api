@@ -16,7 +16,7 @@ from app.schemas.users import (
     PositionResponse, PositionListResponse, CreatePositionRequest, ClosePositionRequest,
     BalanceResponse, PerformanceResponse,
     UserStatus, TransactionType, TransactionStatus, PositionStatus, TimePeriod,
-    DeltaNeutralStrategyRequest, DeltaNeutralStrategyResponse, RangeBreakAction
+    DeltaNeutralStrategyRequest, DeltaNeutralStrategyResponse
 )
 # Enums are already imported from schemas above
 DBTransactionType = TransactionType
@@ -1197,22 +1197,29 @@ async def get_delta_neutral_strategy(
     """
     Generate delta-neutral strategy recommendations for a user.
 
-    This endpoint:
-    1. Checks user's CDP wallet balance and positions
-    2. Uses GPT-5 Nano to determine optimal LP allocations and hedge sizes
-    3. Provides recommendations for delta-neutral positioning
-    4. Handles range break scenarios with rebalancing suggestions
+    This unified endpoint handles both scenarios:
+
+    1. **Initial Strategy Generation** (no positions or all in range):
+       - Returns LP allocations and hedge recommendations
+       - Allocates capital based on balance thresholds
+
+    2. **Range Break Monitoring** (positions out of range):
+       - Detects out-of-range positions automatically
+       - Returns action recommendations (close_and_reopen, wait, adjust_hedge)
+       - Provides new allocations if rebalancing is needed
 
     Strategy rules:
     - < $2k: Single position (WETH/USDC) + hedge
     - >= $2k: Two positions (WETH priority + cbBTC for stability)
     - 90% to LP, 10% to 5x leveraged short for delta neutrality
-    - Monitors positions and suggests actions when out of range
+    - Automatically handles range breaks with GPT-5 Nano decisions
+
+    The agent manager can call this single endpoint for all strategy needs.
     """
     from app.core.delta_neutral_service import delta_neutral_service
 
     try:
-        # Generate strategy using delta-neutral service
+        # This unified method handles both initial strategy and monitoring
         strategy = await delta_neutral_service.analyze_user_portfolio(
             user_id=user_id,
             db=db
@@ -1228,37 +1235,4 @@ async def get_delta_neutral_strategy(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to generate strategy: {str(e)}"
-        )
-
-
-@router.get("/{user_id}/strategy/monitor", response_model=List[RangeBreakAction])
-async def monitor_strategy_positions(
-    user_id: str,
-    db: AsyncSession = Depends(get_db)
-) -> List[RangeBreakAction]:
-    """
-    Monitor existing positions for range breaks and get action recommendations.
-
-    Returns a list of recommended actions for positions that are out of range.
-    GPT-5 Nano evaluates whether to:
-    - Close and reopen with new range
-    - Wait for price to return
-    - Adjust hedge only
-    """
-    from app.core.delta_neutral_service import delta_neutral_service
-
-    try:
-        # Monitor positions and get recommendations
-        actions = await delta_neutral_service.monitor_positions(
-            user_id=user_id,
-            db=db
-        )
-
-        return actions
-
-    except Exception as e:
-        logger.error(f"Error monitoring positions for user {user_id}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to monitor positions: {str(e)}"
         )

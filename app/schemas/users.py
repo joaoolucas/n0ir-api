@@ -63,21 +63,27 @@ class DeltaNeutralStrategyRequest(BaseModel):
     pass  # Empty body, user_id is path parameter
 
 class DeltaNeutralStrategyResponse(BaseModel):
-    """Delta-neutral strategy recommendations"""
-    lp_allocations: List[LPAllocation] = Field(..., description="LP position allocations")
-    hedges: List[Hedge] = Field(..., description="Hedge positions for delta neutrality")
-    notes: str = Field(..., description="Strategy reasoning and notes")
+    """Unified delta-neutral strategy response handling both initial and monitoring scenarios"""
+
+    # Core strategy fields (always present)
+    action: str = Field(..., description="Primary action: 'initial_allocation', 'close_and_reopen', 'wait', 'adjust_hedge', 'maintain'")
+    notes: str = Field(..., description="Strategy reasoning and notes from GPT-5 Nano")
+
+    # Allocation fields (populated for initial or reopen actions)
+    lp_allocations: List[LPAllocation] = Field(default_factory=list, description="LP position allocations")
+    hedges: List[Hedge] = Field(default_factory=list, description="Hedge positions for delta neutrality")
+
+    # Capital management
     total_capital_deployed: Decimal = Field(..., description="Total capital to be deployed")
     remaining_balance: Decimal = Field(..., description="Remaining balance after allocations")
-    current_positions: Optional[List[Dict[str, Any]]] = Field(None, description="Current user positions")
 
-class RangeBreakAction(BaseModel):
-    """Action to take when position goes out of range"""
-    action: str = Field(..., description="Action type: 'close_and_reopen', 'wait', 'adjust_hedge'")
-    new_lp_allocation: Optional[LPAllocation] = Field(None, description="New LP allocation if reopening")
-    hedge: Optional[Hedge] = Field(None, description="Hedge adjustment details")
-    reason: str = Field(..., description="Reasoning for the action")
-    position_id: Optional[int] = Field(None, description="Position NFT token ID being acted upon")
+    # Position monitoring (populated when positions exist)
+    current_positions: Optional[List[Dict[str, Any]]] = Field(None, description="Current user positions with status")
+    out_of_range_positions: Optional[List[int]] = Field(None, description="Token IDs of positions out of range")
+
+    # Range break specific (populated when action is not 'initial_allocation')
+    position_id: Optional[int] = Field(None, description="Primary position being acted upon (for range breaks)")
+    reason: Optional[str] = Field(None, description="Detailed reasoning for range break action")
 
 
 # Request Models

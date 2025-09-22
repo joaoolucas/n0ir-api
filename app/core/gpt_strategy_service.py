@@ -10,7 +10,7 @@ from loguru import logger
 import openai
 from openai import AsyncOpenAI
 
-from app.schemas.users import LPAllocation, Hedge, RangeBreakAction
+from app.schemas.users import LPAllocation, Hedge
 from app.core.config import settings
 
 
