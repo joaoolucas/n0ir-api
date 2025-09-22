@@ -302,22 +302,37 @@ async def list_users(
         # Calculate total portfolio value
         total_portfolio_value = Decimal(str(wallet_balance)) + current_positions_value
         
-        # Calculate total PnL from all positions
+        # Calculate realized PnL from closed positions only
         total_realized_pnl = sum(p.realized_pnl_usdc or Decimal(0) for p in closed_positions)
-        total_unrealized_pnl = sum(p.realized_pnl_usdc or Decimal(0) for p in active_positions)
-        total_fees = sum(p.fees_earned_usdc or Decimal(0) for p in user_positions)
-        total_rewards = sum(p.rewards_earned_usdc or Decimal(0) for p in user_positions)
-        
-        total_pnl = total_realized_pnl + total_unrealized_pnl + total_fees + total_rewards
-        
-        # Calculate PnL percentage based on total deposits
+
+        # Calculate unrealized PnL from active positions using real-time values
+        total_unrealized_pnl = Decimal(0)
+        for pos in active_positions:
+            try:
+                # Fetch real-time position data from blockchain
+                position_info = await positions_service.get_position_by_id(pos.nft_token_id)
+                if position_info and position_info.current_value_usd:
+                    current_value = Decimal(str(position_info.current_value_usd))
+                    entry_value = pos.entry_amount_usdc or Decimal(0)
+                    pos_unrealized = current_value - entry_value
+                    total_unrealized_pnl += pos_unrealized
+                else:
+                    # Fallback to database values
+                    total_unrealized_pnl += (pos.unrealized_pnl_usdc or Decimal(0))
+            except Exception:
+                # Fallback to database values
+                total_unrealized_pnl += (pos.unrealized_pnl_usdc or Decimal(0))
+
+        # Total PnL is realized + unrealized
+        total_pnl = total_realized_pnl + total_unrealized_pnl
+
+        # Calculate PnL percentage based on total deposits (not net)
         total_pnl_percentage = Decimal(0)
         if len(user_positions) > 0:
-            # Get total deposits minus withdrawals
+            # Get total deposits for percentage calculation
             total_deposits, total_withdrawals = await service.get_deposit_withdrawal_totals(user.user_id)
-            net_deposits = total_deposits - total_withdrawals
-            if net_deposits > 0:
-                total_pnl_percentage = (total_pnl / net_deposits) * 100
+            if total_deposits > 0:
+                total_pnl_percentage = (total_pnl / total_deposits) * 100
         
         # Build enhanced response
         enhanced_user = UserListResponse(
