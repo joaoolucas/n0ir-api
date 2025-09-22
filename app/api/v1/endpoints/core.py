@@ -66,17 +66,13 @@ async def create_user(
 @router.post("/{user_id}/withdraw", response_model=WithdrawResponse)
 async def withdraw_funds(
     user_id: str,
-    amount: Optional[float] = None,
-    withdraw_all: bool = False,
     db: AsyncSession = Depends(get_db)
 ) -> WithdrawResponse:
     """
-    Withdraw funds from user's CDP wallet.
+    Withdraw all available funds from user's CDP wallet.
 
     Args:
         user_id: User identifier
-        amount: Amount to withdraw in USDC (optional if withdraw_all is True)
-        withdraw_all: If True, withdraws entire available balance
 
     Returns:
         Withdrawal status and transaction details
@@ -108,15 +104,10 @@ async def withdraw_funds(
         # Get current balance
         wallet_balance = await blockchain_service.get_usdc_balance(user.cdp_wallet_address)
 
-        # Determine withdrawal amount
-        if withdraw_all:
-            requested_amount = Decimal(str(wallet_balance))
-        elif amount:
-            requested_amount = Decimal(str(amount))
-        else:
-            raise HTTPException(status_code=400, detail="Either amount or withdraw_all must be specified")
+        # Always withdraw all available funds
+        requested_amount = Decimal(str(wallet_balance))
 
-        # Check if we have enough balance
+        # Check if we need to close positions (should not happen as we're withdrawing available balance)
         if requested_amount > wallet_balance:
             # Need to close positions
             positions = await positions_service.get_positions_by_owner(user.cdp_wallet_address)
@@ -134,9 +125,11 @@ async def withdraw_funds(
 
             # TODO: Implement position closing logic
             # For now, return partial withdrawal
-            withdrawn = min(requested_amount, Decimal(str(wallet_balance)))
+            withdrawn = Decimal(str(wallet_balance))
         else:
-            withdrawn = requested_amount
+            # Keep small buffer for gas
+            gas_buffer = Decimal("0.1")  # $0.10 for gas
+            withdrawn = max(Decimal("0"), requested_amount - gas_buffer)
 
         # Execute withdrawal (simplified - actual implementation would call CDP API)
         # Record transaction
