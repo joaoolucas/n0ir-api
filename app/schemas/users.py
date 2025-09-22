@@ -112,7 +112,7 @@ class WithdrawResponse(BaseModel):
     positions_closed: int = Field(0, description="Number of positions closed for withdrawal")
     status: str = Field(..., description="Status: 'complete', 'partial', 'none', or 'error'")
     tx_hash: Optional[str] = Field(None, description="Transaction hash if executed")
-    transaction_id: Optional[int] = Field(None, description="Transaction ID in database")
+    transaction_id: Optional[UUID] = Field(None, description="Transaction ID in database")
     message: Optional[str] = Field(None, description="Additional message or error details")
 
 # Keep for backwards compatibility (deprecated)
