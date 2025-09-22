@@ -1298,18 +1298,12 @@ class WalletTransactionService:
                         return TransactionType.FEE_TRANSFER, details
             
             # STAKING: Check if CDP wallet is interacting with position managers
-            # This is a fallback if ERC721 Transfer events aren't available
+            # BUT only if there's actual NFT transfer evidence
             if from_addr == cdp_wallet:
                 for pm in self.POSITION_MANAGERS:
                     if to_addr == pm:
-                        # This is likely a staking transaction
-                        logger.info(f"Found potential staking to position manager {to_addr}")
-                        details["description"] = f"NFT position staked to gauge"
-                        details["gauge_address"] = to_addr
-                        details["cdp_wallet"] = cdp_wallet
-
-                        # Try harder to find the NFT token ID by looking at logs
-                        # Even if position_event wasn't detected, we can still look for ERC721 Transfer events
+                        # Try to find the NFT token ID by looking at logs
+                        # We REQUIRE an ERC721 Transfer event to classify as staking
                         nft_token_id = None
 
                         # First, check if there are any ERC721 Transfer events in the logs
@@ -1333,13 +1327,17 @@ class WalletTransactionService:
                                             # Extract NFT token ID from topics[3]
                                             try:
                                                 nft_token_id = int(log["topics"][3], 16)
-                                                logger.info(f"Found NFT token ID {nft_token_id} from ERC721 Transfer event in staking fallback")
+                                                logger.info(f"Found NFT token ID {nft_token_id} from ERC721 Transfer event in staking")
                                                 break
                                             except Exception as e:
                                                 logger.warning(f"Failed to parse NFT ID from ERC721 Transfer: {e}")
 
-                        # If we found the NFT ID from logs, use it
+                        # ONLY classify as STAKING if we found an actual NFT transfer
                         if nft_token_id:
+                            logger.info(f"Found valid staking transaction with NFT {nft_token_id} to position manager {to_addr}")
+                            details["description"] = f"NFT position staked to gauge"
+                            details["gauge_address"] = to_addr
+                            details["cdp_wallet"] = cdp_wallet
                             details["nft_token_id"] = nft_token_id
 
                             # Try to get position details for pool information
@@ -1355,13 +1353,12 @@ class WalletTransactionService:
                                 details["description"] = f"NFT position staked to gauge"
                             else:
                                 logger.warning(f"Position {nft_token_id} not found in database for staking transaction")
-                        else:
-                            # Mark for manual review if we couldn't find the NFT ID
-                            details["needs_review"] = True
-                            details["missing_fields"] = ["position_id", "pool_name"]
-                            logger.warning(f"Could not determine NFT token ID for staking transaction {details['tx_hash'][:10]}...")
 
-                        return TransactionType.STAKING, details
+                            return TransactionType.STAKING, details
+                        else:
+                            # No NFT transfer found, this is NOT a staking transaction
+                            # It's just some other interaction with the position manager
+                            logger.debug(f"CDP wallet interacted with position manager {to_addr} but no NFT transfer found - not classifying as STAKING")
         
         # Return based on what we found (prioritize financial transactions)
         if found_deposit:
