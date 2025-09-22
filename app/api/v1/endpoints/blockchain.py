@@ -31,9 +31,14 @@ from app.schemas.common import ErrorResponse
 from app.core.pools_service import pools_service
 from app.core.positions_service import positions_service
 from app.core.logger import logger
-from app.core.strategy_service import WHITELISTED_POOLS
 from app.database.session import get_db
 from app.database.models import Position
+
+# Whitelisted pools (moved from strategy_service)
+WHITELISTED_POOLS = {
+    "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59",  # WETH/USDC
+    "0x4e962bb3889bf030368f56810a9c96b83cb3e778",  # cbBTC/USDC
+}
 
 router = APIRouter()
 

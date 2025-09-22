@@ -1250,37 +1250,30 @@ class UserService:
         user = await self.get_user(user_id)
         if user and user.cdp_wallet_address and active_positions:
             try:
-                # Call strategy monitor endpoint internally
-                from app.schemas.strategy_v2 import MonitorRequest
-                from app.core.strategy_service import strategy_service
-                from app.schemas.strategy import MonitorPositionsRequest
-                
-                # Use the CDP wallet address for the strategy monitor
-                monitor_request = MonitorPositionsRequest(
-                    user_address=user.cdp_wallet_address
-                )
-                monitor_response = await strategy_service.monitor_positions(monitor_request)
-                
-                # Calculate weighted average APR based on position values
-                if monitor_response and monitor_response.positions:
-                    from app.core.positions_service import positions_service
-                    
-                    # Fetch actual position data for values
-                    positions_data = await positions_service.get_positions_by_owner(user.cdp_wallet_address)
-                    
-                    # Calculate weighted average APR
-                    total_value = 0
-                    weighted_apr_sum = 0
-                    
-                    for pos_data in positions_data:
-                        # Find corresponding position status with effective APR
-                        pos_status = next((p for p in monitor_response.positions if p.token_id == pos_data.id), None)
-                        if pos_status and pos_data.current_value_usd:
-                            position_value = pos_data.current_value_usd
-                            total_value += position_value
-                            weighted_apr_sum += position_value * pos_status.current_apr
-                    
-                    apr = Decimal(weighted_apr_sum / total_value) if total_value > 0 else Decimal(0)
+                # Strategy monitoring removed - using direct position data instead
+                from app.core.positions_service import positions_service
+
+                # Fetch actual position data for values
+                positions_data = await positions_service.get_positions_by_owner(user.cdp_wallet_address)
+
+                # Calculate weighted average APR directly from pool data
+                total_value = 0
+                weighted_apr_sum = 0
+
+                from app.core.pools_service import pools_service
+                for pos_data in positions_data:
+                    if pos_data.current_value_usd and hasattr(pos_data, 'pool_address'):
+                        try:
+                            pool_info = await pools_service.get_pool_info(pos_data.pool_address)
+                            if pool_info:
+                                position_value = pos_data.current_value_usd
+                                pool_apr = pool_info.get('apr_7d', 0)
+                                total_value += position_value
+                                weighted_apr_sum += position_value * pool_apr
+                        except:
+                            pass
+
+                apr = Decimal(weighted_apr_sum / total_value) if total_value > 0 else Decimal(0)
                 
             except Exception as e:
                 logger.warning(f"Could not fetch APR from strategy monitor for user {user_id}: {e}")
