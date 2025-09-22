@@ -29,7 +29,7 @@ class GPTStrategyService:
             self.client = AsyncOpenAI(api_key=api_key)
 
         # Model to use - GPT-5 Nano for fast, cost-effective decisions
-        self.model = "gpt-5-nano-2025-08-07"
+        self.model = "gpt-5-nano"
 
     async def generate_initial_strategy(
         self,
@@ -63,7 +63,7 @@ class GPTStrategyService:
                 ],
                 response_format={"type": "json_object"},
                 temperature=0.3,  # Lower temperature for more deterministic responses
-                max_tokens=1000
+                max_completion_tokens=1000  # Changed from max_tokens for GPT-5 nano
             )
 
             result = json.loads(response.choices[0].message.content)
@@ -109,7 +109,7 @@ class GPTStrategyService:
                 ],
                 response_format={"type": "json_object"},
                 temperature=0.3,
-                max_tokens=800
+                max_completion_tokens=800  # Changed from max_tokens for GPT-5 nano
             )
 
             result = json.loads(response.choices[0].message.content)
