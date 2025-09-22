@@ -116,10 +116,11 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
 
         if position_data:
             # Update with blockchain data
-            position_dict['current_value_usdc'] = position_data.get('current_value_usd', 0)
-            position_dict['current_total_value'] = position_data.get('current_value_usd', 0)
-            position_dict['pool_name'] = position_data.get('pool_name', 'Unknown/Unknown')
-            position_dict['in_range'] = position_data.get('in_range', False)
+            # position_data is a PositionInfo object, use attributes not .get()
+            position_dict['current_value_usdc'] = getattr(position_data, 'current_value_usd', 0)
+            position_dict['current_total_value'] = getattr(position_data, 'current_value_usd', 0)
+            position_dict['pool_name'] = getattr(position_data, 'pool_name', 'Unknown/Unknown')
+            position_dict['in_range'] = getattr(position_data, 'in_range', False)
 
             # Get pool APR data
             if position.pool_address:
@@ -132,7 +133,7 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
                     position_dict['effective_apr'] = Decimal(0)
 
             # Calculate PnL (simple version - current value minus entry amount)
-            current_value = Decimal(str(position_data.get('current_value_usd', 0)))
+            current_value = Decimal(str(getattr(position_data, 'current_value_usd', 0)))
 
             # Total PnL includes fees and rewards
             total_fees_rewards = position.fees_earned_usdc + position.rewards_earned_usdc
