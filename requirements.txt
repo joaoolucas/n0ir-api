@@ -4,7 +4,7 @@ pydantic==2.10.0
 pydantic-settings==2.6.0
 python-dotenv==1.0.1
 aiohttp==3.10.10
-web3==7.5.0
+web3==6.20.3
 loguru==0.7.2
 numpy>=1.26.0
 scipy>=1.11.4
