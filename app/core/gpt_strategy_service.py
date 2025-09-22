@@ -29,7 +29,7 @@ class GPTStrategyService:
             self.client = AsyncOpenAI(api_key=api_key)
 
         # Model to use - GPT-5 Nano for fast, cost-effective decisions
-        self.model = "gpt-5-nano"
+        self.model = "gpt-5-nano-2025-08-07"
 
     async def generate_initial_strategy(
         self,
