@@ -355,7 +355,7 @@ async def get_transactions(
 
     return TransactionListResponse(
         transactions=paginated_transactions,
-        total_count=total_count,
+        total=total_count,
         limit=limit,
         offset=offset
     )
