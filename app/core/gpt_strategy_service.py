@@ -1,6 +1,6 @@
 """
-GPT-5 Strategy Service for delta-neutral position management.
-Integrates with OpenAI to make intelligent trading decisions.
+GPT-5 Nano Strategy Service for delta-neutral position management.
+Integrates with OpenAI GPT-5 Nano for fast, intelligent trading decisions.
 """
 import json
 import os
@@ -15,7 +15,7 @@ from app.core.config import settings
 
 
 class GPTStrategyService:
-    """Service for GPT-5 powered strategy decisions."""
+    """Service for GPT-5 Nano powered strategy decisions."""
 
     def __init__(self):
         """Initialize OpenAI client."""
@@ -26,8 +26,8 @@ class GPTStrategyService:
         else:
             self.client = AsyncOpenAI(api_key=api_key)
 
-        # Model to use (GPT-4 for now, will upgrade to GPT-5 when available)
-        self.model = "gpt-4-turbo-preview"
+        # Model to use - GPT-5 Nano for fast, cost-effective decisions
+        self.model = "gpt-5-nano"
 
     async def generate_initial_strategy(
         self,

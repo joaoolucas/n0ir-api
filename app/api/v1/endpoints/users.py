@@ -1199,7 +1199,7 @@ async def get_delta_neutral_strategy(
 
     This endpoint:
     1. Checks user's CDP wallet balance and positions
-    2. Uses GPT-5 to determine optimal LP allocations and hedge sizes
+    2. Uses GPT-5 Nano to determine optimal LP allocations and hedge sizes
     3. Provides recommendations for delta-neutral positioning
     4. Handles range break scenarios with rebalancing suggestions
 
@@ -1240,7 +1240,7 @@ async def monitor_strategy_positions(
     Monitor existing positions for range breaks and get action recommendations.
 
     Returns a list of recommended actions for positions that are out of range.
-    GPT-5 evaluates whether to:
+    GPT-5 Nano evaluates whether to:
     - Close and reopen with new range
     - Wait for price to return
     - Adjust hedge only
