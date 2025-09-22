@@ -149,7 +149,7 @@ class DeltaNeutralService:
         # Fetch data for whitelisted pools
         for pool_name, pool_address in WHITELISTED_POOLS.items():
             try:
-                pool_info = await self.pools.get_pool_info(pool_address)
+                pool_info = await self.pools.get_pool(pool_address)
                 if pool_info:
                     pool_data[pool_name] = {
                         "address": pool_address,

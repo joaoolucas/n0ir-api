@@ -360,7 +360,7 @@ async def get_positions(
 
     return PositionListResponse(
         positions=enriched_positions,
-        total_count=len(enriched_positions)
+        total=len(enriched_positions)
     )
 
 
