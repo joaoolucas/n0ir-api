@@ -190,7 +190,18 @@ async def list_users(
 
     enriched_users = []
     for user in users:
-        user_dict = UserListResponse.model_validate(user).model_dump()
+        # Build user dict from scratch with required fields
+        user_dict = {
+            'user_id': user.user_id,
+            'cdp_wallet_address': user.cdp_wallet_address,
+            'status': user.status,
+            'created_at': user.created_at,
+            'total_portfolio_value': Decimal(0),  # Will be calculated below
+            'active_positions_count': 0,
+            'total_pnl_usdc': Decimal(0),
+            'total_pnl_percentage': Decimal(0),
+            'agent_active': bool(user.cdp_wallet_address)
+        }
 
         # Get wallet balance if CDP wallet exists
         if user.cdp_wallet_address:
@@ -204,16 +215,15 @@ async def list_users(
         positions = await service.get_user_positions(user.user_id)
         active_positions = [p for p in positions if p.status == 'ACTIVE']
 
-        user_dict['active_positions'] = len(active_positions)
-        user_dict['total_positions'] = len(positions)
+        user_dict['active_positions_count'] = len(active_positions)
 
         # Calculate total portfolio value (wallet + positions)
         positions_value = sum(
             p.current_value_usdc for p in active_positions
             if p.current_value_usdc
         )
-        user_dict['positions_value'] = positions_value
-        user_dict['total_portfolio_value'] = user_dict.get('wallet_balance', 0) + positions_value
+        wallet_balance = user_dict.get('wallet_balance', Decimal(0))
+        user_dict['total_portfolio_value'] = wallet_balance + positions_value
 
         # Calculate total PnL
         total_realized_pnl = sum(
@@ -224,7 +234,17 @@ async def list_users(
             p.fees_earned_usdc for p in positions
             if p.fees_earned_usdc
         )
-        user_dict['total_pnl'] = total_realized_pnl + total_fees
+        user_dict['total_pnl_usdc'] = total_realized_pnl + total_fees
+
+        # Calculate PnL percentage if there's an investment
+        total_invested = sum(
+            p.entry_amount_usdc for p in positions
+            if p.entry_amount_usdc
+        )
+        if total_invested > 0:
+            user_dict['total_pnl_percentage'] = (user_dict['total_pnl_usdc'] / total_invested) * 100
+        else:
+            user_dict['total_pnl_percentage'] = Decimal(0)
 
         enriched_users.append(user_dict)
 
