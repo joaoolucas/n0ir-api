@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.schemas.users import (
     UserListResponse,
     TransactionListResponse,
+    TransactionResponse,
     PositionListResponse,
     PerformanceResponse,
     PositionResponse,
