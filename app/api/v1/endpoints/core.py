@@ -112,21 +112,25 @@ async def withdraw_funds(
 
         # Calculate total portfolio value (wallet + positions)
         total_portfolio_value = float(wallet_balance)
+        position_ids = []
         for position in positions:
             if position.current_value_usdc:
                 total_portfolio_value += float(position.current_value_usdc)
+            # Collect position NFT IDs to close
+            if position.nft_token_id:
+                position_ids.append(position.nft_token_id)
 
-        logger.info(f"User {user_id} withdrawal - Wallet: ${wallet_balance}, Positions: {len(positions)}, Total: ${total_portfolio_value}")
+        logger.info(f"User {user_id} withdrawal - Wallet: ${wallet_balance}, Positions: {len(positions)} (IDs: {position_ids}), Total: ${total_portfolio_value}")
 
         # Send withdrawal command to agent manager
         # The agent manager will handle closing positions and withdrawing all funds
         agent_service = get_agent_service()
 
-        # Request withdrawal of total portfolio value (wallet + positions)
+        # Request withdrawal with explicit positions to close
         result = await agent_service.withdraw_usdc(
             user_id=user_id,
             amount=total_portfolio_value,  # Request total portfolio value
-            positions_to_close=None,  # Let agent manager determine which positions to close
+            positions_to_close=position_ids,  # Explicitly tell agent which positions to close
             withdraw_all=True  # Withdraw everything
         )
 
