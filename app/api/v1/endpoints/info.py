@@ -317,20 +317,32 @@ async def get_transactions(
         sort_order=sort_order
     )
 
-    # Fetch pool names for position transactions
-    from app.database.models import Transaction, Position
-    from sqlalchemy import select, and_, or_
-
+    # Enrich transactions with pool names
+    enriched_transactions = []
     for tx in transactions:
+        # Convert to dict to add pool_name
+        tx_dict = TransactionResponse.model_validate(tx).model_dump()
+
         # Get pool name from event_data for position transactions
         if tx.tx_type in ['POSITION_CREATED', 'POSITION_CLOSED'] and tx.event_data:
             pool_address = tx.event_data.get('pool')
             if pool_address:
                 try:
-                    pool_info = await pools_service.get_pool_info(pool_address)
-                    tx.pool_name = pool_info.get('name', 'Unknown')
+                    pool_info = await pools_service.get_pool(pool_address)
+                    # Extract pool name from symbol (e.g., "WETH-USDC-0.05%" -> "WETH-USDC")
+                    symbol = pool_info.get('symbol', '')
+                    if symbol and '-' in symbol:
+                        tx_dict['pool_name'] = symbol.rsplit('-', 1)[0]  # Remove fee tier
+                    else:
+                        tx_dict['pool_name'] = symbol or 'Unknown'
                 except:
-                    tx.pool_name = 'Unknown'
+                    tx_dict['pool_name'] = 'Unknown'
+            else:
+                tx_dict['pool_name'] = None
+        else:
+            tx_dict['pool_name'] = None
+
+        enriched_transactions.append(tx_dict)
 
     # Get total count for pagination
     total_count = await service.get_user_transactions_count(
@@ -339,7 +351,7 @@ async def get_transactions(
     )
 
     return TransactionListResponse(
-        transactions=transactions,
+        transactions=enriched_transactions,
         total_count=total_count,
         limit=limit,
         offset=offset
