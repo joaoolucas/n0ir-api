@@ -332,3 +332,31 @@ class TransactionListResponse(BaseModel):
 class PositionListResponse(BaseModel):
     positions: List[PositionResponse]
     total: int
+
+
+# Activation/Deactivation Request/Response Models
+class ActivateRequest(BaseModel):
+    """Request to activate user's trading agent"""
+    strategy_type: str = Field("delta_neutral", description="Strategy type to use")
+
+
+class ActivateResponse(BaseModel):
+    """Response for agent activation"""
+    user_id: str
+    status: str = Field(..., description="Status: 'activated', 'already_active', 'error'")
+    cdp_wallet_address: Optional[str] = None
+    message: str
+
+
+class DeactivateRequest(BaseModel):
+    """Request to deactivate user's trading agent"""
+    withdraw_funds: bool = Field(True, description="Whether to withdraw all funds")
+
+
+class DeactivateResponse(BaseModel):
+    """Response for agent deactivation"""
+    user_id: str
+    status: str = Field(..., description="Status: 'deactivated', 'already_inactive', 'error'")
+    withdrawn_amount: Optional[Decimal] = None
+    tx_hash: Optional[str] = None
+    message: str

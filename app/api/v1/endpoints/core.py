@@ -16,7 +16,11 @@ from app.schemas.users import (
     UserResponse,
     WithdrawResponse,
     DeltaNeutralStrategyRequest,
-    DeltaNeutralStrategyResponse
+    DeltaNeutralStrategyResponse,
+    ActivateRequest,
+    ActivateResponse,
+    DeactivateRequest,
+    DeactivateResponse
 )
 from app.database.models import User
 
@@ -61,6 +65,66 @@ async def create_user(
         created_at=user.created_at,
         updated_at=user.updated_at
     )
+
+
+@router.post("/{user_id}/activate", response_model=ActivateResponse)
+async def activate_agent(
+    user_id: str,
+    request: ActivateRequest = ActivateRequest(),
+    db: AsyncSession = Depends(get_db)
+) -> ActivateResponse:
+    """
+    Activate trading agent for user.
+
+    This will:
+    1. Create user if not exists
+    2. Create CDP wallet if needed
+    3. Start the agent process
+    4. Enable automated trading based on strategy
+    """
+    from app.services.agent_management_service import get_agent_service
+
+    try:
+        # Get or create user
+        service = UserService(db)
+        user = await service.get_user(user_id)
+        if not user:
+            user = await service.create_user(user_id)
+
+        # Send activate command to agent manager
+        agent_service = get_agent_service()
+        result = await agent_service.activate_agent(
+            user_id=user_id,
+            strategy_type=request.strategy_type
+        )
+
+        if result.get('success'):
+            # Update user with CDP wallet if created
+            if result.get('wallet_address') and not user.cdp_wallet_address:
+                user.cdp_wallet_address = result['wallet_address']
+                await db.commit()
+
+            return ActivateResponse(
+                user_id=user_id,
+                status="activated" if result.get('newly_activated') else "already_active",
+                cdp_wallet_address=result.get('wallet_address') or user.cdp_wallet_address,
+                message=result.get('message', 'Agent activated successfully')
+            )
+        else:
+            return ActivateResponse(
+                user_id=user_id,
+                status="error",
+                cdp_wallet_address=user.cdp_wallet_address,
+                message=result.get('error', 'Failed to activate agent')
+            )
+
+    except Exception as e:
+        logger.error(f"Error activating agent for {user_id}: {e}")
+        return ActivateResponse(
+            user_id=user_id,
+            status="error",
+            message=str(e)
+        )
 
 
 @router.post("/{user_id}/withdraw", response_model=WithdrawResponse)
@@ -184,6 +248,68 @@ async def withdraw_funds(
     except Exception as e:
         logger.error(f"Error processing withdrawal for user {user_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Withdrawal failed: {str(e)}")
+
+
+@router.post("/{user_id}/deactivate", response_model=DeactivateResponse)
+async def deactivate_agent(
+    user_id: str,
+    request: DeactivateRequest = DeactivateRequest(),
+    db: AsyncSession = Depends(get_db)
+) -> DeactivateResponse:
+    """
+    Deactivate trading agent for user.
+
+    This will:
+    1. Stop the agent process
+    2. Close all open positions
+    3. Optionally withdraw all funds to user's wallet
+    """
+    from app.services.agent_management_service import get_agent_service
+    from sqlalchemy import select
+
+    try:
+        # Check user exists
+        result = await db.execute(
+            select(User).where(User.user_id == user_id)
+        )
+        user = result.scalar_one_or_none()
+
+        if not user:
+            return DeactivateResponse(
+                user_id=user_id,
+                status="error",
+                message="User not found"
+            )
+
+        # Send deactivate command to agent manager
+        agent_service = get_agent_service()
+        result = await agent_service.deactivate_agent(
+            user_id=user_id,
+            withdraw_funds=request.withdraw_funds
+        )
+
+        if result.get('success'):
+            return DeactivateResponse(
+                user_id=user_id,
+                status="deactivated" if result.get('was_active') else "already_inactive",
+                withdrawn_amount=Decimal(str(result.get('withdrawn_amount', 0))) if result.get('withdrawn_amount') else None,
+                tx_hash=result.get('tx_hash'),
+                message=result.get('message', 'Agent deactivated successfully')
+            )
+        else:
+            return DeactivateResponse(
+                user_id=user_id,
+                status="error",
+                message=result.get('error', 'Failed to deactivate agent')
+            )
+
+    except Exception as e:
+        logger.error(f"Error deactivating agent for {user_id}: {e}")
+        return DeactivateResponse(
+            user_id=user_id,
+            status="error",
+            message=str(e)
+        )
 
 
 @router.post("/{user_id}/strategy", response_model=DeltaNeutralStrategyResponse)
