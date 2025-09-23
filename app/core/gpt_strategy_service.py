@@ -175,7 +175,7 @@ class GPTStrategyService:
         2. If balance >= $2000: Split between WETH/USDC (priority) and cbBTC/USDC (stability)
         3. Allocate 90% to LP positions, 10% to short hedges
         4. Use 5x leverage for shorts (so 10% collateral = 50% notional hedge)
-        5. Keep 1% as reserve for gas/slippage
+        5. Use full balance (gas fees handled separately by agent)
         6. Range should be 5% around current price for concentrated liquidity
 
         Generate optimal allocations. Output must be valid JSON with this structure:
@@ -267,8 +267,8 @@ class GPTStrategyService:
     ) -> Dict[str, Any]:
         """Fallback strategy when GPT is unavailable."""
 
-        # Reserve 1% for gas
-        deployable = balance * 0.99
+        # Use full balance - gas fees handled by agent manager
+        deployable = balance
 
         # 90% to LP, 10% to hedge
         lp_allocation = deployable * 0.9
