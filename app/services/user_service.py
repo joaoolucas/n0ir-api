@@ -194,13 +194,16 @@ class UserService:
         if cost_basis_withdrawn is not None:
             tx_metadata['cost_basis_withdrawn'] = float(cost_basis_withdrawn)
         
+        now = datetime.now(timezone.utc)
         transaction = Transaction(
             user_id=user_id,
             tx_type=tx_type_value,
             tx_hash=tx_hash,
             status=TransactionStatus.PENDING,
             tx_metadata=tx_metadata,
-            event_data={'amount_usdc': float(amount_usdc)} if amount_usdc else {}
+            event_data={'amount_usdc': float(amount_usdc)} if amount_usdc else {},
+            block_timestamp=now,  # Set block_timestamp for proper ordering
+            created_at=now
         )
         
         self.db.add(transaction)
@@ -310,17 +313,17 @@ class UserService:
         if status:
             stmt = stmt.where(Transaction.status == status)
         
-        # Order by created_at for consistent chronological ordering
-        # created_at represents when the transaction was recorded in our system
+        # Order by block_timestamp for true chronological ordering
+        # Use COALESCE to handle nulls (though all should have block_timestamp)
         if sort_order.lower() == "asc":
             # Oldest first
             stmt = stmt.order_by(
-                Transaction.created_at.asc()
+                func.coalesce(Transaction.block_timestamp, Transaction.created_at).asc()
             )
         else:
             # Newest first (default)
             stmt = stmt.order_by(
-                Transaction.created_at.desc()
+                func.coalesce(Transaction.block_timestamp, Transaction.created_at).desc()
             )
         
         # Execute regular transactions query
@@ -489,6 +492,7 @@ class UserService:
         import uuid
         
         # Create a mock transaction for the API response
+        now = datetime.now(timezone.utc)
         transaction = Transaction(
             id=uuid.uuid4(),
             user_id=user_id,
@@ -499,7 +503,8 @@ class UserService:
                 'amount_usdc': float(amount),
                 'to_address': user_id  # Always withdraw to user's own address
             },
-            created_at=datetime.now(timezone.utc)
+            block_timestamp=now,  # Set block_timestamp for proper ordering
+            created_at=now
         )
         
         # Check and update deposit flag after withdrawal
@@ -661,6 +666,7 @@ class UserService:
         )
         
         # Create transaction record for position entry (debit)
+        now = datetime.now(timezone.utc)
         transaction = Transaction(
             user_id=user_id,
             transaction_type=TransactionType.POSITION_CREATED,
@@ -674,7 +680,8 @@ class UserService:
                 "pool_name": pool_name,
                 "action": "position_opened"
             }),
-            confirmed_at=datetime.now(timezone.utc)
+            block_timestamp=now,  # Set block_timestamp for proper ordering
+            confirmed_at=now
         )
         
         # Add both records in the same transaction
@@ -889,6 +896,7 @@ class UserService:
             "realized_pnl_usdc": float(realized_pnl_usdc)
         }
         
+        now = datetime.now(timezone.utc)
         transaction = Transaction(
             id=uuid.uuid4(),  # Ensure we have a primary key
             user_id=user_id,
@@ -897,8 +905,9 @@ class UserService:
             status='CONFIRMED',  # Fixed to uppercase for consistency
             tx_metadata=tx_metadata,
             event_data={'amount_usdc': float(amount_returned)},
-            processed_at=datetime.now(timezone.utc),
-            created_at=datetime.now(timezone.utc)
+            block_timestamp=now,  # Set block_timestamp for proper ordering
+            processed_at=now,
+            created_at=now
         )
         
         self.db.add(transaction)
