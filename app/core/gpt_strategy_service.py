@@ -178,13 +178,16 @@ class GPTStrategyService:
         - ETH Funding Rate: {pool_data.get('eth_funding', -0.02)}%
         - BTC Funding Rate: {pool_data.get('btc_funding', -0.01)}%
 
-        Strategy Rules:
-        1. If balance < $2000: Use single position (WETH/USDC preferred due to higher APR)
+        Strategy Rules (MUST follow ALL rules):
+        1. If balance < $2000: Use single LP position (WETH/USDC preferred due to higher APR)
         2. If balance >= $2000: Split between WETH/USDC (priority) and cbBTC/USDC (stability)
-        3. Allocate 90% to LP positions, 10% to short hedges
-        4. Use 5x leverage for shorts (so 10% collateral = 50% notional hedge)
+        3. ALWAYS allocate 90% to LP positions, 10% to short hedges (MANDATORY for delta-neutral)
+        4. ALWAYS include hedges - Use 5x leverage for shorts (so 10% collateral = 50% notional hedge)
         5. Use full balance (gas fees handled separately by agent)
         6. Range should be 5% around current price for concentrated liquidity
+
+        CRITICAL: You MUST include hedges in EVERY strategy to maintain delta neutrality.
+        Never return empty hedges array - always allocate 10% to short positions.
 
         Generate optimal allocations. Output must be valid JSON with this structure:
         {{
