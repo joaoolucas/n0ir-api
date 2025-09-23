@@ -73,6 +73,14 @@ class GPTStrategyService:
                 # Try to parse JSON from the response
                 result = json.loads(content)
                 logger.info(f"GPT strategy generated successfully")
+
+                # Log what GPT returned
+                logger.info(f"GPT returned strategy:")
+                logger.info(f"  LP allocations: {len(result.get('lp_allocations', []))} items")
+                logger.info(f"  Hedges: {len(result.get('hedges', []))} items")
+                if not result.get('hedges'):
+                    logger.warning(f"  ⚠️ GPT did not include hedges in strategy!")
+
                 return result
             else:
                 logger.warning("GPT returned empty response, using fallback")

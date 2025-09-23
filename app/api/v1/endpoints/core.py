@@ -220,6 +220,39 @@ async def get_delta_neutral_strategy(
             db=db
         )
 
+        # Log the complete strategy response for debugging
+        logger.info(f"Strategy response for {user_id}:")
+        logger.info(f"  Action: {strategy.action}")
+        logger.info(f"  Notes: {strategy.notes}")
+        logger.info(f"  Total capital to deploy: ${strategy.total_capital_deployed}")
+        logger.info(f"  Remaining balance: ${strategy.remaining_balance}")
+
+        # Log LP allocations
+        if strategy.lp_allocations:
+            logger.info(f"  LP Allocations ({len(strategy.lp_allocations)}):")
+            total_lp = 0
+            for lp in strategy.lp_allocations:
+                logger.info(f"    - {lp.pair}: ${lp.amount_usd} (range: {lp.range_pct}%)")
+                total_lp += float(lp.amount_usd)
+            logger.info(f"    Total LP: ${total_lp}")
+
+        # Log hedges
+        if strategy.hedges:
+            logger.info(f"  Hedges ({len(strategy.hedges)}):")
+            total_hedge = 0
+            for hedge in strategy.hedges:
+                logger.info(f"    - {hedge.asset} {hedge.side}: ${hedge.collateral_usd} (leverage: {hedge.leverage}x)")
+                total_hedge += float(hedge.collateral_usd)
+            logger.info(f"    Total Hedge: ${total_hedge}")
+        else:
+            logger.warning(f"  ⚠️ No hedges in strategy response!")
+
+        # Log position info if present
+        if strategy.current_positions:
+            logger.info(f"  Current positions: {len(strategy.current_positions)}")
+        if strategy.out_of_range_positions:
+            logger.info(f"  Out of range positions: {strategy.out_of_range_positions}")
+
         return strategy
 
     except ValueError as e:

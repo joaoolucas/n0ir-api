@@ -86,11 +86,18 @@ class DeltaNeutralService:
                 return self._build_maintain_response(balance, positions)
             else:
                 # No positions - generate initial strategy using GPT
+                logger.info(f"Generating initial strategy for balance: ${balance:.2f}")
                 strategy = self.gpt_service.generate_initial_strategy(
                     balance=balance,
                     existing_positions=[],
                     pool_data=pool_data
                 )
+
+                # Log raw strategy from GPT service
+                logger.info(f"Raw strategy from GPT service:")
+                logger.info(f"  LP allocations: {strategy.get('lp_allocations', [])}")
+                logger.info(f"  Hedges: {strategy.get('hedges', [])}")
+                logger.info(f"  Notes: {strategy.get('notes', 'N/A')}")
 
                 # Convert to response format for initial allocation
                 return self._build_initial_strategy_response(strategy, balance)
@@ -288,6 +295,8 @@ class DeltaNeutralService:
         lp_allocations = []
         total_lp = Decimal(0)
 
+        logger.info(f"Building strategy response from: {len(strategy.get('lp_allocations', []))} LP allocations, {len(strategy.get('hedges', []))} hedges")
+
         for lp in strategy.get("lp_allocations", []):
             allocation = LPAllocation(
                 pair=lp["pair"],
@@ -297,6 +306,7 @@ class DeltaNeutralService:
             )
             lp_allocations.append(allocation)
             total_lp += allocation.amount_usd
+            logger.info(f"  Added LP: {lp['pair']} = ${allocation.amount_usd}")
 
         hedges = []
         total_hedge = Decimal(0)
@@ -311,6 +321,10 @@ class DeltaNeutralService:
             )
             hedges.append(h)
             total_hedge += h.collateral_usd
+            logger.info(f"  Added Hedge: {h.asset} = ${h.collateral_usd}")
+
+        if not hedges:
+            logger.warning("  ⚠️ No hedges included in response!")
 
         total_deployed = total_lp + total_hedge
         remaining = Decimal(str(balance)) - total_deployed
