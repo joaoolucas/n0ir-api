@@ -309,19 +309,17 @@ class UserService:
         if status:
             stmt = stmt.where(Transaction.status == status)
         
-        # Order by block_number first (if available), then by created_at
-        # This ensures proper chronological order for blockchain transactions
+        # Order by created_at for consistent chronological ordering
+        # created_at represents when the transaction was recorded in our system
         if sort_order.lower() == "asc":
             # Oldest first
             stmt = stmt.order_by(
-                Transaction.block_number.asc().nullsfirst(),  # Blockchain order first
-                Transaction.created_at.asc()  # Then by creation time
+                Transaction.created_at.asc()
             )
         else:
             # Newest first (default)
             stmt = stmt.order_by(
-                Transaction.block_number.desc().nullslast(),  # Blockchain order first
-                Transaction.created_at.desc()  # Then by creation time
+                Transaction.created_at.desc()
             )
         
         # Execute regular transactions query
