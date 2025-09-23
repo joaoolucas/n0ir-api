@@ -15,6 +15,7 @@ from app.core.logger import logger
 from app.core.positions_service import positions_service
 from app.services.agent_management_service import get_agent_service
 from app.core.blockchain_service import blockchain_service
+from app.core.config import settings
 
 
 class UserService:
@@ -1297,3 +1298,87 @@ class UserService:
             "active_positions": len(active_positions),
             "total_positions": len(positions)
         }
+
+    async def sync_blockchain_data(self, user_id: str) -> Dict[str, Any]:
+        """Sync user's blockchain data (transactions and positions) with database.
+
+        This should be called by all endpoints to ensure DB is up-to-date with onchain state.
+
+        Args:
+            user_id: User identifier
+
+        Returns:
+            Dict with sync results (transactions_synced, positions_created, etc.)
+        """
+        sync_result = {
+            "transactions_synced": 0,
+            "positions_created": 0,
+            "positions_updated": 0,
+            "success": False
+        }
+
+        try:
+            # Get user with CDP wallet
+            user = await self.get_user(user_id)
+            if not user or not user.cdp_wallet_address:
+                logger.warning(f"User {user_id} has no CDP wallet for sync")
+                return sync_result
+
+            # Only sync if CDP API key is configured
+            if not settings.cdp_client_api_key:
+                logger.debug("CDP API key not configured, skipping blockchain sync")
+                return sync_result
+
+            # Import here to avoid circular dependency
+            from app.services.wallet_transaction_service import WalletTransactionService
+
+            # Sync transactions from blockchain
+            wallet_service = WalletTransactionService(self.db)
+
+            # Fetch and sync transactions
+            tx_result = await wallet_service.fetch_and_sync_transactions(
+                user_id=user_id,
+                cdp_wallet_address=user.cdp_wallet_address,
+                limit=100  # Sync last 100 transactions
+            )
+
+            sync_result["transactions_synced"] = tx_result.get("transactions_synced", 0)
+
+            # Ensure positions exist for all POSITION_CREATED transactions
+            positions_result = await wallet_service.ensure_positions_for_transactions(user_id)
+            sync_result["positions_created"] = positions_result.get("positions_created", 0) if positions_result else 0
+
+            # Update position values from blockchain
+            positions = await self.get_user_positions(user_id, status=PositionStatus.ACTIVE)
+            positions_updated = 0
+
+            for position in positions:
+                try:
+                    # Get current value from blockchain
+                    position_info = await positions_service.get_position_info(
+                        position.token_id,
+                        user.cdp_wallet_address
+                    )
+
+                    if position_info and "current_value_usdc" in position_info:
+                        await self.update_position_value(
+                            nft_token_id=position.token_id,
+                            current_value_usdc=Decimal(str(position_info["current_value_usdc"])),
+                            unrealized_pnl_usdc=Decimal(str(position_info.get("unrealized_pnl", 0))),
+                            fees_earned_usdc=Decimal(str(position_info.get("fees_earned_usdc", 0))),
+                            rewards_earned_usdc=Decimal(str(position_info.get("rewards_earned_usdc", 0)))
+                        )
+                        positions_updated += 1
+                except Exception as e:
+                    logger.warning(f"Failed to update position {position.token_id}: {e}")
+
+            sync_result["positions_updated"] = positions_updated
+            sync_result["success"] = True
+
+            logger.info(f"Blockchain sync for {user_id}: {sync_result}")
+
+        except Exception as e:
+            logger.error(f"Error syncing blockchain data for {user_id}: {e}")
+            sync_result["error"] = str(e)
+
+        return sync_result

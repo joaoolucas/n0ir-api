@@ -75,6 +75,9 @@ async def create_user(
                 user.cdp_wallet_address = wallet_address
                 await db.commit()
 
+                # Sync blockchain data for new wallet
+                await service.sync_blockchain_data(user_id)
+
                 return CreateResponse(
                     user_id=user_id,
                     cdp_wallet_address=wallet_address,
@@ -142,6 +145,9 @@ async def activate_agent(
                 message="User has no CDP wallet. Please create wallet first with /create endpoint"
             )
 
+        # Sync blockchain data before activation
+        await service.sync_blockchain_data(user_id)
+
         # Send activate command to agent manager
         agent_service = get_agent_service()
         result = await agent_service.activate_agent(
@@ -204,6 +210,10 @@ async def deactivate_agent(
                 message="User not found"
             )
 
+        # Sync blockchain data before deactivation to get latest state
+        service = UserService(db)
+        await service.sync_blockchain_data(user_id)
+
         # Send deactivate command to agent manager (always withdraws funds)
         agent_service = get_agent_service()
         result = await agent_service.deactivate_agent(
@@ -263,6 +273,10 @@ async def get_delta_neutral_strategy(
     The agent manager can call this single endpoint for all strategy needs.
     """
     try:
+        # Sync blockchain data to get latest positions and transactions
+        service = UserService(db)
+        await service.sync_blockchain_data(user_id)
+
         # This unified method handles both initial strategy and monitoring
         strategy = await delta_neutral_service.analyze_user_portfolio(
             user_id=user_id,
