@@ -12,7 +12,6 @@ from app.database.session import get_db
 from app.services.user_service import UserService
 from app.core.pools_service import pools_service
 from app.core.positions_service import positions_service
-from app.core.config import settings
 from app.schemas.users import (
     UserListResponse,
     TransactionListResponse,
@@ -275,42 +274,12 @@ async def get_transactions(
     Returns:
         List of transactions with pool names and details
     """
-    # Auto-sync logic
-    from sqlalchemy import select
-    from app.database.models import User
-    from app.services.wallet_transaction_service import WalletTransactionService
-
-    stmt = select(User).where(User.user_id == user_id)
-    result = await db.execute(stmt)
-    user = result.scalar_one_or_none()
-
-    # Automatically sync if user has CDP wallet and API key is configured
-    if user and user.cdp_wallet_address and settings.cdp_client_api_key:
-        try:
-            wallet_service = WalletTransactionService(db)
-            sync_result = await wallet_service.fetch_and_sync_transactions(
-                user_id=user_id,
-                cdp_wallet_address=user.cdp_wallet_address,
-                limit=100  # Sync more transactions to catch stake events
-            )
-            logger.info(f"Auto-synced {sync_result.get('transactions_synced', 0)} transactions for user {user_id}")
-
-            # Ensure positions exist for all POSITION_CREATED transactions
-            await wallet_service.ensure_positions_for_transactions(user_id)
-
-        except Exception as e:
-            logger.warning(f"Auto-sync failed for user {user_id}: {e}, using cached data")
-            # Continue with local data if sync fails
-
-    # Even if sync fails, try to ensure positions exist for existing transactions
-    if user and user.cdp_wallet_address:
-        try:
-            wallet_service = WalletTransactionService(db)
-            await wallet_service.ensure_positions_for_transactions(user_id)
-        except Exception as e:
-            logger.warning(f"Failed to ensure positions for user {user_id}: {e}")
-
+    # Sync blockchain data to get latest transactions
     service = UserService(db)
+    sync_result = await service.sync_blockchain_data(user_id)
+
+    if sync_result.get('success'):
+        logger.info(f"Synced {sync_result.get('transactions_synced', 0)} transactions for user {user_id}")
     transactions = await service.get_user_transactions(
         user_id=user_id,
         limit=limit,
@@ -413,6 +382,10 @@ async def get_positions(
     - Fees and rewards earned
     """
     service = UserService(db)
+
+    # Sync blockchain data to get latest positions
+    await service.sync_blockchain_data(user_id)
+
     positions = await service.get_user_positions(user_id=user_id, status=status)
 
     # Enrich positions with pool data
@@ -456,6 +429,9 @@ async def get_performance(
     from app.core.blockchain_service import blockchain_service
 
     service = UserService(db)
+
+    # Sync blockchain data to get latest performance metrics
+    await service.sync_blockchain_data(user_id)
 
     # Get user
     stmt = select(User).where(User.user_id == user_id)
