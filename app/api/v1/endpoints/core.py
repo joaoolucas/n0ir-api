@@ -97,7 +97,7 @@ async def deactivate_agent(
     This will:
     1. Stop the agent process
     2. Close all open positions
-    3. Optionally withdraw all funds to user's wallet
+    3. Withdraw all funds to user's wallet
     """
     from app.services.agent_management_service import get_agent_service
     from sqlalchemy import select
@@ -116,11 +116,11 @@ async def deactivate_agent(
                 message="User not found"
             )
 
-        # Send deactivate command to agent manager
+        # Send deactivate command to agent manager (always withdraws funds)
         agent_service = get_agent_service()
         result = await agent_service.deactivate_agent(
             user_id=user_id,
-            withdraw_funds=request.withdraw_funds
+            withdraw_funds=True  # Always withdraw all funds
         )
 
         if result.get('success'):

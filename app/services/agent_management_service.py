@@ -570,7 +570,7 @@ class AgentManagementService:
             return {'success': False, 'error': str(e)}
 
     async def deactivate_agent(self, user_id: str, withdraw_funds: bool = True) -> Dict:
-        """Send explicit deactivate command to agent manager."""
+        """Send explicit deactivate command to agent manager. Always withdraws all funds."""
         await self._ensure_initialized()
         if not self.redis_client:
             return {'success': False, 'error': 'Redis not available'}
@@ -578,7 +578,7 @@ class AgentManagementService:
         command = {
             'action': 'deactivate',  # New action type
             'user_id': user_id,
-            'withdraw_funds': str(withdraw_funds),  # Convert bool to string for Redis
+            'withdraw_funds': 'true',  # Always withdraw funds
             'timestamp': datetime.utcnow().isoformat()
         }
 
@@ -586,24 +586,17 @@ class AgentManagementService:
             stream_id = await self.async_redis_client.xadd('agent:commands:stream', command)
             logger.info(f"Sent deactivate command for {user_id}: stream_id={stream_id}")
 
-            if withdraw_funds:
-                # Wait for withdrawal completion
-                response_future = asyncio.Future()
-                self.wallet_callbacks[f"{user_id}:deactivate"] = response_future
+            # Always wait for withdrawal completion
+            response_future = asyncio.Future()
+            self.wallet_callbacks[f"{user_id}:deactivate"] = response_future
 
-                try:
-                    result = await asyncio.wait_for(response_future, timeout=180)
-                    return result
-                except asyncio.TimeoutError:
-                    return {
-                        'success': True,
-                        'message': 'Deactivation in progress, withdrawal processing'
-                    }
-            else:
-                # Just stop, no need to wait
+            try:
+                result = await asyncio.wait_for(response_future, timeout=180)
+                return result
+            except asyncio.TimeoutError:
                 return {
                     'success': True,
-                    'message': 'Deactivation command sent'
+                    'message': 'Deactivation in progress, withdrawal processing'
                 }
         except Exception as e:
             logger.error(f"Error sending deactivate command: {e}")

@@ -350,7 +350,7 @@ class ActivateResponse(BaseModel):
 
 class DeactivateRequest(BaseModel):
     """Request to deactivate user's trading agent"""
-    withdraw_funds: bool = Field(True, description="Whether to withdraw all funds")
+    pass  # No parameters needed - always withdraws all funds
 
 
 class DeactivateResponse(BaseModel):
