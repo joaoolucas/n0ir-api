@@ -15,11 +15,8 @@ from app.core.delta_neutral_service import delta_neutral_service
 from app.schemas.users import (
     DeltaNeutralStrategyRequest,
     DeltaNeutralStrategyResponse,
-    CreateRequest,
     CreateResponse,
-    ActivateRequest,
     ActivateResponse,
-    DeactivateRequest,
     DeactivateResponse
 )
 from app.database.models import User
@@ -30,7 +27,6 @@ router = APIRouter(prefix="/users")
 @router.post("/{user_id}/create", response_model=CreateResponse)
 async def create_user(
     user_id: str,
-    request: CreateRequest = CreateRequest(),
     db: AsyncSession = Depends(get_db)
 ) -> CreateResponse:
     """
@@ -75,9 +71,6 @@ async def create_user(
                 user.cdp_wallet_address = wallet_address
                 await db.commit()
 
-                # Sync blockchain data for new wallet
-                await service.sync_blockchain_data(user_id)
-
                 return CreateResponse(
                     user_id=user_id,
                     cdp_wallet_address=wallet_address,
@@ -112,7 +105,6 @@ async def create_user(
 @router.post("/{user_id}/activate", response_model=ActivateResponse)
 async def activate_agent(
     user_id: str,
-    request: ActivateRequest = ActivateRequest(),
     db: AsyncSession = Depends(get_db)
 ) -> ActivateResponse:
     """
@@ -148,11 +140,11 @@ async def activate_agent(
         # Sync blockchain data before activation
         await service.sync_blockchain_data(user_id)
 
-        # Send activate command to agent manager
+        # Send activate command to agent manager (always use delta_neutral strategy)
         agent_service = get_agent_service()
         result = await agent_service.activate_agent(
             user_id=user_id,
-            strategy_type=request.strategy_type
+            strategy_type="delta_neutral"
         )
 
         if result.get('success'):
@@ -182,7 +174,6 @@ async def activate_agent(
 @router.post("/{user_id}/deactivate", response_model=DeactivateResponse)
 async def deactivate_agent(
     user_id: str,
-    request: DeactivateRequest = DeactivateRequest(),
     db: AsyncSession = Depends(get_db)
 ) -> DeactivateResponse:
     """
@@ -273,10 +264,6 @@ async def get_delta_neutral_strategy(
     The agent manager can call this single endpoint for all strategy needs.
     """
     try:
-        # Sync blockchain data to get latest positions and transactions
-        service = UserService(db)
-        await service.sync_blockchain_data(user_id)
-
         # This unified method handles both initial strategy and monitoring
         strategy = await delta_neutral_service.analyze_user_portfolio(
             user_id=user_id,
