@@ -561,6 +561,8 @@ class AgentManagementService:
                 return result
             except asyncio.TimeoutError:
                 # Don't fail, just return status
+                if f"{user_id}:activate" in self.wallet_callbacks:
+                    del self.wallet_callbacks[f"{user_id}:activate"]
                 return {
                     'success': True,
                     'message': 'Activation command sent, processing in background'

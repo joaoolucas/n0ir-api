@@ -334,6 +334,20 @@ class PositionListResponse(BaseModel):
     total: int
 
 
+# User Creation Request/Response Models
+class CreateRequest(BaseModel):
+    """Request to create user and CDP wallet"""
+    pass  # No parameters needed
+
+
+class CreateResponse(BaseModel):
+    """Response for user creation"""
+    user_id: str
+    cdp_wallet_address: str
+    status: str = Field(..., description="Status: 'created', 'already_exists', 'error'")
+    message: str
+
+
 # Activation/Deactivation Request/Response Models
 class ActivateRequest(BaseModel):
     """Request to activate user's trading agent"""

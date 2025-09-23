@@ -15,6 +15,8 @@ from app.core.delta_neutral_service import delta_neutral_service
 from app.schemas.users import (
     DeltaNeutralStrategyRequest,
     DeltaNeutralStrategyResponse,
+    CreateRequest,
+    CreateResponse,
     ActivateRequest,
     ActivateResponse,
     DeactivateRequest,
@@ -23,6 +25,85 @@ from app.schemas.users import (
 from app.database.models import User
 
 router = APIRouter(prefix="/users")
+
+
+@router.post("/{user_id}/create", response_model=CreateResponse)
+async def create_user(
+    user_id: str,
+    request: CreateRequest = CreateRequest(),
+    db: AsyncSession = Depends(get_db)
+) -> CreateResponse:
+    """
+    Create user and CDP wallet.
+
+    This will:
+    1. Create user in database if not exists
+    2. Create CDP wallet through agent manager
+    3. Return wallet address
+
+    Does NOT activate the agent.
+    """
+    from app.services.agent_management_service import get_agent_service
+
+    try:
+        # Check if user exists
+        service = UserService(db)
+        user = await service.get_user(user_id)
+
+        if user and user.cdp_wallet_address:
+            # User already exists with wallet
+            return CreateResponse(
+                user_id=user_id,
+                cdp_wallet_address=user.cdp_wallet_address,
+                status="already_exists",
+                message="User already exists with CDP wallet"
+            )
+
+        # Create user if not exists
+        if not user:
+            user = await service.create_user(user_id)
+
+        # Create CDP wallet through agent manager
+        agent_service = get_agent_service()
+        wallet_result = await agent_service.create_wallet_for_user(user_id)
+
+        if wallet_result.get('success'):
+            wallet_address = wallet_result.get('wallet_address')
+
+            # Update user with wallet address
+            if wallet_address:
+                user.cdp_wallet_address = wallet_address
+                await db.commit()
+
+                return CreateResponse(
+                    user_id=user_id,
+                    cdp_wallet_address=wallet_address,
+                    status="created",
+                    message="User and CDP wallet created successfully"
+                )
+            else:
+                return CreateResponse(
+                    user_id=user_id,
+                    cdp_wallet_address="",
+                    status="error",
+                    message="Wallet creation in progress, try again later"
+                )
+        else:
+            return CreateResponse(
+                user_id=user_id,
+                cdp_wallet_address="",
+                status="error",
+                message=wallet_result.get('error', 'Failed to create wallet')
+            )
+
+    except Exception as e:
+        logger.error(f"Error creating user {user_id}: {e}")
+        return CreateResponse(
+            user_id=user_id,
+            cdp_wallet_address="",
+            status="error",
+            message=str(e)
+        )
 
 
 @router.post("/{user_id}/activate", response_model=ActivateResponse)
@@ -35,19 +116,31 @@ async def activate_agent(
     Activate trading agent for user.
 
     This will:
-    1. Create user if not exists
-    2. Create CDP wallet if needed
-    3. Start the agent process
-    4. Enable automated trading based on strategy
+    1. Start the agent process
+    2. Enable automated trading based on strategy
+
+    Requires user to exist with CDP wallet (use /create first).
     """
     from app.services.agent_management_service import get_agent_service
 
     try:
-        # Get or create user
+        # Check user exists with wallet
         service = UserService(db)
         user = await service.get_user(user_id)
+
         if not user:
-            user = await service.create_user(user_id)
+            return ActivateResponse(
+                user_id=user_id,
+                status="error",
+                message="User not found. Please create user first with /create endpoint"
+            )
+
+        if not user.cdp_wallet_address:
+            return ActivateResponse(
+                user_id=user_id,
+                status="error",
+                message="User has no CDP wallet. Please create wallet first with /create endpoint"
+            )
 
         # Send activate command to agent manager
         agent_service = get_agent_service()
@@ -57,15 +150,10 @@ async def activate_agent(
         )
 
         if result.get('success'):
-            # Update user with CDP wallet if created
-            if result.get('wallet_address') and not user.cdp_wallet_address:
-                user.cdp_wallet_address = result['wallet_address']
-                await db.commit()
-
             return ActivateResponse(
                 user_id=user_id,
                 status="activated" if result.get('newly_activated') else "already_active",
-                cdp_wallet_address=result.get('wallet_address') or user.cdp_wallet_address,
+                cdp_wallet_address=user.cdp_wallet_address,
                 message=result.get('message', 'Agent activated successfully')
             )
         else:
