@@ -12,6 +12,7 @@ from sqlalchemy import select
 from app.core.moonwell_service import moonwell_service
 from app.core.blockchain_service import blockchain_service
 from app.core.positions_service import positions_service
+from app.core.pools_service import pools_service
 from app.database.models import User
 from app.schemas.users import (
     MoonwellStrategyResponse,
@@ -22,7 +23,8 @@ from app.schemas.users import (
     MoonwellBorrow,
     AerodromeLP,
     MonitoringInfo,
-    RangeBreakMonitoring
+    RangeBreakMonitoring,
+    RiskMetrics
 )
 
 
@@ -32,7 +34,8 @@ class MoonwellStrategyService:
     async def generate_strategy(
         self,
         user_id: str,
-        db: AsyncSession
+        db: AsyncSession,
+        pool_address: str = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59"  # Default to WETH/USDC pool
     ) -> MoonwellStrategyResponse:
         """
         Generate Moonwell-based delta-neutral strategy for user.
@@ -76,10 +79,40 @@ class MoonwellStrategyService:
                         logger.info(f"Position {position.nft_token_id} is out of range")
                         break
 
-            # Generate allocations based on balance
+            # Get pool data for better calculations
+            try:
+                pool_data = await pools_service.get_pool(pool_address)
+                pool_metrics = {
+                    'apr': pool_data.apr,
+                    'volume_24h': pool_data.volume_24h,
+                    'tvl_usd': pool_data.tvl_usd,
+                    'is_stable': pool_data.is_stable,
+                    'symbol': pool_data.symbol,
+                    'current_tick': pool_data.current_tick,
+                    'tick_spacing': pool_data.tick_spacing
+                }
+                logger.info(f"Using pool {pool_data.symbol} with APR {pool_data.apr:.2f}%")
+            except Exception as e:
+                logger.warning(f"Could not fetch pool data for {pool_address}: {e}")
+                pool_metrics = None
+
+            # Get current ETH price from pool data or default
+            weth_price = 4000  # Default
+            if pool_metrics:
+                # Calculate from pool price if available
+                try:
+                    # This would use the actual pool price calculation
+                    # For now, use default
+                    pass
+                except:
+                    pass
+
+            # Generate allocations based on balance and pool metrics
             allocations_dict = moonwell_service.calculate_hedge_position(
                 total_capital=float(balance),
-                weth_price=4000  # TODO: Get from price oracle
+                pool_address=pool_address,
+                pool_metrics=pool_metrics,
+                weth_price=weth_price
             )
 
             # Build response
@@ -110,10 +143,18 @@ class MoonwellStrategyService:
                         protocol="aerodrome",
                         pool=allocations_dict["aerodrome_lp"]["pool"],
                         amount_usdc=Decimal(str(allocations_dict["aerodrome_lp"]["amount_usdc"])),
-                        range_percentage=allocations_dict["aerodrome_lp"]["range_percentage"]
+                        range_percentage=allocations_dict["aerodrome_lp"]["range_percentage"],
+                        pool_address=allocations_dict["aerodrome_lp"]["pool_address"],
+                        effective_apr=Decimal(str(allocations_dict["aerodrome_lp"].get("effective_apr", 0)))
                     )
                 ),
-                monitoring=monitoring_info
+                monitoring=monitoring_info,
+                risk_metrics=RiskMetrics(
+                    ltv=allocations_dict["risk_metrics"]["ltv"],
+                    health_factor=allocations_dict["risk_metrics"]["health_factor"],
+                    suggested_range=allocations_dict["risk_metrics"]["suggested_range"],
+                    effective_apr=allocations_dict["risk_metrics"]["effective_apr"]
+                ) if "risk_metrics" in allocations_dict else None
             )
 
             logger.info(f"Generated {action} strategy for user {user_id}")

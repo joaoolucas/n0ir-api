@@ -2,6 +2,7 @@
 Core API endpoints for essential user operations.
 Handles user creation, activation, and strategy generation.
 """
+from typing import Optional
 from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -236,6 +237,7 @@ async def deactivate_agent(
 @router.post("/{user_id}/strategy", response_model=MoonwellStrategyResponse)
 async def get_moonwell_strategy(
     user_id: str,
+    pool_address: Optional[str] = None,
     db: AsyncSession = Depends(get_db)
 ) -> MoonwellStrategyResponse:
     """
@@ -256,9 +258,14 @@ async def get_moonwell_strategy(
     - Range break monitoring if positions are out of range
     """
     try:
+        # Use provided pool address or default to WETH/USDC
+        if not pool_address:
+            pool_address = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59"  # WETH/USDC pool
+
         strategy = await moonwell_strategy_service.generate_strategy(
             user_id=user_id,
-            db=db
+            db=db,
+            pool_address=pool_address
         )
 
         # Log strategy details

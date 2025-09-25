@@ -5,6 +5,7 @@ Manages collateral and borrow calculations for delta-neutral strategies.
 from typing import Dict, Optional
 from decimal import Decimal
 from loguru import logger
+from app.integrations.liquidity_manager import LiquidityManagerClient
 
 
 class MoonwellService:
@@ -12,6 +13,8 @@ class MoonwellService:
 
     def __init__(self):
         """Initialize Moonwell service."""
+        self.liquidity_manager = LiquidityManagerClient()
+
         # Moonwell markets on Base
         self.markets = {
             "mUSDC": {
@@ -41,39 +44,173 @@ class MoonwellService:
             "mWBTC": {"borrow_apy": 3.8}
         }
 
+    def calculate_optimal_range_from_pool_metrics(
+        self,
+        apr: float,
+        volume_24h: float,
+        tvl: float,
+        is_stable: bool = False
+    ) -> int:
+        """
+        Calculate optimal range percentage based on pool metrics.
+
+        Args:
+            apr: Pool's base APR
+            volume_24h: 24-hour volume in USD
+            tvl: Total value locked in USD
+            is_stable: Whether this is a stable pool
+
+        Returns:
+            Suggested range percentage (e.g., 5 for ±2.5%)
+        """
+        # Calculate volume/TVL ratio (turnover)
+        turnover = volume_24h / tvl if tvl > 0 else 0
+
+        # Stable pools should have very tight ranges
+        if is_stable:
+            return 2  # ±1% for stable pools
+
+        # High APR and high turnover: tighter range to capture more fees
+        if apr > 50 and turnover > 0.5:
+            return 5  # ±2.5%
+
+        # Medium APR or medium turnover: standard range
+        elif apr > 20 or turnover > 0.2:
+            return 10  # ±5%
+
+        # Low APR and low turnover: wider range for safety
+        else:
+            return 20  # ±10%
+
+    def calculate_effective_apr(
+        self,
+        base_apr: float,
+        range_percentage: int
+    ) -> float:
+        """
+        Calculate effective APR based on range width.
+        Narrower ranges capture more fees but have higher IL risk.
+
+        Args:
+            base_apr: Base APR of the pool
+            range_percentage: Range width as percentage
+
+        Returns:
+            Effective APR adjusted for range
+        """
+        # Range effectiveness multipliers
+        if range_percentage <= 5:
+            # Very narrow: 3x fees but higher IL risk
+            multiplier = 3.0
+        elif range_percentage <= 10:
+            # Standard: 2x fees, balanced risk
+            multiplier = 2.0
+        elif range_percentage <= 20:
+            # Wide: 1.5x fees, lower risk
+            multiplier = 1.5
+        else:
+            # Very wide: close to base APR
+            multiplier = 1.2
+
+        return base_apr * multiplier
+
+    def calculate_optimal_borrow_amount(
+        self,
+        total_capital: float,
+        target_lp_allocation: float,
+        max_ltv: float = 0.45
+    ) -> Dict:
+        """
+        Calculate optimal borrow amount based on target LP allocation.
+
+        Args:
+            total_capital: User's total USDC capital
+            target_lp_allocation: Target USDC amount for LP
+            max_ltv: Maximum safe loan-to-value ratio (default 45%)
+
+        Returns:
+            Dictionary with borrow calculations
+        """
+        # Maximum we can borrow based on LTV
+        max_borrow_usd = total_capital * max_ltv
+
+        # If target LP allocation is less than max borrow, use it
+        if target_lp_allocation <= max_borrow_usd:
+            borrow_amount = target_lp_allocation
+        else:
+            # Can't achieve target with safe LTV, use max safe amount
+            borrow_amount = max_borrow_usd
+            logger.warning(f"Target LP allocation {target_lp_allocation} exceeds safe borrow limit {max_borrow_usd}")
+
+        return {
+            "collateral_usdc": total_capital,
+            "borrow_usd": borrow_amount,
+            "actual_lp_allocation": borrow_amount * 0.995,  # Account for swap slippage
+            "ltv": borrow_amount / total_capital if total_capital > 0 else 0,
+            "health_factor": (total_capital * 0.75) / borrow_amount if borrow_amount > 0 else float('inf')
+        }
+
     def calculate_hedge_position(
         self,
         total_capital: float,
+        pool_address: str,
+        pool_metrics: Optional[Dict] = None,
         weth_price: float = 4000,
         wbtc_price: float = 100000
     ) -> Dict:
         """
-        Calculate optimal Moonwell hedge position.
+        Calculate optimal Moonwell hedge position using pool metrics.
 
         For Moonwell strategy:
-        1. Supply all capital as USDC collateral
-        2. Borrow WETH based on safe LTV (45%)
-        3. Swap borrowed WETH to USDC for Aerodrome LP
+        1. Determine optimal range based on pool metrics
+        2. Calculate optimal USDC allocation using liquidity manager
+        3. Supply all capital as USDC collateral
+        4. Borrow WETH based on safe LTV and optimal allocation
+        5. Swap borrowed WETH to USDC for Aerodrome LP
 
         Args:
             total_capital: Total USDC available
+            pool_address: Address of the target pool
+            pool_metrics: Pool metrics (APR, volume, TVL, etc.)
             weth_price: Current WETH price
             wbtc_price: Current WBTC price
 
         Returns:
-            Hedge position details
+            Hedge position details with optimal allocations
         """
+        # Calculate optimal range based on pool metrics
+        if pool_metrics:
+            suggested_range = self.calculate_optimal_range_from_pool_metrics(
+                apr=pool_metrics.get('apr', 20),
+                volume_24h=pool_metrics.get('volume_24h', 0),
+                tvl=pool_metrics.get('tvl_usd', 0),
+                is_stable=pool_metrics.get('is_stable', False)
+            )
+            effective_apr = self.calculate_effective_apr(
+                pool_metrics.get('apr', 20),
+                suggested_range
+            )
+        else:
+            suggested_range = 10  # Default to standard range
+            effective_apr = 40  # Default APR
+
+        # Calculate optimal USDC allocation
+        # For now, use the full amount we can safely borrow
+        # In production, this would call the liquidity manager contract
+        target_lp_allocation = total_capital * 0.45
+
+        # Calculate borrow amounts based on optimal allocation
+        borrow_calculations = self.calculate_optimal_borrow_amount(
+            total_capital=total_capital,
+            target_lp_allocation=target_lp_allocation,
+            max_ltv=0.45
+        )
+
         # All capital goes to Moonwell as collateral
         collateral_usdc = total_capital
 
-        # Calculate safe borrow amount (45% LTV for safety)
-        max_borrow_usd = collateral_usdc * 0.45
-
         # Calculate WETH to borrow
-        weth_to_borrow = max_borrow_usd / weth_price
-
-        # Expected USDC after swap (0.5% slippage)
-        expected_usdc_from_swap = max_borrow_usd * 0.995
+        weth_to_borrow = borrow_calculations['borrow_usd'] / weth_price
 
         return {
             "moonwell": {
@@ -85,15 +222,23 @@ class MoonwellService:
                 "borrow": {
                     "market": "mWETH",
                     "amount_weth": round(weth_to_borrow, 4),
-                    "amount_usd": max_borrow_usd,
+                    "amount_usd": borrow_calculations['borrow_usd'],
                     "post_borrow_action": "swap_to_usdc"
                 }
             },
             "aerodrome_lp": {
                 "protocol": "aerodrome",
-                "pool": "WETH-USDC",
-                "amount_usdc": expected_usdc_from_swap,
-                "range_percentage": 5
+                "pool": pool_metrics.get('symbol', 'WETH-USDC') if pool_metrics else "WETH-USDC",
+                "pool_address": pool_address,
+                "amount_usdc": borrow_calculations['actual_lp_allocation'],
+                "range_percentage": suggested_range,
+                "effective_apr": effective_apr
+            },
+            "risk_metrics": {
+                "ltv": borrow_calculations['ltv'],
+                "health_factor": borrow_calculations['health_factor'],
+                "suggested_range": suggested_range,
+                "effective_apr": effective_apr
             }
         }
 

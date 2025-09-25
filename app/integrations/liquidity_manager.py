@@ -64,6 +64,20 @@ class LiquidityManagerClient:
         return [
             {
                 "inputs": [
+                    {"internalType": "address", "name": "poolAddress", "type": "address"},
+                    {"internalType": "uint256", "name": "totalUSDC", "type": "uint256"},
+                    {"internalType": "uint256", "name": "rangePercentage", "type": "uint256"}
+                ],
+                "name": "calculateOptimalUsdcAllocation",
+                "outputs": [
+                    {"internalType": "uint256", "name": "usdc0", "type": "uint256"},
+                    {"internalType": "uint256", "name": "usdc1", "type": "uint256"}
+                ],
+                "stateMutability": "view",
+                "type": "function"
+            },
+            {
+                "inputs": [
                     {"internalType": "address", "name": "pool", "type": "address"},
                     {"internalType": "uint256", "name": "rangePercentage", "type": "uint256"},
                     {"internalType": "int24", "name": "tickLower", "type": "int24"},
@@ -282,21 +296,76 @@ class LiquidityManagerClient:
     ) -> Tuple[int, int]:
         """
         Calculate tick range based on percentage from current price.
-        
+
         Args:
             current_tick: Current tick of the pool
             range_percentage: Range as percentage * 100 (e.g., 500 = 5%)
             tick_spacing: Pool's tick spacing
-            
+
         Returns:
             Tuple of (tick_lower, tick_upper)
         """
         # Calculate tick delta for the given percentage
         # Each tick represents ~0.01% price change
         tick_delta = int(range_percentage)
-        
+
         # Align to tick spacing
         tick_lower = ((current_tick - tick_delta) // tick_spacing) * tick_spacing
         tick_upper = ((current_tick + tick_delta) // tick_spacing) * tick_spacing
-        
+
         return (tick_lower, tick_upper)
+
+    async def calculate_optimal_usdc_allocation(
+        self,
+        pool_address: str,
+        total_usdc: float,
+        range_percentage: int
+    ) -> Dict[str, float]:
+        """
+        Calculate optimal USDC allocation for a given pool and range.
+
+        Args:
+            pool_address: Address of the pool
+            total_usdc: Total USDC amount to allocate
+            range_percentage: Range percentage (e.g., 5 for 5%)
+
+        Returns:
+            Dictionary with usdc0 and usdc1 allocations
+        """
+        try:
+            contract = self._get_liquidity_manager()
+
+            # Convert USDC to wei (6 decimals)
+            total_usdc_wei = int(total_usdc * 10**6)
+
+            # Call the contract function
+            result = contract.functions.calculateOptimalUsdcAllocation(
+                Web3.to_checksum_address(pool_address),
+                total_usdc_wei,
+                range_percentage * 100  # Convert to basis points
+            ).call()
+
+            # Convert back from wei
+            usdc0 = result[0] / 10**6
+            usdc1 = result[1] / 10**6
+
+            logger.info(f"Optimal allocation for pool {pool_address}: "
+                       f"USDC0={usdc0:.2f}, USDC1={usdc1:.2f}, Range={range_percentage}%")
+
+            return {
+                "usdc0": usdc0,
+                "usdc1": usdc1,
+                "total": usdc0 + usdc1,
+                "ratio": usdc1 / (usdc0 + usdc1) if (usdc0 + usdc1) > 0 else 0.5
+            }
+
+        except Exception as e:
+            logger.error(f"Error calculating optimal allocation: {e}")
+            # Fallback to simple 50/50 split
+            half = total_usdc / 2
+            return {
+                "usdc0": half,
+                "usdc1": half,
+                "total": total_usdc,
+                "ratio": 0.5
+            }

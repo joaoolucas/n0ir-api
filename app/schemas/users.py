@@ -68,8 +68,10 @@ class AerodromeLP(BaseModel):
     """Aerodrome LP allocation details"""
     protocol: str = Field(default="aerodrome")
     pool: str = Field(..., description="Pool name (e.g., 'WETH-USDC')")
+    pool_address: Optional[str] = Field(None, description="Pool contract address")
     amount_usdc: Decimal = Field(..., description="Amount in USDC")
-    range_percentage: int = Field(..., description="Range percentage")
+    range_percentage: int = Field(..., description="Suggested range percentage based on pool metrics")
+    effective_apr: Optional[Decimal] = Field(None, description="Effective APR with range adjustment")
 
 
 class StrategyAllocations(BaseModel):
@@ -90,6 +92,14 @@ class RangeBreakMonitoring(BaseModel):
     suggested_action: str = Field(..., description="Suggested action")
 
 
+class RiskMetrics(BaseModel):
+    """Risk metrics for the strategy"""
+    ltv: float = Field(..., description="Current loan-to-value ratio")
+    health_factor: float = Field(..., description="Health factor (>1 is safe)")
+    suggested_range: int = Field(..., description="Suggested range percentage based on pool metrics")
+    effective_apr: float = Field(..., description="Effective APR with range adjustment")
+
+
 class MonitoringInfo(BaseModel):
     """Monitoring information"""
     range_break: Optional[RangeBreakMonitoring] = None
@@ -105,6 +115,7 @@ class MoonwellStrategyResponse(BaseModel):
     capital: CapitalInfo = Field(..., description="Capital information")
     allocations: StrategyAllocations = Field(..., description="Strategy allocations")
     monitoring: Optional[MonitoringInfo] = Field(None, description="Monitoring information")
+    risk_metrics: Optional[RiskMetrics] = Field(None, description="Risk metrics for the strategy")
 
 
 
