@@ -491,4 +491,5 @@ async def get_hedge_position(
                     "details": {"error": str(e)}
                 }
             }
+        )
 
