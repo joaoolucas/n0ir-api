@@ -61,7 +61,7 @@ class MoonwellService:
             is_stable: Whether this is a stable pool
 
         Returns:
-            Suggested range percentage (e.g., 5 for ±2.5%)
+            Suggested range percentage (e.g., 10 for ±5%)
         """
         # Calculate volume/TVL ratio (turnover)
         turnover = volume_24h / tvl if tvl > 0 else 0
@@ -70,17 +70,17 @@ class MoonwellService:
         if is_stable:
             return 2  # ±1% for stable pools
 
-        # High APR and high turnover: tighter range to capture more fees
+        # High APR and high turnover: moderately tight range to capture fees
         if apr > 50 and turnover > 0.5:
-            return 5  # ±2.5%
+            return 10  # ±5% (was 5%, too narrow for volatile pairs)
 
         # Medium APR or medium turnover: standard range
         elif apr > 20 or turnover > 0.2:
-            return 10  # ±5%
+            return 20  # ±10% (was 10%, increased for better stability)
 
         # Low APR and low turnover: wider range for safety
         else:
-            return 20  # ±10%
+            return 30  # ±15% (was 20%, increased for safety)
 
     def calculate_effective_apr(
         self,
@@ -98,16 +98,19 @@ class MoonwellService:
         Returns:
             Effective APR adjusted for range
         """
-        # Range effectiveness multipliers
+        # Range effectiveness multipliers (adjusted for wider ranges)
         if range_percentage <= 5:
-            # Very narrow: 3x fees but higher IL risk
-            multiplier = 3.0
+            # Very narrow: 4x fees but very high IL risk (rare for volatile pairs)
+            multiplier = 4.0
         elif range_percentage <= 10:
-            # Standard: 2x fees, balanced risk
-            multiplier = 2.0
+            # Tight: 2.5x fees, high concentration
+            multiplier = 2.5
         elif range_percentage <= 20:
-            # Wide: 1.5x fees, lower risk
-            multiplier = 1.5
+            # Standard: 1.8x fees, balanced risk
+            multiplier = 1.8
+        elif range_percentage <= 30:
+            # Wide: 1.4x fees, lower risk
+            multiplier = 1.4
         else:
             # Very wide: close to base APR
             multiplier = 1.2
@@ -191,7 +194,7 @@ class MoonwellService:
                 suggested_range
             )
         else:
-            suggested_range = 10  # Default to standard range
+            suggested_range = 20  # Default to 20% range (±10%) for volatile pairs
             effective_apr = 40  # Default APR
 
         # Calculate optimal USDC allocation
