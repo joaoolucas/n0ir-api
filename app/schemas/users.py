@@ -92,14 +92,6 @@ class RangeBreakMonitoring(BaseModel):
     suggested_action: str = Field(..., description="Suggested action")
 
 
-class RiskMetrics(BaseModel):
-    """Risk metrics for the strategy"""
-    ltv: float = Field(..., description="Current loan-to-value ratio")
-    health_factor: float = Field(..., description="Health factor (>1 is safe)")
-    suggested_range: int = Field(..., description="Suggested range percentage based on pool metrics")
-    effective_apr: float = Field(..., description="Effective APR with range adjustment")
-
-
 class MonitoringInfo(BaseModel):
     """Monitoring information"""
     range_break: Optional[RangeBreakMonitoring] = None
@@ -115,7 +107,6 @@ class MoonwellStrategyResponse(BaseModel):
     capital: CapitalInfo = Field(..., description="Capital information")
     allocations: StrategyAllocations = Field(..., description="Strategy allocations")
     monitoring: Optional[MonitoringInfo] = Field(None, description="Monitoring information")
-    risk_metrics: Optional[RiskMetrics] = Field(None, description="Risk metrics for the strategy")
 
 
 

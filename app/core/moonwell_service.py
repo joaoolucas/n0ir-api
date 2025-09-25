@@ -233,12 +233,6 @@ class MoonwellService:
                 "amount_usdc": borrow_calculations['actual_lp_allocation'],
                 "range_percentage": suggested_range,
                 "effective_apr": effective_apr
-            },
-            "risk_metrics": {
-                "ltv": borrow_calculations['ltv'],
-                "health_factor": borrow_calculations['health_factor'],
-                "suggested_range": suggested_range,
-                "effective_apr": effective_apr
             }
         }
 

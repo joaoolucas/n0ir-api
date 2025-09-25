@@ -23,8 +23,7 @@ from app.schemas.users import (
     MoonwellBorrow,
     AerodromeLP,
     MonitoringInfo,
-    RangeBreakMonitoring,
-    RiskMetrics
+    RangeBreakMonitoring
 )
 
 
@@ -148,13 +147,7 @@ class MoonwellStrategyService:
                         effective_apr=Decimal(str(allocations_dict["aerodrome_lp"].get("effective_apr", 0)))
                     )
                 ),
-                monitoring=monitoring_info,
-                risk_metrics=RiskMetrics(
-                    ltv=allocations_dict["risk_metrics"]["ltv"],
-                    health_factor=allocations_dict["risk_metrics"]["health_factor"],
-                    suggested_range=allocations_dict["risk_metrics"]["suggested_range"],
-                    effective_apr=allocations_dict["risk_metrics"]["effective_apr"]
-                ) if "risk_metrics" in allocations_dict else None
+                monitoring=monitoring_info
             )
 
             logger.info(f"Generated {action} strategy for user {user_id}")
