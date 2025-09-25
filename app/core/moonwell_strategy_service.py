@@ -81,16 +81,17 @@ class MoonwellStrategyService:
             # Get pool data for better calculations
             try:
                 pool_data = await pools_service.get_pool(pool_address)
+                # pool_data is a dict, not an object
                 pool_metrics = {
-                    'apr': pool_data.apr,
-                    'volume_24h': pool_data.volume_24h,
-                    'tvl_usd': pool_data.tvl_usd,
-                    'is_stable': pool_data.is_stable,
-                    'symbol': pool_data.symbol,
-                    'current_tick': pool_data.current_tick,
-                    'tick_spacing': pool_data.tick_spacing
+                    'apr': pool_data.get('apr', 20),
+                    'volume_24h': pool_data.get('volume_24h', 0),
+                    'tvl_usd': pool_data.get('tvl_usd', 0),
+                    'is_stable': pool_data.get('is_stable', False),
+                    'symbol': pool_data.get('symbol', 'WETH-USDC'),
+                    'current_tick': pool_data.get('current_tick', 0),
+                    'tick_spacing': pool_data.get('tick_spacing', 100)
                 }
-                logger.info(f"Using pool {pool_data.symbol} with APR {pool_data.apr:.2f}%")
+                logger.info(f"Using pool {pool_metrics['symbol']} with APR {pool_metrics['apr']:.2f}%")
             except Exception as e:
                 logger.warning(f"Could not fetch pool data for {pool_address}: {e}")
                 pool_metrics = None
