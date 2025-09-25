@@ -13,8 +13,7 @@ from app.schemas.hedge import (
     BorrowPosition,
     AccountLiquidity,
     AccountHealth,
-    PositionSummary,
-    MarketInfo
+    PositionSummary
 )
 
 
@@ -198,36 +197,6 @@ class HedgeService:
                 ),
                 timestamp=datetime.utcnow().isoformat() + "Z"
             )
-
-    async def get_market_info(self, market_key: str) -> MarketInfo:
-        """
-        Get market information for a specific Moonwell market.
-
-        Args:
-            market_key: Market identifier (e.g., 'mUSDC')
-
-        Returns:
-            Market information
-        """
-        try:
-            data = await moonwell_client.get_market_info(market_key)
-            if data:
-                return MarketInfo(
-                    market=data["market"],
-                    underlying_asset=data["underlying_asset"],
-                    total_supply=Decimal(str(data["total_supply"])),
-                    total_borrows=Decimal(str(data["total_borrows"])),
-                    available_liquidity=Decimal(str(data["available_liquidity"])),
-                    utilization=Decimal(str(data["utilization"])),
-                    supply_apy=Decimal(str(data["supply_apy"])),
-                    borrow_apy=Decimal(str(data["borrow_apy"])),
-                    exchange_rate=Decimal(str(data["exchange_rate"]))
-                )
-            else:
-                raise ValueError(f"Market {market_key} not found")
-        except Exception as e:
-            logger.error(f"Error getting market info for {market_key}: {e}")
-            raise
 
 
 # Singleton instance

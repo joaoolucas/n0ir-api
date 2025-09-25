@@ -66,16 +66,3 @@ class HedgePositionResponse(BaseModel):
 
     # Additional info
     timestamp: str = Field(..., description="Response timestamp")
-
-
-class MarketInfo(BaseModel):
-    """Information about a Moonwell market."""
-    market: str = Field(..., description="Market identifier")
-    underlying_asset: str = Field(..., description="Underlying asset symbol")
-    total_supply: Decimal = Field(..., description="Total supply in the market")
-    total_borrows: Decimal = Field(..., description="Total borrows in the market")
-    available_liquidity: Decimal = Field(..., description="Available liquidity to borrow")
-    utilization: Decimal = Field(..., description="Utilization rate percentage")
-    supply_apy: Decimal = Field(..., description="Current supply APY")
-    borrow_apy: Decimal = Field(..., description="Current borrow APY")
-    exchange_rate: Decimal = Field(..., description="Current exchange rate")

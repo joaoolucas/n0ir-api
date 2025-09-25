@@ -26,7 +26,7 @@ from app.schemas.positions import (
     HedgedPositionResponse
 )
 from app.schemas.common import ErrorResponse
-from app.schemas.hedge import HedgePositionResponse, MarketInfo
+from app.schemas.hedge import HedgePositionResponse
 
 # Import services
 from app.core.pools_service import pools_service
@@ -491,64 +491,4 @@ async def get_hedge_position(
                     "details": {"error": str(e)}
                 }
             }
-        )
-
-
-@router.get(
-    "/hedge/market/{market}",
-    response_model=MarketInfo,
-    responses={
-        404: {"model": ErrorResponse, "description": "Market not found"},
-        500: {"model": ErrorResponse, "description": "Internal Server Error"}
-    }
-)
-async def get_hedge_market_info(
-    request: Request,
-    market: str = Path(..., description="Market identifier (e.g., 'mUSDC', 'mWETH', 'mcbBTC')")
-):
-    """
-    Get information about a specific Moonwell market.
-
-    Returns market data including:
-    - Total supply and borrows
-    - Available liquidity
-    - Utilization rate
-    - Current APYs for supply and borrow
-    - Exchange rate
-
-    Available markets:
-    - mUSDC: Moonwell USDC market
-    - mWETH: Moonwell WETH market
-    - mcbBTC: Moonwell cbBTC market
-    """
-    logger.info(f"GET /hedge/market/{market} - IP: {request.client.host}")
-    try:
-        market_info = await hedge_service.get_market_info(market)
-        logger.info(f"Successfully fetched market info for {market}")
-        return market_info
-
-    except ValueError as e:
-        logger.warning(f"Market not found: {market}")
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": {
-                    "code": "MARKET_NOT_FOUND",
-                    "message": str(e),
-                    "details": {}
-                }
-            }
-        )
-    except Exception as e:
-        logger.error(f"Error fetching market info for {market}: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": {
-                    "code": "INTERNAL_ERROR",
-                    "message": "Failed to fetch market information",
-                    "details": {"error": str(e)}
-                }
-            }
-        )
 
