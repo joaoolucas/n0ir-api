@@ -1,4 +1,9 @@
-"""Perpetuals (Perps) schemas for short positions."""
+"""
+[DEPRECATED] Perpetuals (Perps) schemas for short positions.
+
+NOTE: These schemas are deprecated. The system has transitioned to Moonwell borrow-based hedging.
+Kept for backward compatibility only. Use MoonwellHedge schemas instead.
+"""
 
 from typing import Optional, List
 from pydantic import BaseModel, Field

@@ -434,6 +434,8 @@ async def get_token_info(
 @router.get(
     "/perps/{address}",
     response_model=PerpsPositionListResponse,
+    deprecated=True,
+    summary="[DEPRECATED] Get perps positions - use Moonwell hedging instead",
     responses={
         400: {"model": ErrorResponse, "description": "Invalid address format"},
         404: {"model": ErrorResponse, "description": "No positions found"},
@@ -445,7 +447,10 @@ async def get_perps_positions(
     address: str = Path(..., description="Wallet address", pattern="^0x[a-fA-F0-9]{40}$")
 ):
     """
-    Get perpetual futures positions for a wallet address.
+    [DEPRECATED] Get perpetual futures positions for a wallet address.
+
+    **NOTE: This endpoint is deprecated. The system has transitioned to Moonwell borrow-based hedging.**
+    Kept for backward compatibility only.
 
     Returns all open perpetual positions (shorts and longs) from Avantis,
     including real-time P&L calculated using current market prices.

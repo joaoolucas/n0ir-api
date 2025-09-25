@@ -1,20 +1,15 @@
 """
 Core API endpoints for essential user operations.
-Handles user creation, withdrawals, and strategy generation.
+Handles user creation and activation.
 """
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Optional
-import asyncio
 from decimal import Decimal
+from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 
 from app.database.session import get_db
 from app.services.user_service import UserService
-from app.core.delta_neutral_service import delta_neutral_service
 from app.schemas.users import (
-    DeltaNeutralStrategyRequest,
-    DeltaNeutralStrategyResponse,
     CreateResponse,
     ActivateResponse,
     DeactivateResponse
@@ -235,82 +230,3 @@ async def deactivate_agent(
             message=str(e)
         )
 
-
-@router.post("/{user_id}/strategy", response_model=DeltaNeutralStrategyResponse)
-async def get_delta_neutral_strategy(
-    user_id: str,
-    db: AsyncSession = Depends(get_db)
-) -> DeltaNeutralStrategyResponse:
-    """
-    Generate delta-neutral strategy recommendations for a user.
-
-    This unified endpoint handles both scenarios:
-
-    1. **Initial Strategy Generation** (no positions or all in range):
-       - Returns LP allocations and hedge recommendations
-       - Allocates capital based on balance thresholds
-
-    2. **Range Break Monitoring** (positions out of range):
-       - Detects out-of-range positions automatically
-       - Returns action recommendations (close_and_reopen, wait, adjust_hedge)
-       - Provides new allocations if rebalancing is needed
-
-    Strategy rules:
-    - < $2k: Single position (WETH/USDC) + hedge
-    - >= $2k: Two positions (WETH priority + cbBTC for stability)
-    - 90% to LP, 10% to 5x leveraged short for delta neutrality
-    - Automatically handles range breaks with GPT-5 Nano decisions
-
-    The agent manager can call this single endpoint for all strategy needs.
-    """
-    try:
-        # This unified method handles both initial strategy and monitoring
-        strategy = await delta_neutral_service.analyze_user_portfolio(
-            user_id=user_id,
-            db=db
-        )
-
-        # Log the complete strategy response for debugging
-        logger.info(f"Strategy response for {user_id}:")
-        logger.info(f"  Action: {strategy.action}")
-        logger.info(f"  Notes: {strategy.notes}")
-        logger.info(f"  Total capital to deploy: ${strategy.total_capital_deployed}")
-        logger.info(f"  Remaining balance: ${strategy.remaining_balance}")
-
-        # Log LP allocations
-        if strategy.lp_allocations:
-            logger.info(f"  LP Allocations ({len(strategy.lp_allocations)}):")
-            total_lp = 0
-            for lp in strategy.lp_allocations:
-                logger.info(f"    - {lp.pair}: ${lp.amount_usd} (range: {lp.range_pct}%)")
-                total_lp += float(lp.amount_usd)
-            logger.info(f"    Total LP: ${total_lp}")
-
-        # Log hedges
-        if strategy.hedges:
-            logger.info(f"  Hedges ({len(strategy.hedges)}):")
-            total_hedge = 0
-            for hedge in strategy.hedges:
-                logger.info(f"    - {hedge.asset} {hedge.side}: ${hedge.collateral_usd} (leverage: {hedge.leverage}x)")
-                total_hedge += float(hedge.collateral_usd)
-            logger.info(f"    Total Hedge: ${total_hedge}")
-        else:
-            logger.warning(f"  ⚠️ No hedges in strategy response!")
-
-        # Log position info if present
-        if strategy.current_positions:
-            logger.info(f"  Current positions: {len(strategy.current_positions)}")
-        if strategy.out_of_range_positions:
-            logger.info(f"  Out of range positions: {strategy.out_of_range_positions}")
-
-        return strategy
-
-    except ValueError as e:
-        # User not found or no CDP wallet
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error generating strategy for user {user_id}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to generate strategy: {str(e)}"
-        )

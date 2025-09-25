@@ -1,4 +1,9 @@
-"""Service for managing perpetual futures (perps) positions."""
+"""
+[DEPRECATED] Service for managing perpetual futures (perps) positions.
+
+NOTE: This service is deprecated. The system has transitioned to Moonwell borrow-based hedging.
+Kept for backward compatibility only. Use MoonwellService instead.
+"""
 
 from typing import List, Dict, Any, Optional
 from avantis_trader_sdk import TraderClient, FeedClient

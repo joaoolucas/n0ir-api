@@ -42,48 +42,6 @@ class TimePeriod(str, enum.Enum):
     ALL_TIME = "all"
 
 
-# Delta-Neutral Strategy Models
-class LPAllocation(BaseModel):
-    """LP position allocation details"""
-    pair: str = Field(..., description="Trading pair (e.g., 'WETH/USDC')")
-    amount_usd: Decimal = Field(..., description="Amount to allocate in USD")
-    range_pct: float = Field(..., description="Range percentage around current price")
-    pool_address: Optional[str] = Field(None, description="Pool contract address")
-
-class Hedge(BaseModel):
-    """Hedge position details for delta neutrality"""
-    asset: str = Field(..., description="Asset to hedge (e.g., 'ETH', 'BTC')")
-    side: str = Field(..., description="Position side (typically 'short')")
-    collateral_usd: Decimal = Field(..., description="Collateral amount in USD")
-    leverage: int = Field(..., description="Leverage multiplier")
-    notional_exposure_usd: Decimal = Field(..., description="Total notional exposure")
-
-class DeltaNeutralStrategyRequest(BaseModel):
-    """Request for delta-neutral strategy - takes user_id from path"""
-    pass  # Empty body, user_id is path parameter
-
-class DeltaNeutralStrategyResponse(BaseModel):
-    """Unified delta-neutral strategy response handling both initial and monitoring scenarios"""
-
-    # Core strategy fields (always present)
-    action: str = Field(..., description="Primary action: 'initial_allocation', 'close_and_reopen', 'wait', 'adjust_hedge', 'maintain'")
-    notes: str = Field(..., description="Strategy reasoning and notes from GPT-5 Nano")
-
-    # Allocation fields (populated for initial or reopen actions)
-    lp_allocations: List[LPAllocation] = Field(default_factory=list, description="LP position allocations")
-    hedges: List[Hedge] = Field(default_factory=list, description="Hedge positions for delta neutrality")
-
-    # Capital management
-    total_capital_deployed: Decimal = Field(..., description="Total capital to be deployed")
-    remaining_balance: Decimal = Field(..., description="Remaining balance after allocations")
-
-    # Position monitoring (populated when positions exist)
-    current_positions: Optional[List[Dict[str, Any]]] = Field(None, description="Current user positions with status")
-    out_of_range_positions: Optional[List[int]] = Field(None, description="Token IDs of positions out of range")
-
-    # Range break specific (populated when action is not 'initial_allocation')
-    position_id: Optional[int] = Field(None, description="Primary position being acted upon (for range breaks)")
-    reason: Optional[str] = Field(None, description="Detailed reasoning for range break action")
 
 
 # Request Models
