@@ -25,16 +25,11 @@ from app.schemas.positions import (
     HedgedPositionCreate,
     HedgedPositionResponse
 )
-from app.schemas.perps import (
-    PerpsPositionListResponse,
-    PerpsErrorResponse
-)
 from app.schemas.common import ErrorResponse
 
 # Import services
 from app.core.pools_service import pools_service
 from app.core.positions_service import positions_service
-from app.core.perps_service import perps_service
 from app.core.logger import logger
 from app.database.session import get_db
 from app.database.models import Position
@@ -427,75 +422,3 @@ async def get_token_info(
         )
 
 
-# ============================================================================
-# PERPS ENDPOINTS
-# ============================================================================
-
-@router.get(
-    "/perps/{address}",
-    response_model=PerpsPositionListResponse,
-    deprecated=True,
-    summary="[DEPRECATED] Get perps positions - use Moonwell hedging instead",
-    responses={
-        400: {"model": ErrorResponse, "description": "Invalid address format"},
-        404: {"model": ErrorResponse, "description": "No positions found"},
-        500: {"model": ErrorResponse, "description": "Internal Server Error"}
-    }
-)
-async def get_perps_positions(
-    request: Request,
-    address: str = Path(..., description="Wallet address", pattern="^0x[a-fA-F0-9]{40}$")
-):
-    """
-    [DEPRECATED] Get perpetual futures positions for a wallet address.
-
-    **NOTE: This endpoint is deprecated. The system has transitioned to Moonwell borrow-based hedging.**
-    Kept for backward compatibility only.
-
-    Returns all open perpetual positions (shorts and longs) from Avantis,
-    including real-time P&L calculated using current market prices.
-
-    **Response includes:**
-    - List of all open positions with details
-    - Real-time P&L for each position
-    - Aggregate statistics (total collateral, notional, P&L)
-    - Breakdown by position type (shorts vs longs)
-    """
-    logger.info(f"GET /perps/{address} - IP: {request.client.host}")
-
-    try:
-        # Fetch positions from Avantis
-        result = await perps_service.get_positions_by_wallet(address)
-
-        if result.total_positions == 0:
-            logger.info(f"No perps positions found for address: {address}")
-        else:
-            logger.info(f"Successfully fetched {result.total_positions} perps positions for {address}")
-            logger.info(f"Shorts: {result.short_positions_count}, Longs: {result.long_positions_count}")
-
-        return result
-
-    except ValueError as e:
-        logger.warning(f"Error fetching perps for {address}: {str(e)}")
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": {
-                    "code": "INVALID_REQUEST",
-                    "message": str(e),
-                    "details": {"address": address}
-                }
-            }
-        )
-    except Exception as e:
-        logger.error(f"Error fetching perps positions for {address}: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": {
-                    "code": "INTERNAL_ERROR",
-                    "message": "Failed to fetch perpetual positions",
-                    "details": {"error": str(e)}
-                }
-            }
-        )
