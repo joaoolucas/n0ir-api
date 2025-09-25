@@ -42,6 +42,71 @@ class TimePeriod(str, enum.Enum):
     ALL_TIME = "all"
 
 
+# Moonwell Strategy Models
+class MoonwellCollateral(BaseModel):
+    """Moonwell collateral details"""
+    market: str = Field(..., description="Market name (e.g., 'mUSDC')")
+    amount_usdc: Decimal = Field(..., description="Amount in USDC")
+
+
+class MoonwellBorrow(BaseModel):
+    """Moonwell borrow details"""
+    market: str = Field(..., description="Market name (e.g., 'mWETH')")
+    amount_weth: Optional[Decimal] = Field(None, description="Amount in WETH")
+    amount_usd: Decimal = Field(..., description="USD value")
+    post_borrow_action: str = Field(..., description="Action after borrowing")
+
+
+class MoonwellAllocation(BaseModel):
+    """Moonwell allocation details"""
+    protocol: str = Field(default="moonwell")
+    collateral: MoonwellCollateral
+    borrow: MoonwellBorrow
+
+
+class AerodromeLP(BaseModel):
+    """Aerodrome LP allocation details"""
+    protocol: str = Field(default="aerodrome")
+    pool: str = Field(..., description="Pool name (e.g., 'WETH-USDC')")
+    amount_usdc: Decimal = Field(..., description="Amount in USDC")
+    range_percentage: int = Field(..., description="Range percentage")
+
+
+class StrategyAllocations(BaseModel):
+    """Strategy allocations"""
+    moonwell: MoonwellAllocation
+    aerodrome_lp: AerodromeLP
+
+
+class CapitalInfo(BaseModel):
+    """Capital information"""
+    total_usd: Decimal = Field(..., description="Total capital in USD")
+    base_asset: str = Field(default="USDC", description="Base asset")
+
+
+class RangeBreakMonitoring(BaseModel):
+    """Range break monitoring info"""
+    trigger: str = Field(..., description="Trigger condition")
+    suggested_action: str = Field(..., description="Suggested action")
+
+
+class MonitoringInfo(BaseModel):
+    """Monitoring information"""
+    range_break: Optional[RangeBreakMonitoring] = None
+
+
+class MoonwellStrategyResponse(BaseModel):
+    """Moonwell-based delta-neutral strategy response"""
+    user_id: str = Field(..., description="User ID")
+    strategy_type: str = Field(default="delta_neutral", description="Strategy type")
+    timestamp: str = Field(..., description="ISO timestamp")
+    action: str = Field(..., description="Action: 'open', 'close', 'rebalance'")
+
+    capital: CapitalInfo = Field(..., description="Capital information")
+    allocations: StrategyAllocations = Field(..., description="Strategy allocations")
+    monitoring: Optional[MonitoringInfo] = Field(None, description="Monitoring information")
+
+
 
 
 # Request Models

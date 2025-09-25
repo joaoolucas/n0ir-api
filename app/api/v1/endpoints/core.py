@@ -1,18 +1,20 @@
 """
 Core API endpoints for essential user operations.
-Handles user creation and activation.
+Handles user creation, activation, and strategy generation.
 """
 from decimal import Decimal
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 
 from app.database.session import get_db
 from app.services.user_service import UserService
+from app.core.moonwell_strategy_service import moonwell_strategy_service
 from app.schemas.users import (
     CreateResponse,
     ActivateResponse,
-    DeactivateResponse
+    DeactivateResponse,
+    MoonwellStrategyResponse
 )
 from app.database.models import User
 
@@ -228,5 +230,57 @@ async def deactivate_agent(
             user_id=user_id,
             status="error",
             message=str(e)
+        )
+
+
+@router.post("/{user_id}/strategy", response_model=MoonwellStrategyResponse)
+async def get_moonwell_strategy(
+    user_id: str,
+    db: AsyncSession = Depends(get_db)
+) -> MoonwellStrategyResponse:
+    """
+    Generate Moonwell-based delta-neutral strategy for a user.
+
+    This endpoint generates a strategy that:
+    1. Uses all capital as collateral in Moonwell (mUSDC)
+    2. Borrows WETH at safe 45% LTV
+    3. Swaps borrowed WETH to USDC for Aerodrome LP
+    4. Monitors for range breaks in existing positions
+
+    The strategy is non-custodial - user's wallet manages the Moonwell position directly.
+
+    Returns:
+    - Capital allocation details
+    - Moonwell collateral and borrow positions
+    - Aerodrome LP allocation
+    - Range break monitoring if positions are out of range
+    """
+    try:
+        strategy = await moonwell_strategy_service.generate_strategy(
+            user_id=user_id,
+            db=db
+        )
+
+        # Log strategy details
+        logger.info(f"Strategy for user {user_id}:")
+        logger.info(f"  Action: {strategy.action}")
+        logger.info(f"  Total capital: ${strategy.capital.total_usd}")
+        logger.info(f"  Moonwell collateral: ${strategy.allocations.moonwell.collateral.amount_usdc}")
+        logger.info(f"  Moonwell borrow: {strategy.allocations.moonwell.borrow.amount_weth} WETH")
+        logger.info(f"  Aerodrome LP: ${strategy.allocations.aerodrome_lp.amount_usdc}")
+
+        if strategy.monitoring and strategy.monitoring.range_break:
+            logger.warning(f"  ⚠️ Range break detected: {strategy.monitoring.range_break.trigger}")
+
+        return strategy
+
+    except ValueError as e:
+        # User not found or no CDP wallet
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error generating strategy for user {user_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate strategy: {str(e)}"
         )
 
