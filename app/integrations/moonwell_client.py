@@ -18,23 +18,21 @@ class MoonwellClient:
     COMPTROLLER_ADDRESS = "0xfBb21d0380beE3312B33c4353c8936a0F13EF26C"
 
     # Market addresses
+    # All mTokens have 8 decimals regardless of underlying
     MARKETS = {
         "mUSDC": {
             "address": "0xEdc817A28E8B93B03976FBd4a3dDBc9f7D176c22",
             "underlying": "USDC",
-            "decimals": 6,
             "underlying_decimals": 6
         },
         "mWETH": {
             "address": "0x628ff693426583D9a7FB391E54366292F509D457",
             "underlying": "WETH",
-            "decimals": 8,
             "underlying_decimals": 18
         },
         "mcbBTC": {
             "address": "0xF877ACaFA28c19b96727966690b2f44d35aD5976",
             "underlying": "cbBTC",
-            "decimals": 8,
             "underlying_decimals": 8
         }
     }
@@ -227,10 +225,16 @@ class MoonwellClient:
             # Get exchange rate (stored version for view calls)
             exchange_rate = mtoken.functions.exchangeRateStored().call()
 
-            # Calculate underlying balance
-            # mToken has 8 decimals, underlying varies
-            # Exchange rate is scaled by 1e18
-            underlying_balance = (mtoken_balance * exchange_rate) / (10 ** (18 + market_info["decimals"]))
+            # Calculate underlying balance using Compound V2 formula
+            # exchangeRate is stored with 18 decimals of precision
+            # Formula: underlyingBalance = (mTokenBalance * exchangeRate) / (10^18)
+            # Then convert from raw underlying units to human readable
+
+            # Get underlying amount in raw units
+            underlying_balance_raw = (mtoken_balance * exchange_rate) // (10 ** 18)
+
+            # Convert to human readable
+            underlying_balance = underlying_balance_raw / (10 ** market_info["underlying_decimals"])
 
             # Get supply rate (per timestamp/second)
             supply_rate = mtoken.functions.supplyRatePerTimestamp().call()
@@ -238,12 +242,16 @@ class MoonwellClient:
             seconds_per_year = 365 * 24 * 60 * 60
             supply_apy = ((1 + supply_rate / 1e18) ** seconds_per_year - 1) * 100
 
+            # Calculate human-readable exchange rate (underlying per 1 whole mToken)
+            # Since mTokens have 8 decimals, 1 whole mToken = 10^8 raw units
+            exchange_rate_human = (exchange_rate * 10**8 / 10**18) / (10 ** market_info["underlying_decimals"])
+
             return {
                 "market": market_key,
                 "underlying_asset": market_info["underlying"],
-                "mtoken_balance": mtoken_balance / (10 ** market_info["decimals"]),
-                "exchange_rate": exchange_rate / 1e18,
-                "underlying_balance": underlying_balance / (10 ** market_info["underlying_decimals"]),
+                "mtoken_balance": mtoken_balance / (10 ** 8),  # mTokens always have 8 decimals
+                "exchange_rate": exchange_rate_human,  # Underlying per 1 mToken
+                "underlying_balance": underlying_balance,  # Human readable underlying balance
                 "underlying_balance_usd": 0,  # Will be calculated with prices
                 "supply_apy": round(supply_apy, 2)
             }
@@ -348,19 +356,26 @@ class MoonwellClient:
             borrow_apy = ((1 + borrow_rate / 1e18) ** seconds_per_year - 1) * 100
 
             # Calculate utilization
-            total_supply_underlying = (total_supply * exchange_rate) / (10 ** (18 + market_info["decimals"]))
-            utilization = (total_borrows / total_supply_underlying * 100) if total_supply_underlying > 0 else 0
+            # Get total supply in underlying units
+            total_supply_underlying_raw = (total_supply * exchange_rate) // (10 ** 18)
+            total_supply_underlying = total_supply_underlying_raw / (10 ** market_info["underlying_decimals"])
+            total_borrows_human = total_borrows / (10 ** market_info["underlying_decimals"])
+            utilization = (total_borrows_human / total_supply_underlying * 100) if total_supply_underlying > 0 else 0
+
+            # Calculate human-readable exchange rate
+            exchange_rate_human = (exchange_rate * 10**8 / 10**18) / (10 ** market_info["underlying_decimals"])
 
             return {
                 "market": market_key,
                 "underlying_asset": market_info["underlying"],
-                "total_supply": total_supply / (10 ** market_info["decimals"]),
-                "total_borrows": total_borrows / (10 ** market_info["underlying_decimals"]),
+                "total_supply": total_supply / (10 ** 8),  # mTokens in human readable
+                "total_supply_underlying": total_supply_underlying,  # Underlying amount
+                "total_borrows": total_borrows_human,
                 "available_liquidity": cash / (10 ** market_info["underlying_decimals"]),
                 "utilization": round(utilization, 2),
                 "supply_apy": round(supply_apy, 2),
                 "borrow_apy": round(borrow_apy, 2),
-                "exchange_rate": exchange_rate / 1e18
+                "exchange_rate": exchange_rate_human  # Human readable exchange rate
             }
         except Exception as e:
             logger.error(f"Error fetching market info for {market_key}: {e}")
