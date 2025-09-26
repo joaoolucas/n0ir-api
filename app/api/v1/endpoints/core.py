@@ -55,7 +55,12 @@ async def create_user(
 
         # Create user if not exists
         if not user:
-            user = await service.create_user(user_id)
+            # Create user with placeholder CDP wallet info (will be updated after wallet creation)
+            user = await service.create_user(
+                user_id=user_id,
+                cdp_wallet_address=None,  # Will be set after wallet creation
+                cdp_wallet_name=f"wallet_{user_id}"  # Default wallet name
+            )
 
         # Create CDP wallet through agent manager
         agent_service = get_agent_service()
