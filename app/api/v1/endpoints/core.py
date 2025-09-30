@@ -11,6 +11,7 @@ from loguru import logger
 from app.database.session import get_db
 from app.services.user_service import UserService
 from app.core.moonwell_strategy_service import moonwell_strategy_service
+from app.core.vault_strategy_service import vault_strategy_service
 from app.schemas.users import (
     CreateResponse,
     ActivateResponse,
@@ -240,26 +241,28 @@ async def deactivate_agent(
 
 
 @router.post("/{user_id}/strategy", response_model=MoonwellStrategyResponse)
-async def get_moonwell_strategy(
+async def get_vault_strategy(
     user_id: str,
     pool_address: Optional[str] = None,
     db: AsyncSession = Depends(get_db)
 ) -> MoonwellStrategyResponse:
     """
-    Generate Moonwell-based delta-neutral strategy for a user.
+    Generate vault-based delta-neutral strategy for a user.
 
     This endpoint generates a strategy that:
-    1. Uses all capital as collateral in Moonwell (mUSDC)
-    2. Borrows WETH at safe 45% LTV
-    3. Swaps borrowed WETH to USDC for Aerodrome LP
-    4. Monitors for range breaks in existing positions
+    1. Calculates optimal USDC allocation between collateral and LP
+    2. Simulates hedge positions to find near-perfect delta neutrality
+    3. Uses Aave for collateral and borrowing (via vault contract)
+    4. Returns strategy with predicted health factor and liquidation price
 
-    The strategy is non-custodial - user's wallet manages the Moonwell position directly.
+    The strategy uses the vault contract's simulateHedge function to test
+    multiple parameter combinations and find the optimal delta-neutral position.
 
     Returns:
     - Capital allocation details
-    - Moonwell collateral and borrow positions
+    - Vault collateral and hedge positions with simulation results
     - Aerodrome LP allocation
+    - Delta-neutral score and risk metrics
     - Range break monitoring if positions are out of range
     """
     try:
@@ -267,18 +270,21 @@ async def get_moonwell_strategy(
         if not pool_address:
             pool_address = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59"  # WETH/USDC pool
 
-        strategy = await moonwell_strategy_service.generate_strategy(
+        strategy = await vault_strategy_service.generate_strategy(
             user_id=user_id,
             db=db,
             pool_address=pool_address
         )
 
         # Log strategy details
-        logger.info(f"Strategy for user {user_id}:")
+        logger.info(f"Vault strategy for user {user_id}:")
         logger.info(f"  Action: {strategy.action}")
         logger.info(f"  Total capital: ${strategy.capital.total_usd}")
-        logger.info(f"  Moonwell collateral: ${strategy.allocations.moonwell.collateral.amount_usdc}")
-        logger.info(f"  Moonwell borrow: {strategy.allocations.moonwell.borrow.amount_weth} WETH")
+        if strategy.allocations.vault:
+            logger.info(f"  Collateral: ${strategy.allocations.vault.simulation.collateral_amount}")
+            logger.info(f"  Borrow: ${strategy.allocations.vault.simulation.borrow_amount_usd}")
+            logger.info(f"  Delta-neutral score: {strategy.allocations.vault.simulation.delta_neutral_score:.4f}")
+            logger.info(f"  Health factor: {strategy.allocations.vault.simulation.expected_health_factor:.2f}")
         logger.info(f"  Aerodrome LP: ${strategy.allocations.aerodrome_lp.amount_usdc}")
 
         if strategy.monitoring and strategy.monitoring.range_break:

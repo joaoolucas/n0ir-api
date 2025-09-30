@@ -1,68 +1,49 @@
 """
-Schemas for Moonwell hedge positions and account health.
+Schemas for vault hedge positions and account health.
 """
 from typing import List, Optional
 from decimal import Decimal
 from pydantic import BaseModel, Field
 
 
-class SupplyPosition(BaseModel):
-    """Supply position in a Moonwell market."""
-    market: str = Field(..., description="Market identifier (e.g., 'mUSDC')")
-    underlying_asset: str = Field(..., description="Underlying asset symbol (e.g., 'USDC')")
-    mtoken_balance: Decimal = Field(..., description="Amount of mTokens held")
-    exchange_rate: Decimal = Field(..., description="Current exchange rate")
-    underlying_balance: Decimal = Field(..., description="Underlying balance with accrued interest")
-    underlying_balance_usd: Decimal = Field(..., description="USD value of underlying balance")
-    supply_apy: Decimal = Field(..., description="Current supply APY")
+class VaultPositionInfo(BaseModel):
+    """Vault position hedge information."""
+    token_id: int = Field(..., description="NFT token ID")
+    collateral_usdc: Decimal = Field(..., description="Collateral amount in USDC")
+    debt_amount: Decimal = Field(..., description="Debt amount in asset terms")
+    debt_usd: Decimal = Field(..., description="Debt value in USD")
+    hedged_asset: str = Field(..., description="Asset being hedged (address)")
+    hedged_asset_symbol: str = Field(..., description="Asset symbol (e.g., WETH, cbBTC)")
+    is_hedged: bool = Field(..., description="Whether position has an active hedge")
+    exposure_usd: Optional[Decimal] = Field(None, description="LP exposure to the hedged asset in USD")
+    net_delta_usd: Optional[Decimal] = Field(None, description="Net delta (debt - exposure)")
 
 
-class BorrowPosition(BaseModel):
-    """Borrow position in a Moonwell market."""
-    market: str = Field(..., description="Market identifier (e.g., 'mWETH')")
-    underlying_asset: str = Field(..., description="Underlying asset symbol (e.g., 'WETH')")
-    borrow_balance: Decimal = Field(..., description="Current borrow balance with accrued interest")
-    borrow_balance_usd: Decimal = Field(..., description="USD value of borrow balance")
-    borrow_apy: Decimal = Field(..., description="Current borrow APY")
-
-
-class AccountLiquidity(BaseModel):
-    """Account liquidity and health information."""
-    available_to_borrow_usd: Decimal = Field(..., description="Amount available to borrow in USD")
-    shortfall_usd: Decimal = Field(..., description="Shortfall amount if underwater (0 if healthy)")
-    is_liquidatable: bool = Field(..., description="Whether account is subject to liquidation")
-
-
-class AccountHealth(BaseModel):
-    """Account health metrics."""
-    health_factor: Decimal = Field(..., description="Health factor (>1 is safe, <1 is liquidatable)")
-    ltv: Decimal = Field(..., description="Current loan-to-value ratio")
-    max_ltv: Decimal = Field(..., description="Maximum allowed loan-to-value ratio")
-    liquidation_threshold: Decimal = Field(..., description="LTV at which liquidation occurs")
-
-
-class PositionSummary(BaseModel):
-    """Summary of all positions."""
-    total_supply_usd: Decimal = Field(..., description="Total USD value of supplied assets")
-    total_borrow_usd: Decimal = Field(..., description="Total USD value of borrowed assets")
-    net_value_usd: Decimal = Field(..., description="Net position value (supply - borrow)")
-    net_apy: Decimal = Field(..., description="Net APY considering supplies and borrows")
+class GlobalHealthMetrics(BaseModel):
+    """Global health metrics for all vault positions."""
+    total_collateral_usd: Decimal = Field(..., description="Total collateral across all positions")
+    total_debt_weth: Decimal = Field(..., description="Total WETH debt")
+    total_debt_btc: Decimal = Field(..., description="Total BTC debt")
+    health_factor: Decimal = Field(..., description="Protocol-wide health factor")
+    available_borrows_usd: Decimal = Field(..., description="Available borrowing capacity in USD")
+    is_at_risk: bool = Field(..., description="Whether protocol is at risk")
 
 
 class HedgePositionResponse(BaseModel):
-    """Complete hedge position response."""
+    """Complete hedge position response from vault contract."""
     wallet: str = Field(..., description="Wallet address")
 
     # Positions
-    supply_positions: List[SupplyPosition] = Field(..., description="List of supply positions")
-    borrow_positions: List[BorrowPosition] = Field(..., description="List of borrow positions")
+    positions: List[VaultPositionInfo] = Field(default=[], description="List of hedged positions")
+
+    # Global metrics
+    global_health: GlobalHealthMetrics = Field(..., description="Protocol-wide health metrics")
 
     # Summary
-    summary: PositionSummary = Field(..., description="Position summary")
-
-    # Health metrics
-    liquidity: AccountLiquidity = Field(..., description="Account liquidity information")
-    health: AccountHealth = Field(..., description="Account health metrics")
+    total_positions: int = Field(..., description="Total number of positions")
+    total_collateral_usd: Decimal = Field(..., description="Total collateral in USD")
+    total_debt_usd: Decimal = Field(..., description="Total debt in USD")
+    net_value_usd: Decimal = Field(..., description="Net value (collateral - debt)")
 
     # Additional info
     timestamp: str = Field(..., description="Response timestamp")

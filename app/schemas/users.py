@@ -74,9 +74,32 @@ class AerodromeLP(BaseModel):
     effective_apr: Optional[Decimal] = Field(None, description="Effective APR with range adjustment")
 
 
+class VaultHedgeSimulation(BaseModel):
+    """Vault hedge simulation results"""
+    hedge_asset: str = Field(..., description="Asset being hedged (e.g., WETH)")
+    collateral_amount: Decimal = Field(..., description="Collateral amount in USDC")
+    borrow_amount_usd: Decimal = Field(..., description="Borrow amount in USD")
+    borrow_amount_asset: Decimal = Field(..., description="Borrow amount in asset terms")
+    total_lp_amount: Decimal = Field(..., description="Total LP amount in USDC")
+    asset_exposure_usd: Decimal = Field(..., description="Asset exposure in USD")
+    net_delta_usd: Decimal = Field(..., description="Net delta (debt - exposure)")
+    expected_health_factor: Decimal = Field(..., description="Expected health factor")
+    liquidation_price: Decimal = Field(..., description="Liquidation price for the asset")
+    delta_neutral_score: Decimal = Field(..., description="Score from 0-1, where 1 is perfect delta neutral")
+
+
+class VaultAllocation(BaseModel):
+    """Vault allocation details"""
+    protocol: str = Field(default="vault")
+    collateral_ratio_bps: int = Field(..., description="Collateral ratio in basis points")
+    hedge_ratio: int = Field(..., description="Hedge ratio (e.g., 9500 = 95%)")
+    simulation: VaultHedgeSimulation = Field(..., description="Hedge simulation results")
+
+
 class StrategyAllocations(BaseModel):
     """Strategy allocations"""
-    moonwell: MoonwellAllocation
+    moonwell: Optional[MoonwellAllocation] = Field(None, description="Moonwell allocation (deprecated)")
+    vault: Optional[VaultAllocation] = Field(None, description="Vault allocation (new)")
     aerodrome_lp: AerodromeLP
 
 

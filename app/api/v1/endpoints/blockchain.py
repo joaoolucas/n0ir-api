@@ -443,40 +443,41 @@ async def get_hedge_position(
     wallet: str = Path(..., description="Wallet address", pattern="^0x[a-fA-F0-9]{40}$")
 ):
     """
-    Get Moonwell hedge positions and account health for a wallet.
+    Get vault hedge positions and account health for a wallet.
 
     Returns comprehensive information about:
-    - Supply positions (collateral) with accrued interest
-    - Borrow positions (debt) with accrued interest
-    - Account health metrics (health factor, LTV)
-    - Account liquidity (available to borrow, shortfall)
-    - Position summary (total values and net APY)
+    - All hedged positions (token IDs) with collateral and debt
+    - Global protocol health metrics
+    - Per-position hedge information (asset, collateral, debt)
+    - Protocol-wide health factor and risk status
 
-    The health factor indicates the safety of the position:
-    - Health Factor > 1: Safe position
-    - Health Factor < 1: Subject to liquidation
-    - Health Factor = 1: At liquidation threshold
+    The health factor indicates the safety of the protocol:
+    - Health Factor > 1.5: Safe position
+    - Health Factor < 1.5: At risk
+    - Health Factor = 1.0: At liquidation threshold
 
-    LTV (Loan-to-Value) ratio shows the proportion of debt to collateral:
-    - LTV = Total Borrows / Total Collateral
-    - Maximum safe LTV is typically 75% for most assets
+    Each position shows:
+    - Collateral amount in USDC
+    - Debt amount in the hedged asset (WETH or cbBTC)
+    - Whether position is actively hedged
     """
     logger.info(f"GET /hedge/{wallet} - IP: {request.client.host}")
     try:
-        # Get hedge position data
+        # Get hedge position data from vault
         position = await hedge_service.get_hedge_position(wallet)
 
         # Check if wallet has any positions
-        if not position.supply_positions and not position.borrow_positions:
+        if not position.positions:
             logger.info(f"No hedge positions found for wallet {wallet}")
             # Still return the response with empty positions
             return position
 
         logger.info(f"Successfully fetched hedge position for {wallet}")
-        logger.info(f"  Supply positions: {len(position.supply_positions)}")
-        logger.info(f"  Borrow positions: {len(position.borrow_positions)}")
-        logger.info(f"  Health factor: {position.health.health_factor}")
-        logger.info(f"  LTV: {position.health.ltv}")
+        logger.info(f"  Total positions: {len(position.positions)}")
+        logger.info(f"  Total collateral: ${position.total_collateral_usd}")
+        logger.info(f"  Total debt: ${position.total_debt_usd}")
+        logger.info(f"  Global health factor: {position.global_health.health_factor}")
+        logger.info(f"  Protocol at risk: {position.global_health.is_at_risk}")
 
         return position
 
