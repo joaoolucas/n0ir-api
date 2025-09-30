@@ -249,21 +249,25 @@ async def get_vault_strategy(
     """
     Generate vault-based delta-neutral strategy for a user.
 
-    This endpoint generates a strategy that:
-    1. Calculates optimal USDC allocation between collateral and LP
-    2. Simulates hedge positions to find near-perfect delta neutrality
-    3. Uses Aave for collateral and borrowing (via vault contract)
-    4. Returns strategy with predicted health factor and liquidation price
-
-    The strategy uses the vault contract's simulateHedge function to test
-    multiple parameter combinations and find the optimal delta-neutral position.
+    This endpoint generates a strategy and returns all parameters needed
+    to call the vault contract's createPosition function:
 
     Returns:
-    - Capital allocation details
-    - Vault collateral and hedge positions with simulation results
-    - Aerodrome LP allocation
-    - Delta-neutral score and risk metrics
-    - Range break monitoring if positions are out of range
+    - contract_params: Ready-to-use parameters for vault.createPosition()
+      - pool: Aerodrome pool address
+      - rangePercentage: Position range (e.g., 10 = ±5%)
+      - deadline: Transaction deadline timestamp
+      - usdcAmount: USDC amount to deploy
+      - slippageBps: Slippage tolerance (default 50 = 0.5%)
+      - hedgeRatio: Hedge ratio in bps (e.g., 9200 = 92%)
+      - collateralRatioBps: Collateral ratio in bps (e.g., 6500 = 65%)
+
+    - simulation: Expected results from the strategy
+      - Health factor, liquidation price, delta-neutral score
+      - Collateral, borrow, and LP amounts
+
+    - aerodrome_pool: Pool details and expected APR
+    - monitoring: Range break alerts if applicable
     """
     try:
         # Use provided pool address or default to WETH/USDC
@@ -280,12 +284,11 @@ async def get_vault_strategy(
         logger.info(f"Vault strategy for user {user_id}:")
         logger.info(f"  Action: {strategy.action}")
         logger.info(f"  Total capital: ${strategy.capital.total_usd}")
-        if strategy.allocations.vault:
-            logger.info(f"  Collateral: ${strategy.allocations.vault.simulation.collateral_amount}")
-            logger.info(f"  Borrow: ${strategy.allocations.vault.simulation.borrow_amount_usd}")
-            logger.info(f"  Delta-neutral score: {strategy.allocations.vault.simulation.delta_neutral_score:.4f}")
-            logger.info(f"  Health factor: {strategy.allocations.vault.simulation.expected_health_factor:.2f}")
-        logger.info(f"  Aerodrome LP: ${strategy.allocations.aerodrome_lp.amount_usdc}")
+        logger.info(f"  Collateral: ${strategy.simulation.collateral_amount}")
+        logger.info(f"  Borrow: ${strategy.simulation.borrow_amount_usd}")
+        logger.info(f"  Delta-neutral score: {strategy.simulation.delta_neutral_score:.4f}")
+        logger.info(f"  Health factor: {strategy.simulation.expected_health_factor:.2f}")
+        logger.info(f"  Aerodrome LP: ${strategy.aerodrome_pool.amount_usdc}")
 
         if strategy.monitoring and strategy.monitoring.range_break:
             logger.warning(f"  ⚠️ Range break detected: {strategy.monitoring.range_break.trigger}")

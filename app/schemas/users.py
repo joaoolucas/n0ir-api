@@ -74,6 +74,17 @@ class AerodromeLP(BaseModel):
     effective_apr: Optional[Decimal] = Field(None, description="Effective APR with range adjustment")
 
 
+class ContractParameters(BaseModel):
+    """Parameters for calling createPosition on the vault contract"""
+    pool: str = Field(..., description="Aerodrome pool address")
+    range_percentage: int = Field(..., description="Range percentage for the position (e.g., 10 = ±5%)")
+    deadline: int = Field(..., description="Unix timestamp deadline for transaction")
+    usdc_amount: Decimal = Field(..., description="USDC amount to deploy")
+    slippage_bps: int = Field(default=50, description="Slippage tolerance in basis points (e.g., 50 = 0.5%)")
+    hedge_ratio: int = Field(..., description="Hedge ratio in basis points (e.g., 9200 = 92%)")
+    collateral_ratio_bps: int = Field(..., description="Collateral ratio in basis points (e.g., 6500 = 65%)")
+
+
 class VaultHedgeSimulation(BaseModel):
     """Vault hedge simulation results"""
     hedge_asset: str = Field(..., description="Asset being hedged (e.g., WETH)")
@@ -88,19 +99,6 @@ class VaultHedgeSimulation(BaseModel):
     delta_neutral_score: Decimal = Field(..., description="Score from 0-1, where 1 is perfect delta neutral")
 
 
-class VaultAllocation(BaseModel):
-    """Vault allocation details"""
-    protocol: str = Field(default="vault")
-    collateral_ratio_bps: int = Field(..., description="Collateral ratio in basis points")
-    hedge_ratio: int = Field(..., description="Hedge ratio (e.g., 9500 = 95%)")
-    simulation: VaultHedgeSimulation = Field(..., description="Hedge simulation results")
-
-
-class StrategyAllocations(BaseModel):
-    """Strategy allocations"""
-    moonwell: Optional[MoonwellAllocation] = Field(None, description="Moonwell allocation (deprecated)")
-    vault: Optional[VaultAllocation] = Field(None, description="Vault allocation (new)")
-    aerodrome_lp: AerodromeLP
 
 
 class CapitalInfo(BaseModel):
@@ -121,14 +119,16 @@ class MonitoringInfo(BaseModel):
 
 
 class MoonwellStrategyResponse(BaseModel):
-    """Moonwell-based delta-neutral strategy response"""
+    """Delta-neutral strategy response with contract parameters"""
     user_id: str = Field(..., description="User ID")
     strategy_type: str = Field(default="delta_neutral", description="Strategy type")
     timestamp: str = Field(..., description="ISO timestamp")
     action: str = Field(..., description="Action: 'open', 'close', 'rebalance'")
 
     capital: CapitalInfo = Field(..., description="Capital information")
-    allocations: StrategyAllocations = Field(..., description="Strategy allocations")
+    contract_params: ContractParameters = Field(..., description="Parameters for calling vault contract")
+    simulation: VaultHedgeSimulation = Field(..., description="Expected strategy simulation results")
+    aerodrome_pool: AerodromeLP = Field(..., description="Aerodrome LP pool details")
     monitoring: Optional[MonitoringInfo] = Field(None, description="Monitoring information")
 
 

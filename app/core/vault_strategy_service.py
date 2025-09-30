@@ -18,8 +18,7 @@ from app.database.models import User
 from app.schemas.users import (
     MoonwellStrategyResponse,
     CapitalInfo,
-    StrategyAllocations,
-    VaultAllocation,
+    ContractParameters,
     VaultHedgeSimulation,
     AerodromeLP,
     MonitoringInfo,
@@ -104,7 +103,7 @@ class VaultStrategyService:
             # Calculate suggested range based on pool metrics
             range_percentage = self._calculate_optimal_range(pool_metrics)
 
-            # Find optimal strategy using vault contract (contract handles tick calculation)
+            # Find optimal strategy using vault contract
             try:
                 optimal_strategy = vault_contract.find_optimal_strategy(
                     usdc_amount=float(balance),
@@ -112,55 +111,70 @@ class VaultStrategyService:
                     range_percentage=range_percentage
                 )
 
-                simulation = optimal_strategy['simulation']
+                sim = optimal_strategy['simulation']
 
-                # Build vault allocation
-                vault_allocation = VaultAllocation(
-                    protocol="vault",
-                    collateral_ratio_bps=optimal_strategy['collateral_ratio_bps'],
+                # Calculate deadline (15 minutes from now)
+                deadline = int(datetime.utcnow().timestamp()) + 900
+
+                # Build contract parameters
+                contract_params = ContractParameters(
+                    pool=pool_address,
+                    range_percentage=range_percentage,
+                    deadline=deadline,
+                    usdc_amount=Decimal(str(balance)),
+                    slippage_bps=50,  # 0.5% slippage
                     hedge_ratio=optimal_strategy['hedge_ratio'],
-                    simulation=VaultHedgeSimulation(
-                        hedge_asset=simulation['hedge_asset'],
-                        collateral_amount=Decimal(str(simulation['collateral_amount'])),
-                        borrow_amount_usd=Decimal(str(simulation['borrow_amount_usd'])),
-                        borrow_amount_asset=Decimal(str(simulation['borrow_amount_asset'])),
-                        total_lp_amount=Decimal(str(simulation['total_lp_amount'])),
-                        asset_exposure_usd=Decimal(str(optimal_strategy['exposure_usd'])),
-                        net_delta_usd=Decimal(str(optimal_strategy['net_delta_usd'])),
-                        expected_health_factor=Decimal(str(simulation['expected_health_factor'])),
-                        liquidation_price=Decimal(str(simulation['liquidation_price'])),
-                        delta_neutral_score=Decimal(str(optimal_strategy['delta_neutral_score']))
-                    )
+                    collateral_ratio_bps=optimal_strategy['collateral_ratio_bps']
                 )
 
-                # Calculate effective APR
+                # Build simulation results
+                simulation = VaultHedgeSimulation(
+                    hedge_asset=sim['hedge_asset'],
+                    collateral_amount=Decimal(str(sim['collateral_amount'])),
+                    borrow_amount_usd=Decimal(str(sim['borrow_amount_usd'])),
+                    borrow_amount_asset=Decimal(str(sim['borrow_amount_asset'])),
+                    total_lp_amount=Decimal(str(sim['total_lp_amount'])),
+                    asset_exposure_usd=Decimal(str(optimal_strategy['exposure_usd'])),
+                    net_delta_usd=Decimal(str(optimal_strategy['net_delta_usd'])),
+                    expected_health_factor=Decimal(str(sim['expected_health_factor'])),
+                    liquidation_price=Decimal(str(sim['liquidation_price'])),
+                    delta_neutral_score=Decimal(str(optimal_strategy['delta_neutral_score']))
+                )
+
                 effective_apr = self._calculate_effective_apr(pool_metrics['apr'], range_percentage)
 
             except Exception as e:
                 logger.error(f"Error finding optimal strategy: {e}")
                 logger.warning("Vault contract simulations failed - using default strategy estimation")
 
-                # Fallback to default strategy estimation
-                collateral_amount = float(balance) * 0.6
-                lp_amount = float(balance) * 0.4
-                borrow_amount = collateral_amount * 0.45  # 45% LTV
+                # Fallback parameters
+                collateral_amount = float(balance) * 0.65
+                borrow_amount = collateral_amount * 0.45
+                lp_amount = collateral_amount + borrow_amount
 
-                vault_allocation = VaultAllocation(
-                    protocol="vault",
-                    collateral_ratio_bps=6000,  # 60%
-                    hedge_ratio=9500,  # 95%
-                    simulation=VaultHedgeSimulation(
-                        hedge_asset=settings.weth_address,
-                        collateral_amount=Decimal(str(collateral_amount)),
-                        borrow_amount_usd=Decimal(str(borrow_amount)),
-                        borrow_amount_asset=Decimal(str(borrow_amount / 4000)),  # Assume $4000 WETH
-                        total_lp_amount=Decimal(str(lp_amount + borrow_amount)),
-                        asset_exposure_usd=Decimal(str((lp_amount + borrow_amount) * 0.5)),
-                        net_delta_usd=Decimal(str(abs(borrow_amount - (lp_amount + borrow_amount) * 0.5))),
-                        expected_health_factor=Decimal("2.0"),
-                        liquidation_price=Decimal("2400"),  # 40% drop
-                        delta_neutral_score=Decimal("0.95")
-                    )
+                deadline = int(datetime.utcnow().timestamp()) + 900
+
+                contract_params = ContractParameters(
+                    pool=pool_address,
+                    range_percentage=range_percentage,
+                    deadline=deadline,
+                    usdc_amount=Decimal(str(balance)),
+                    slippage_bps=50,
+                    hedge_ratio=9500,
+                    collateral_ratio_bps=6500
+                )
+
+                simulation = VaultHedgeSimulation(
+                    hedge_asset=settings.weth_address,
+                    collateral_amount=Decimal(str(collateral_amount)),
+                    borrow_amount_usd=Decimal(str(borrow_amount)),
+                    borrow_amount_asset=Decimal(str(borrow_amount / 4000)),
+                    total_lp_amount=Decimal(str(lp_amount)),
+                    asset_exposure_usd=Decimal(str(lp_amount * 0.5)),
+                    net_delta_usd=Decimal(str(abs(borrow_amount - lp_amount * 0.5))),
+                    expected_health_factor=Decimal("2.0"),
+                    liquidation_price=Decimal("2400"),
+                    delta_neutral_score=Decimal("0.95")
                 )
                 effective_apr = self._calculate_effective_apr(pool_metrics['apr'], range_percentage)
 
@@ -174,24 +188,23 @@ class VaultStrategyService:
                     total_usd=Decimal(str(balance)),
                     base_asset="USDC"
                 ),
-                allocations=StrategyAllocations(
-                    vault=vault_allocation,
-                    aerodrome_lp=AerodromeLP(
-                        protocol="aerodrome",
-                        pool=pool_metrics['symbol'],
-                        pool_address=pool_address,
-                        amount_usdc=vault_allocation.simulation.total_lp_amount,
-                        range_percentage=range_percentage,
-                        effective_apr=Decimal(str(effective_apr))
-                    )
+                contract_params=contract_params,
+                simulation=simulation,
+                aerodrome_pool=AerodromeLP(
+                    protocol="aerodrome",
+                    pool=pool_metrics['symbol'],
+                    pool_address=pool_address,
+                    amount_usdc=simulation.total_lp_amount,
+                    range_percentage=range_percentage,
+                    effective_apr=Decimal(str(effective_apr))
                 ),
                 monitoring=monitoring_info
             )
 
             logger.info(f"Generated vault strategy for user {user_id}")
-            logger.info(f"  Delta-neutral score: {vault_allocation.simulation.delta_neutral_score:.4f}")
-            logger.info(f"  Health factor: {vault_allocation.simulation.expected_health_factor:.2f}")
-            logger.info(f"  Net delta: ${vault_allocation.simulation.net_delta_usd:.2f}")
+            logger.info(f"  Delta-neutral score: {simulation.delta_neutral_score:.4f}")
+            logger.info(f"  Health factor: {simulation.expected_health_factor:.2f}")
+            logger.info(f"  Net delta: ${simulation.net_delta_usd:.2f}")
 
             return response
 
