@@ -101,6 +101,21 @@ class VaultHedgeSimulation(BaseModel):
 
 
 
+# Deprecated models (kept for backward compatibility with moonwell_strategy_service)
+class MoonwellAllocation(BaseModel):
+    """Moonwell allocation details (deprecated)"""
+    protocol: str = Field(default="moonwell")
+    collateral: MoonwellCollateral
+    borrow: MoonwellBorrow
+
+
+class StrategyAllocations(BaseModel):
+    """Strategy allocations (deprecated)"""
+    moonwell: Optional[MoonwellAllocation] = Field(None, description="Moonwell allocation (deprecated)")
+    vault: Optional[Dict] = Field(None, description="Vault allocation (deprecated)")
+    aerodrome_lp: AerodromeLP
+
+
 class CapitalInfo(BaseModel):
     """Capital information"""
     total_usd: Decimal = Field(..., description="Total capital in USD")

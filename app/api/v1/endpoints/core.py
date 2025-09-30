@@ -10,7 +10,6 @@ from loguru import logger
 
 from app.database.session import get_db
 from app.services.user_service import UserService
-from app.core.moonwell_strategy_service import moonwell_strategy_service
 from app.core.vault_strategy_service import vault_strategy_service
 from app.schemas.users import (
     CreateResponse,
