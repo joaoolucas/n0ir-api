@@ -227,9 +227,11 @@ class VaultContract:
             return simulation
 
         except Exception as e:
-            logger.error(f"Error simulating hedge: {e}")
+            import traceback
+            logger.error(f"Error simulating hedge: {type(e).__name__}: {e}")
             logger.error(f"  Contract address: {self.vault_address}")
             logger.error(f"  Parameters: usdc_amount={usdc_amount}, pool={pool_address}, ticks={tick_lower}/{tick_upper}")
+            logger.error(f"  Full traceback: {traceback.format_exc()}")
             raise
 
     def find_optimal_strategy(
