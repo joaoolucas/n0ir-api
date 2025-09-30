@@ -30,33 +30,6 @@ from app.schemas.users import (
 class VaultStrategyService:
     """Service for generating vault-based strategies."""
 
-    def calculate_ticks_from_range(
-        self,
-        current_tick: int,
-        range_percentage: int,
-        tick_spacing: int = 100
-    ) -> tuple[int, int]:
-        """Calculate tick bounds from range percentage."""
-        # Range percentage is total range (e.g., 20 = ±10%)
-        range_multiplier = range_percentage / 200  # Divide by 200 to get one-sided percentage
-
-        # Calculate tick distance (absolute value)
-        tick_distance = int(abs(current_tick) * range_multiplier)
-
-        # Calculate raw ticks
-        raw_tick_lower = current_tick - tick_distance
-        raw_tick_upper = current_tick + tick_distance
-
-        # Round to tick spacing
-        tick_lower = (raw_tick_lower // tick_spacing) * tick_spacing
-        tick_upper = (raw_tick_upper // tick_spacing) * tick_spacing
-
-        # Ensure tick_upper > tick_lower
-        if tick_upper <= tick_lower:
-            tick_upper = tick_lower + tick_spacing
-
-        return (tick_lower, tick_upper)
-
     async def generate_strategy(
         self,
         user_id: str,
@@ -131,20 +104,11 @@ class VaultStrategyService:
             # Calculate suggested range based on pool metrics
             range_percentage = self._calculate_optimal_range(pool_metrics)
 
-            # Calculate ticks
-            tick_lower, tick_upper = self.calculate_ticks_from_range(
-                pool_metrics['current_tick'],
-                range_percentage,
-                pool_metrics['tick_spacing']
-            )
-
-            # Find optimal strategy using vault contract
+            # Find optimal strategy using vault contract (contract handles tick calculation)
             try:
                 optimal_strategy = vault_contract.find_optimal_strategy(
                     usdc_amount=float(balance),
                     pool_address=pool_address,
-                    tick_lower=tick_lower,
-                    tick_upper=tick_upper,
                     range_percentage=range_percentage
                 )
 

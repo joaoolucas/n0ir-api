@@ -44,8 +44,7 @@ class VaultContract:
                 "inputs": [
                     {"internalType": "uint256", "name": "usdcAmount", "type": "uint256"},
                     {"internalType": "address", "name": "pool", "type": "address"},
-                    {"internalType": "int24", "name": "tickLower", "type": "int24"},
-                    {"internalType": "int24", "name": "tickUpper", "type": "int24"},
+                    {"internalType": "uint256", "name": "rangePercentage", "type": "uint256"},
                     {"internalType": "uint256", "name": "collateralRatioBps", "type": "uint256"},
                     {"internalType": "uint256", "name": "hedgeRatio", "type": "uint256"}
                 ],
@@ -172,8 +171,7 @@ class VaultContract:
         self,
         usdc_amount: float,
         pool_address: str,
-        tick_lower: int,
-        tick_upper: int,
+        range_percentage: int,
         collateral_ratio_bps: int,
         hedge_ratio: int
     ) -> Dict:
@@ -183,8 +181,7 @@ class VaultContract:
         Args:
             usdc_amount: USDC amount
             pool_address: Pool address
-            tick_lower: Lower tick
-            tick_upper: Upper tick
+            range_percentage: Range percentage (e.g., 20 for ±10%)
             collateral_ratio_bps: Collateral ratio in basis points (e.g., 6000 = 60%)
             hedge_ratio: Hedge ratio (e.g., 9500 = 95%)
 
@@ -194,13 +191,12 @@ class VaultContract:
         try:
             usdc_wei = int(usdc_amount * 1e6)
 
-            logger.debug(f"Calling simulateHedge with: usdc={usdc_wei}, pool={pool_address}, ticks={tick_lower}/{tick_upper}, ratios={collateral_ratio_bps}/{hedge_ratio}")
+            logger.info(f"Calling simulateHedge with: usdc={usdc_wei}, pool={pool_address}, range={range_percentage}%, ratios={collateral_ratio_bps}/{hedge_ratio}")
 
             result = self.contract.functions.simulateHedge(
                 usdc_wei,
                 Web3.to_checksum_address(pool_address),
-                tick_lower,
-                tick_upper,
+                range_percentage,
                 collateral_ratio_bps,
                 hedge_ratio
             ).call()
@@ -230,7 +226,7 @@ class VaultContract:
             import traceback
             logger.error(f"Error simulating hedge: {type(e).__name__}: {e}")
             logger.error(f"  Contract address: {self.vault_address}")
-            logger.error(f"  Parameters: usdc_amount={usdc_amount}, pool={pool_address}, ticks={tick_lower}/{tick_upper}")
+            logger.error(f"  Parameters: usdc_amount={usdc_amount}, pool={pool_address}, range={range_percentage}%")
             logger.error(f"  Full traceback: {traceback.format_exc()}")
             raise
 
@@ -238,8 +234,6 @@ class VaultContract:
         self,
         usdc_amount: float,
         pool_address: str,
-        tick_lower: int,
-        tick_upper: int,
         range_percentage: int
     ) -> Dict:
         """
@@ -248,9 +242,7 @@ class VaultContract:
         Args:
             usdc_amount: USDC amount
             pool_address: Pool address
-            tick_lower: Lower tick
-            tick_upper: Upper tick
-            range_percentage: Range percentage
+            range_percentage: Range percentage (e.g., 20 for ±10%)
 
         Returns:
             Optimal strategy with simulation results
@@ -266,8 +258,7 @@ class VaultContract:
                     simulation = self.simulate_hedge(
                         usdc_amount,
                         pool_address,
-                        tick_lower,
-                        tick_upper,
+                        range_percentage,
                         collateral_ratio,
                         hedge_ratio
                     )
