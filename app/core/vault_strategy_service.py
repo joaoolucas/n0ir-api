@@ -40,12 +40,20 @@ class VaultStrategyService:
         # Range percentage is total range (e.g., 20 = ±10%)
         range_multiplier = range_percentage / 200  # Divide by 200 to get one-sided percentage
 
-        # Calculate tick distance
-        tick_distance = int(current_tick * range_multiplier)
+        # Calculate tick distance (absolute value)
+        tick_distance = int(abs(current_tick) * range_multiplier)
+
+        # Calculate raw ticks
+        raw_tick_lower = current_tick - tick_distance
+        raw_tick_upper = current_tick + tick_distance
 
         # Round to tick spacing
-        tick_lower = ((current_tick - tick_distance) // tick_spacing) * tick_spacing
-        tick_upper = ((current_tick + tick_distance) // tick_spacing) * tick_spacing
+        tick_lower = (raw_tick_lower // tick_spacing) * tick_spacing
+        tick_upper = (raw_tick_upper // tick_spacing) * tick_spacing
+
+        # Ensure tick_upper > tick_lower
+        if tick_upper <= tick_lower:
+            tick_upper = tick_lower + tick_spacing
 
         return (tick_lower, tick_upper)
 
