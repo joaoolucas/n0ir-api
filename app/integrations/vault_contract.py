@@ -194,6 +194,8 @@ class VaultContract:
         try:
             usdc_wei = int(usdc_amount * 1e6)
 
+            logger.debug(f"Calling simulateHedge with: usdc={usdc_wei}, pool={pool_address}, ticks={tick_lower}/{tick_upper}, ratios={collateral_ratio_bps}/{hedge_ratio}")
+
             result = self.contract.functions.simulateHedge(
                 usdc_wei,
                 Web3.to_checksum_address(pool_address),
@@ -220,10 +222,14 @@ class VaultContract:
                 'is_healthy': result[12]
             }
 
+            logger.debug(f"Simulation result: health={simulation['is_healthy']}, hf={simulation['expected_health_factor']:.2f}")
+
             return simulation
 
         except Exception as e:
             logger.error(f"Error simulating hedge: {e}")
+            logger.error(f"  Contract address: {self.vault_address}")
+            logger.error(f"  Parameters: usdc_amount={usdc_amount}, pool={pool_address}, ticks={tick_lower}/{tick_upper}")
             raise
 
     def find_optimal_strategy(
@@ -249,6 +255,7 @@ class VaultContract:
         """
         best_score = 0
         best_strategy = None
+        errors = []
 
         # Simple grid search
         for collateral_ratio in range(5500, 7000, 500):  # 55-70% in 5% steps
@@ -265,10 +272,12 @@ class VaultContract:
 
                     # Skip unhealthy positions
                     if not simulation['is_healthy']:
+                        logger.debug(f"Unhealthy position for {collateral_ratio}/{hedge_ratio}")
                         continue
 
                     # Skip if health factor too low
                     if simulation['expected_health_factor'] < 1.75:
+                        logger.debug(f"Health factor too low ({simulation['expected_health_factor']}) for {collateral_ratio}/{hedge_ratio}")
                         continue
 
                     # Calculate delta-neutral score
@@ -294,11 +303,17 @@ class VaultContract:
                         }
 
                 except Exception as e:
+                    error_msg = str(e)
+                    if error_msg not in errors:
+                        errors.append(error_msg)
                     logger.debug(f"Simulation failed for params {collateral_ratio}/{hedge_ratio}: {e}")
                     continue
 
         if not best_strategy:
-            raise ValueError("Could not find a viable hedge strategy")
+            # Log all unique errors
+            if errors:
+                logger.error(f"All simulations failed. Errors encountered: {errors[:3]}")
+            raise ValueError("Could not find a viable hedge strategy - all simulations failed or returned unhealthy positions")
 
         logger.info(f"Found optimal strategy with delta-neutral score: {best_score:.4f}")
         return best_strategy
