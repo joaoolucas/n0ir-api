@@ -13,6 +13,7 @@ from app.integrations.vault_contract import vault_contract
 from app.core.blockchain_service import blockchain_service
 from app.core.positions_service import positions_service
 from app.core.pools_service import pools_service
+from app.core.config import settings
 from app.database.models import User
 from app.schemas.users import (
     MoonwellStrategyResponse,
