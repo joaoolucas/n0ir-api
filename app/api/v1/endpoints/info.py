@@ -199,6 +199,11 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
             position_dict['current_total_value'] = blockchain_value + net_hedge_value
             position_dict['pool_name'] = getattr(position_data, 'pool_name', 'Unknown/Unknown')
             position_dict['in_range'] = getattr(position_data, 'in_range', False)
+
+            # Add unclaimed fees and rewards from blockchain
+            position_dict['unclaimed_fees_usd'] = getattr(position_data, 'unclaimed_fees_usd', None)
+            position_dict['unclaimed_rewards_aero'] = getattr(position_data, 'unclaimed_rewards_aero', None)
+
             # Update staked status from blockchain (overrides database value)
             position_dict['staked'] = getattr(position_data, 'staked', False)
             # Update gauge_address if available
@@ -238,6 +243,8 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
             position_dict['pool_base_apr'] = Decimal(0)
             position_dict['effective_apr'] = Decimal(0)
             position_dict['in_range'] = False
+            position_dict['unclaimed_fees_usd'] = None
+            position_dict['unclaimed_rewards_aero'] = None
     except Exception as e:
         logger.warning(f"Could not fetch blockchain data for position {position.nft_token_id}: {e}")
         position_dict['pool_name'] = "Unknown/Unknown"
@@ -249,6 +256,8 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
         position_dict['pool_base_apr'] = Decimal(0)
         position_dict['effective_apr'] = Decimal(0)
         position_dict['in_range'] = False
+        position_dict['unclaimed_fees_usd'] = None
+        position_dict['unclaimed_rewards_aero'] = None
 
     return position_dict
 
