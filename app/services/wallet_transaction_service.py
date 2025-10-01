@@ -539,7 +539,11 @@ class WalletTransactionService:
                                         "pool": pool_addr,
                                         "event_detected": "PositionCreated",
                                         "event_data": event_data,
-                                        "usdc_amount": usdc_amount
+                                        "usdc_amount": usdc_amount,
+                                        "usdc_out": usdc_amount,  # Net USDC deployed
+                                        "usdc_in": 0,  # No USDC returned on creation
+                                        "aero_out": 0,
+                                        "aero_in": 0
                                     }
                             except (ValueError, TypeError, AttributeError) as e:
                                 logger.warning(f"Failed to parse PositionCreated event: {e}")
