@@ -189,6 +189,9 @@ class VaultContract:
             Simulation results as dictionary
         """
         try:
+            if usdc_amount <= 0:
+                raise ValueError(f"USDC amount must be greater than 0, got: {usdc_amount}")
+
             usdc_wei = int(usdc_amount * 1e6)
 
             logger.info(f"Calling simulateHedge with: usdc={usdc_wei}, pool={pool_address}, range={range_percentage}%, ratios={collateral_ratio_bps}/{hedge_ratio}")
@@ -247,6 +250,9 @@ class VaultContract:
         Returns:
             Optimal strategy with simulation results
         """
+        if usdc_amount <= 0:
+            raise ValueError(f"USDC amount must be greater than 0, got: {usdc_amount}")
+
         best_score = 0
         best_strategy = None
         errors = []
