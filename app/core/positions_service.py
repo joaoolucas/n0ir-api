@@ -444,22 +444,22 @@ class PositionsService:
             # Get position data from position manager
             position_data = position_manager.functions.positions(token_id).call()
             
-            # Try to get owner from LiquidityManager first (for positions created through it)
-            owner = None
+            # Always try to get owner from LiquidityManager first (CDP wallet address)
+            cdp_wallet = None
             try:
-                owner = liquidity_manager.functions.getPositionOwner(token_id).call()
-                if owner and owner != "0x0000000000000000000000000000000000000000":
-                    logger.debug(f"Position {token_id} owner from LiquidityManager: {owner}")
+                cdp_wallet = liquidity_manager.functions.getPositionOwner(token_id).call()
+                if cdp_wallet and cdp_wallet != "0x0000000000000000000000000000000000000000":
+                    logger.info(f"Position {token_id} CDP wallet from LiquidityManager.getPositionOwner: {cdp_wallet}")
             except Exception as e:
-                logger.debug(f"Could not get owner from LiquidityManager for {token_id}: {e}")
-            
-            # If not found in LiquidityManager, get owner directly from NFT
-            if not owner or owner == "0x0000000000000000000000000000000000000000":
-                try:
-                    owner = position_manager.functions.ownerOf(token_id).call()
-                    logger.debug(f"Position {token_id} owner from NFT: {owner}")
-                except Exception as e:
-                    raise ValueError(f"Position {token_id} not found: {e}")
+                logger.debug(f"Position {token_id} not in LiquidityManager: {e}")
+
+            # Get NFT owner to determine staking status
+            nft_owner = None
+            try:
+                nft_owner = position_manager.functions.ownerOf(token_id).call()
+                logger.debug(f"Position {token_id} NFT owner: {nft_owner}")
+            except Exception as e:
+                raise ValueError(f"Position {token_id} not found: {e}")
             
             # Extract position data
             token0 = position_data[2]
@@ -489,70 +489,29 @@ class PositionsService:
             except:
                 gauge_address = None
             
-            # Check if position is managed by LiquidityManager or owned directly
-            staked = False
-            actual_user = owner  # Default to owner from getPositionOwner() or ownerOf()
-            try:
-                nft_owner = position_manager.functions.ownerOf(token_id).call()
-                liquidity_manager_address = await liquidity_manager.address if hasattr(liquidity_manager, 'address') else Web3.to_checksum_address(self.LIQUIDITY_MANAGER_ADDRESS)
+            # Determine owner and staking status
+            liquidity_manager_address = Web3.to_checksum_address(self.LIQUIDITY_MANAGER_ADDRESS)
 
-                # Check if NFT is owned by LiquidityManager (positions created through it)
-                if nft_owner.lower() == liquidity_manager_address.lower():
-                    logger.info(f"Position {token_id} is managed by LiquidityManager (NFT owner: {nft_owner})")
-
-                    # The owner from getPositionOwner() is the actual CDP wallet
-                    actual_user = owner
-
-                    # Check if position is staked by checking if it's in the gauge
-                    # Since LiquidityManager stakes positions, we assume they're staked
-                    # TODO: Add proper staking check via LiquidityManager contract
-                    staked = True
-                    logger.info(f"Position {token_id} - Using CDP wallet from LiquidityManager: {actual_user}")
-
-                elif gauge_address and nft_owner.lower() == gauge_address.lower():
-                    # Legacy: Position staked directly in gauge (old flow)
-                    staked = True
-                    logger.info(f"Position {token_id} is staked directly in gauge (NFT owner: {nft_owner})")
-
-                    # Need to find the actual CDP wallet from database
-                    from app.database.session import get_db
-                    from app.database.models.position import Position as PositionModel
-                    from app.database.models.user import User
-                    from sqlalchemy import select
-
-                    async for db in get_db():
-                        try:
-                            stmt = select(PositionModel).where(PositionModel.token_id == token_id)
-                            result = await db.execute(stmt)
-                            position_record = result.scalar_one_or_none()
-
-                            if position_record and position_record.user_id:
-                                user_stmt = select(User).where(User.user_id == position_record.user_id)
-                                user_result = await db.execute(user_stmt)
-                                user_record = user_result.scalar_one_or_none()
-
-                                if user_record and user_record.cdp_wallet_address:
-                                    actual_user = user_record.cdp_wallet_address
-                                    logger.info(f"Position {token_id} - Found CDP wallet from database: {actual_user}")
-                        finally:
-                            break
-                else:
-                    # Position owned directly by user (unstaked)
-                    staked = False
-                    actual_user = nft_owner
-                    logger.info(f"Position {token_id} is unstaked (NFT owner: {nft_owner})")
-            except Exception as e:
-                logger.warning(f"Failed to check ownership for position {token_id}: {e}")
-                staked = False
-                actual_user = owner
+            # If position is managed by LiquidityManager, use CDP wallet from getPositionOwner
+            if cdp_wallet:
+                owner = cdp_wallet
+                # Check if staked: NFT owned by gauge means it's staked
+                staked = gauge_address and nft_owner.lower() == gauge_address.lower()
+                logger.info(f"Position {token_id} - LiquidityManager position: owner={owner}, staked={staked}")
+            else:
+                # Legacy position not managed by LiquidityManager
+                owner = nft_owner
+                # Check if staked directly in gauge (old flow)
+                staked = gauge_address and nft_owner.lower() == gauge_address.lower()
+                logger.info(f"Position {token_id} - Legacy position: owner={owner}, staked={staked}")
 
             # Calculate USD values from Sugar contract
             current_value_usd = None
             unclaimed_fees_usd = None
             unclaimed_rewards_aero = None
 
-            # Pass the actual user (not the gauge) to Sugar for staked positions
-            sugar_position = await self._fetch_position_from_sugar(token_id, actual_user, is_unstaked=not staked)
+            # Use the owner (CDP wallet) for Sugar lookups
+            sugar_position = await self._fetch_position_from_sugar(token_id, owner, is_unstaked=not staked)
             logger.info(f"Position {token_id} - Sugar data: {sugar_position}")
             
             if sugar_position:
