@@ -26,7 +26,7 @@ class TransactionType(Enum):
 
 class WalletTransactionService:
     """Service for fetching and analyzing wallet transactions."""
-    
+
     def __init__(self, db: AsyncSession):
         self.db = db
         self.base_url = "https://api.cdp.coinbase.com/platform"
@@ -400,6 +400,19 @@ class WalletTransactionService:
             logger.error(traceback.format_exc())
             return []
 
+    async def _get_token_price_usd(self, token_address: str) -> float:
+        """Get token price in USD."""
+        try:
+            prices = await pools_service.get_token_prices([token_address])
+            price = prices.get(token_address.lower(), 0.0)
+            if price > 0:
+                return price
+            logger.warning(f"Could not get price for token {token_address}, defaulting to 0")
+            return 0.0
+        except Exception as e:
+            logger.error(f"Error fetching token price for {token_address}: {e}")
+            return 0.0
+
     async def _analyze_position_event(
         self,
         traces: List[Dict],
@@ -500,11 +513,26 @@ class WalletTransactionService:
                                                 "hedge_debt": hedge_debt,
                                                 "hedged_asset": hedged_asset
                                             }
-                                            usdc_amount = usdc_invested
+
+                                            # Calculate net USDC amount
+                                            # Net = LP investment + collateral - borrowed amount (in USD)
+                                            hedge_debt_usd = 0
+                                            if is_hedged and hedge_debt > 0 and hedged_asset != "0x0":
+                                                # Get token decimals (WETH = 18, cbBTC = 8)
+                                                token_decimals = 18 if "0x42000000" in hedged_asset else 8
+                                                hedge_debt_tokens = hedge_debt / (10 ** token_decimals)
+
+                                                # Get token price
+                                                token_price = await self._get_token_price_usd(hedged_asset)
+                                                hedge_debt_usd = int(hedge_debt_tokens * token_price * 1e6)  # Convert to USDC wei
+
+                                                logger.info(f"Hedge debt: {hedge_debt_tokens:.6f} tokens @ ${token_price:.2f} = ${hedge_debt_usd/1e6:.2f}")
+
+                                            usdc_amount = usdc_invested + hedge_collateral - hedge_debt_usd
                                         except Exception as e:
                                             logger.warning(f"Failed to parse PositionCreated data field: {e}")
 
-                                    logger.info(f"✅ Detected PositionCreated: position {position_id} in pool {pool_addr}, USDC invested: {usdc_amount/1e6:.2f}")
+                                    logger.info(f"✅ Detected PositionCreated: position {position_id} in pool {pool_addr}, Net USDC: {usdc_amount/1e6:.2f}")
                                     position_created_event = {
                                         "method_name": "openPosition",
                                         "nft_token_id": position_id,
