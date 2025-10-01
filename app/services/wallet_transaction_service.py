@@ -1139,8 +1139,12 @@ class WalletTransactionService:
                 "categorized_by": "wallet_transaction_service",
                 "cdp_wallet": details.get("cdp_wallet", "")
             }
-            
-            # Add position-specific data if available
+
+            # Merge enriched event data from position events (includes hedge info, tick ranges, etc.)
+            if "event_data" in details and isinstance(details["event_data"], dict):
+                event_data.update(details["event_data"])
+
+            # Add position-specific data if available (may override merged data)
             if tx_type in ["POSITION_CREATED", "POSITION_CLOSED"]:
                 # Store token flows (includes staking amounts for CREATED, swaps/fees for CLOSED)
                 if details.get("usdc_in") is not None:
