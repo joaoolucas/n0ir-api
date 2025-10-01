@@ -18,12 +18,9 @@ from app.core.pools_service import pools_service
 class TransactionType(Enum):
     """Transaction types for categorization."""
     DEPOSIT = "DEPOSIT"
-    WITHDRAW = "WITHDRAW"  # Changed from WITHDRAWAL to match schema
-    STAKING = "STAKING"  # NFT position staked to gauge or interaction with position manager
-    POSITION_CREATED = "POSITION_CREATED"
-    POSITION_CLOSED = "POSITION_CLOSED"
-    SWAP = "SWAP"
-    FEE_TRANSFER = "FEE_TRANSFER"  # Fee transfers to 0xfD75350A7e2C4914908fF7E3082c45Af5762f5FE
+    WITHDRAW = "WITHDRAW"
+    POSITION_CREATED = "POSITION_CREATED"  # Includes staking (positions are auto-staked)
+    POSITION_CLOSED = "POSITION_CLOSED"    # Includes swaps and fee transfers
     UNKNOWN = "UNKNOWN"
 
 
@@ -410,556 +407,189 @@ class WalletTransactionService:
         owner_wallet: str = None,
         tx_hash: str = None
     ) -> Optional[Dict[str, Any]]:
-        """Analyze traces to extract position event details.
+        """Analyze traces to detect PositionCreated or PositionClosed events from LiquidityManager.
 
         Returns dict with:
-        - method_sig: Method signature used
-        - method_name: openPosition or closePosition
-        - usdc_in: USDC amount going into position
-        - usdc_out: USDC amount coming out of position
-        - aero_in: AERO amount received
-        - aero_out: AERO amount sent
-        - pool: Pool address if found
-        - nft_token_id: NFT position token ID if found
+        - method_name: "openPosition" or "closePosition"
+        - nft_token_id: NFT position token ID
+        - pool: Pool address (for PositionCreated)
+        - usdc_amount: USDC amount (extracted from token flows)
+        - event_data: Additional event data
         """
         position_event = None
-        usdc_flows = {"in": 0, "out": 0}
-        aero_flows = {"in": 0, "out": 0}
-        pool_addresses = set()  # Track all potential pool addresses
 
-        # PRIORITY 1: Check for PositionClosed or PositionOpened events in logs
-        # Events are the source of truth - they explicitly tell us what happened
+        # Event signatures from LiquidityManager contract (0x8123F467Fa2C53a31D8738D5FAa0DFd881F5DF8A)
+        POSITION_CREATED_EVENT = "0x8998acd79c07bccd21f257f79c807045bab25e93613e79de2c7bdc0bb8be97d9"
+        POSITION_CLOSED_EVENT = "0x88c1305346ac50e10ed13fef7c87d7051d8d41393c2f50bd5086f27b9ba0d88a"
+
+        # Check CDP logs for PositionCreated or PositionClosed events
         for trace in traces:
-            # Check if trace has logs/events
             if "logs" in trace:
-                logger.debug(f"Checking {len(trace.get('logs', []))} logs in trace")
                 for log in trace.get("logs", []):
-                    # Look for event signatures
-                    # PositionClosed event signature would be in topics[0]
                     topics = log.get("topics", [])
-                    if topics:
-                        event_sig = topics[0] if topics else None
-                        # Event signatures for position management
-                        # These are standard Uniswap V3 NonfungiblePositionManager events
-                        DECREASE_LIQUIDITY_EVENT = "0x26f6a048ee9138f2c0ce266f322cb99228e8d619ae2bff30c67f8dcf9d2377b4"  # DecreaseLiquidity
-                        INCREASE_LIQUIDITY_EVENT = "0x3067048beee31b25b2f1681f88dac838c8bba36af25bfb2b7cf7473a5847e35f"  # IncreaseLiquidity
-                        COLLECT_EVENT = "0x40d0efd1a53d60ecbf40971b9daf7dc90178c3aadc7aab1765632738fa8b8f01"  # Collect
-                        # ERC721 Transfer event for NFT staking detection
-                        ERC721_TRANSFER_EVENT = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"  # Transfer(from, to, tokenId)
+                    if not topics:
+                        continue
 
-                        if event_sig:
-                            # Normalize event signature for comparison
-                            event_sig_normalized = event_sig.lower() if isinstance(event_sig, str) else str(event_sig).lower()
+                    event_sig = topics[0] if topics else None
+                    if not event_sig:
+                        continue
 
-                            # Try to extract NFT token ID from the log
-                            # For DecreaseLiquidity and IncreaseLiquidity events, tokenId is usually the first topic after event signature
-                            nft_token_id = None
-                            if len(topics) > 1:
-                                # Topics[1] typically contains the indexed tokenId parameter
-                                try:
-                                    # Remove 0x prefix and convert hex to int
-                                    token_id_hex = topics[1].replace('0x', '') if isinstance(topics[1], str) else str(topics[1]).replace('0x', '')
-                                    nft_token_id = int(token_id_hex, 16) if token_id_hex else None
-                                except (ValueError, TypeError):
-                                    pass
+                    # Normalize event signature
+                    event_sig_normalized = event_sig.lower() if isinstance(event_sig, str) else str(event_sig).lower()
+                    log_address = log.get("address", "").lower() if log.get("address") else ""
 
-                            # Check for position closing events (DecreaseLiquidity to 0 or Collect after decrease)
-                            if event_sig_normalized == DECREASE_LIQUIDITY_EVENT.lower() or event_sig_normalized == COLLECT_EVENT.lower():
-                                # Check if this is a full close (liquidity decreased to 0)
-                                # For now, treat any decrease/collect as potential close
-                                # More sophisticated logic could check if liquidity went to 0
-                                position_event = {
-                                    "method_sig": "0xe0891d91",  # closePosition method signature
-                                    "method_name": "closePosition",
-                                    "event_detected": "DecreaseLiquidity/Collect",
-                                    "event_signature": event_sig_normalized
-                                }
-                                if nft_token_id:
-                                    position_event["nft_token_id"] = nft_token_id
-                                # Don't break - keep looking for more specific events
+                    # Only process events from LiquidityManager
+                    if log_address != self.LIQUIDITY_MANAGER:
+                        continue
 
-                            # Check for position opening events (IncreaseLiquidity)
-                            elif event_sig_normalized == INCREASE_LIQUIDITY_EVENT.lower():
-                                position_event = {
-                                    "method_sig": trace.get("input", "")[:10] if trace.get("input") else "0x3a1e3569",
-                                    "method_name": "openPosition",
-                                    "event_detected": "IncreaseLiquidity",
-                                    "event_signature": event_sig_normalized
-                                }
-                                if nft_token_id:
-                                    position_event["nft_token_id"] = nft_token_id
-                                # Don't break - keep looking for more specific events
+                    # Check for PositionCreated event
+                    if event_sig_normalized == POSITION_CREATED_EVENT.lower():
+                        if len(topics) >= 4:
+                            try:
+                                # Extract indexed parameters
+                                # Topic 1: user address (CDP wallet)
+                                user_addr = ("0x" + topics[1][-40:] if isinstance(topics[1], str) else "0x" + str(topics[1])[-40:]).lower()
+                                # Topic 2: position ID (NFT token ID)
+                                position_id_hex = topics[2].hex() if hasattr(topics[2], 'hex') else topics[2]
+                                if isinstance(position_id_hex, str):
+                                    position_id_hex = position_id_hex.replace('0x', '')
+                                position_id = int(position_id_hex, 16)
+                                # Topic 3: pool address
+                                pool_addr = ("0x" + topics[3][-40:] if isinstance(topics[3], str) else "0x" + str(topics[3])[-40:]).lower()
 
-                            # Also check for text-based event names in the log data
-                            log_str = str(log).lower()
-                            if "positionclosed" in log_str or "position closed" in log_str:
-                                # Only set if we don't already have a definitive burn event
-                                if not (position_event and position_event.get("is_definitive")):
+                                if user_addr == cdp_wallet.lower():
+                                    logger.info(f"✅ Detected PositionCreated: position {position_id} in pool {pool_addr}")
                                     position_event = {
-                                        "method_sig": "0xe0891d91",  # closePosition method signature
-                                        "method_name": "closePosition",
-                                        "event_detected": "PositionClosed",
-                                        "event_signature": event_sig_normalized
+                                        "method_name": "openPosition",
+                                        "nft_token_id": position_id,
+                                        "pool": pool_addr,
+                                        "event_detected": "PositionCreated"
                                     }
-                            elif "positionopened" in log_str or "position opened" in log_str:
+                                    break  # Found the event we need
+                            except (ValueError, TypeError, AttributeError) as e:
+                                logger.warning(f"Failed to parse PositionCreated event: {e}")
+
+                    # Check for PositionClosed event
+                    elif event_sig_normalized == POSITION_CLOSED_EVENT.lower():
+                        if len(topics) >= 2:
+                            try:
+                                # Extract indexed parameters
+                                # Topic 1: position ID (NFT token ID)
+                                position_id_hex = topics[1].hex() if hasattr(topics[1], 'hex') else topics[1]
+                                if isinstance(position_id_hex, str):
+                                    position_id_hex = position_id_hex.replace('0x', '')
+                                position_id = int(position_id_hex, 16)
+
+                                logger.info(f"✅ Detected PositionClosed: position {position_id}")
                                 position_event = {
-                                    "method_sig": trace.get("input", "")[:10] if trace.get("input") else "0x3a1e3569",
-                                    "method_name": "openPosition",
-                                    "event_detected": "PositionOpened",
-                                    "event_signature": event_sig_normalized
+                                    "method_name": "closePosition",
+                                    "nft_token_id": position_id,
+                                    "event_detected": "PositionClosed"
                                 }
-                                break  # This is definitive
+                                break  # Found the event we need
+                            except (ValueError, TypeError, AttributeError) as e:
+                                logger.warning(f"Failed to parse PositionClosed event: {e}")
 
-                            # Check for PositionCreated event from Liquidity Manager
-                            # Event signature: PositionCreated(address indexed user, uint256 indexed positionId, address indexed pool, ...)
-                            elif event_sig_normalized == "0x8d53117d19441d0a7f168d2728ff066eed66d078efdaf9bf249eef6e20887ae5":
-                                log_address = log.get("address", "").lower() if log.get("address") else ""
-
-                                # Check if this is from the Liquidity Manager
-                                if log_address == self.LIQUIDITY_MANAGER:
-                                    logger.debug(f"Found PositionCreated event from Liquidity Manager")
-
-                                    # Extract indexed parameters
-                                    if len(topics) >= 4:
-                                        try:
-                                            # Topic 1: user address (CDP wallet)
-                                            user_addr = ("0x" + topics[1][-40:] if isinstance(topics[1], str) else "0x" + str(topics[1])[-40:]).lower()
-                                            # Topic 2: position ID (NFT token ID)
-                                            position_id = int(topics[2].hex() if hasattr(topics[2], 'hex') else topics[2], 16)
-                                            # Topic 3: pool address
-                                            pool_addr = ("0x" + topics[3][-40:] if isinstance(topics[3], str) else "0x" + str(topics[3])[-40:]).lower()
-
-                                            if user_addr == cdp_wallet:
-                                                logger.info(f"✅ Detected PositionCreated for CDP wallet: position {position_id} in pool {pool_addr}")
-                                                position_event = {
-                                                    "method_sig": "0x3a1e3569",  # openPosition method signature
-                                                    "method_name": "openPosition",
-                                                    "nft_token_id": position_id,
-                                                    "pool": pool_addr,
-                                                    "event_detected": "PositionCreated",
-                                                    "event_signature": event_sig_normalized
-                                                }
-                                                logger.info(f"✅ Position event created with NFT ID: {position_id}")
-                                        except (ValueError, TypeError, AttributeError) as e:
-                                            logger.warning(f"Failed to parse PositionCreated event: {e}")
-
-                            # Check for PositionClosed event from Liquidity Manager (if it exists)
-                            # Event signature would be similar: PositionClosed(address indexed user, uint256 indexed positionId, ...)
-                            elif event_sig_normalized == "0x1234567890abcdef":  # TODO: Find actual PositionClosed event signature
-                                log_address = log.get("address", "").lower() if log.get("address") else ""
-
-                                if log_address == self.LIQUIDITY_MANAGER:
-                                    logger.debug(f"Found PositionClosed event from Liquidity Manager")
-                                    # Similar parsing logic for PositionClosed
-                                    if len(topics) >= 2:
-                                        try:
-                                            position_id = int(topics[1].hex() if hasattr(topics[1], 'hex') else topics[1], 16)
-                                            position_event = {
-                                                "method_sig": "0xe0891d91",  # closePosition method signature
-                                                "method_name": "closePosition",
-                                                "nft_token_id": position_id,
-                                                "event_detected": "PositionClosed",
-                                                "event_signature": event_sig_normalized
-                                            }
-                                        except (ValueError, TypeError, AttributeError) as e:
-                                            logger.warning(f"Failed to parse PositionClosed event: {e}")
-
-                            # Check for ERC721 Transfer events (NFT minting, burning, and staking)
-                            elif event_sig_normalized == ERC721_TRANSFER_EVENT.lower():
-                                # Check if this is from the NFT Position Manager contract
-                                log_address = log.get("address", "").lower() if log.get("address") else ""
-                                logger.debug(f"Found ERC721 Transfer event from {log_address}, NFT Manager: {self.NFT_POSITION_MANAGER}")
-
-                                # Accept NFTs from Position Manager
-                                if log_address == self.NFT_POSITION_MANAGER:
-                                    # ERC721 Transfer has 3 indexed params: from, to, tokenId
-                                    # topics[0] = event signature
-                                    # topics[1] = from address (padded)
-                                    # topics[2] = to address (padded)
-                                    # topics[3] = tokenId
-                                    if len(topics) >= 4:
-                                        try:
-                                            # Extract addresses (remove 0x prefix and padding)
-                                            from_addr_hex = topics[1][-40:] if isinstance(topics[1], str) else str(topics[1])[-40:]
-                                            to_addr_hex = topics[2][-40:] if isinstance(topics[2], str) else str(topics[2])[-40:]
-                                            from_addr = ("0x" + from_addr_hex).lower()
-                                            to_addr = ("0x" + to_addr_hex).lower()
-
-                                            # Extract token ID
-                                            token_id_hex = topics[3].replace('0x', '') if isinstance(topics[3], str) else str(topics[3]).replace('0x', '')
-                                            nft_token_id = int(token_id_hex, 16) if token_id_hex else None
-
-                                            # Check for MINT (position creation) - from address 0x0 to CDP wallet
-                                            zero_address = "0x" + "0" * 40
-                                            if from_addr == zero_address and to_addr == cdp_wallet and nft_token_id:
-                                                logger.debug(f"Detected NFT mint to CDP wallet: token {nft_token_id}")
-                                                # Don't override if we already have a position event, just add the NFT ID
-                                                if position_event and position_event.get("method_name") == "openPosition":
-                                                    position_event["nft_token_id"] = nft_token_id
-                                                else:
-                                                    position_event = {
-                                                        "method_sig": "0x3a1e3569",  # openPosition method signature
-                                                        "method_name": "openPosition",
-                                                        "nft_token_id": nft_token_id,
-                                                        "event_detected": "ERC721Mint",
-                                                        "event_signature": event_sig_normalized
-                                                    }
-
-                                            # Check for BURN (position close) - from CDP wallet to address 0x0
-                                            elif from_addr == cdp_wallet and to_addr == zero_address and nft_token_id:
-                                                logger.debug(f"Detected NFT burn from CDP wallet: token {nft_token_id}")
-                                                # NFT burn is the most reliable indicator of position close
-                                                # Always use this as the primary event for POSITION_CLOSED
-                                                position_event = {
-                                                    "method_sig": "0xe0891d91",  # closePosition method signature
-                                                    "method_name": "closePosition",
-                                                    "nft_token_id": nft_token_id,
-                                                    "event_detected": "ERC721Burn",
-                                                    "event_signature": event_sig_normalized,
-                                                    "is_definitive": True  # Mark this as definitive position close
-                                                }
-                                                # Stop looking for other events once we find a burn
-                                                break
-
-                                            # Check if this is a stake (CDP wallet transferring NFT to a gauge)
-                                            elif from_addr == cdp_wallet and nft_token_id and to_addr != zero_address:
-                                                # To determine if it's a stake, we need to check if the recipient is a gauge
-                                                # We'll mark it as potential stake and verify the gauge address later
-                                                position_event = {
-                                                    "type": "STAKING",
-                                                    "from_address": from_addr,
-                                                    "to_address": to_addr,
-                                                    "nft_token_id": nft_token_id,
-                                                    "event_detected": "ERC721Transfer",
-                                                    "event_signature": event_sig_normalized
-                                                }
-                                                logger.debug(f"Detected NFT transfer from CDP wallet: token {nft_token_id} to {to_addr}")
-                                        except (ValueError, TypeError, IndexError) as e:
-                                            logger.warning(f"Failed to parse ERC721 Transfer event: {e}")
-
-        # PRIORITY 1.5: If no position event found in CDP traces and we have a tx_hash,
-        # fetch logs directly from RPC as CDP might not include all events
-        # Also check for staking events specifically
+        # If not found in CDP logs and we have a tx_hash, check RPC logs as fallback
         if not position_event and tx_hash:
             logger.info(f"No position event in CDP data for {tx_hash[:10]}..., fetching from RPC")
             rpc_logs = await self._fetch_rpc_logs(tx_hash)
 
-            # Check RPC logs for PositionCreated or PositionClosed events from Liquidity Manager
-            liquidity_manager_lower = self.LIQUIDITY_MANAGER.lower()
-            logger.info(f"Looking for Position events from Liquidity Manager: {liquidity_manager_lower}")
-
-            for i, log in enumerate(rpc_logs):
-                if not log.get("topics"):
+            for log in rpc_logs:
+                if not log.get("topics") or len(log["topics"]) < 2:
                     continue
 
                 event_sig = log["topics"][0].lower() if log["topics"] else None
                 log_address = log["address"].lower()
 
-                # Log all events from Liquidity Manager for debugging
-                if log_address == liquidity_manager_lower:
-                    logger.info(f"Log #{i} from Liquidity Manager: sig={event_sig[:10]}...")
+                # Only check logs from LiquidityManager
+                if log_address != self.LIQUIDITY_MANAGER.lower():
+                    continue
 
-                # Check for PositionCreated event (0x8d53117d...)
-                # Note: RPC returns signatures without 0x prefix, CDP with prefix
-                position_created_sig = "8d53117d19441d0a7f168d2728ff066eed66d078efdaf9bf249eef6e20887ae5"
-                position_closed_sig = "f98d21d5137adb0b9f5e1aefb5c39fa87946c23d83391239e912a27362e2a3f5"
-
-                # Check for PositionCreated event
-                if (event_sig == position_created_sig or event_sig == f"0x{position_created_sig}") and log_address == liquidity_manager_lower:
+                # Check for PositionCreated event (with or without 0x prefix)
+                if event_sig in [POSITION_CREATED_EVENT.lower(), POSITION_CREATED_EVENT[2:].lower()]:
                     if len(log["topics"]) >= 4:
                         try:
-                            # Extract position details from PositionCreated event
                             user_addr = ("0x" + log["topics"][1][-40:]).lower()
                             position_id = int(log["topics"][2], 16)
                             pool_addr = ("0x" + log["topics"][3][-40:]).lower()
 
-                            if user_addr == cdp_wallet:
+                            if user_addr == cdp_wallet.lower():
                                 logger.info(f"✅ Found PositionCreated in RPC logs: position {position_id} in pool {pool_addr}")
                                 position_event = {
-                                    "method_sig": "0x3a1e3569",
                                     "method_name": "openPosition",
                                     "nft_token_id": position_id,
                                     "pool": pool_addr,
-                                    "event_detected": "PositionCreated_RPC",
-                                    "event_signature": event_sig
+                                    "event_detected": "PositionCreated_RPC"
                                 }
                                 break
                         except Exception as e:
                             logger.warning(f"Failed to parse RPC PositionCreated event: {e}")
 
                 # Check for PositionClosed event
-                if (event_sig == position_closed_sig or event_sig == f"0x{position_closed_sig}") and log_address == liquidity_manager_lower:
-                    if len(log["topics"]) >= 3:
+                elif event_sig in [POSITION_CLOSED_EVENT.lower(), POSITION_CLOSED_EVENT[2:].lower()]:
+                    if len(log["topics"]) >= 2:
                         try:
-                            # Extract position details from PositionClosed event
-                            # PositionClosed(address indexed user, uint256 indexed positionId)
-                            user_addr = ("0x" + log["topics"][1][-40:]).lower()
-                            position_id = int(log["topics"][2], 16)
-
-                            if user_addr == cdp_wallet:
-                                logger.info(f"✅ Found PositionClosed in RPC logs: position {position_id}")
-                                position_event = {
-                                    "method_sig": "0xe0891d91",  # closePosition method signature
-                                    "method_name": "closePosition",
-                                    "nft_token_id": position_id,
-                                    "event_detected": "PositionClosed_RPC",
-                                    "event_signature": event_sig
-                                }
-                                break
+                            position_id = int(log["topics"][1], 16)
+                            logger.info(f"✅ Found PositionClosed in RPC logs: position {position_id}")
+                            position_event = {
+                                "method_name": "closePosition",
+                                "nft_token_id": position_id,
+                                "event_detected": "PositionClosed_RPC"
+                            }
+                            break
                         except Exception as e:
                             logger.warning(f"Failed to parse RPC PositionClosed event: {e}")
 
-            # Check for ERC721 Transfer events (for staking detection)
-            if not position_event:
-                erc721_transfer_sig = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
-
-                for i, log in enumerate(rpc_logs):
-                    if not log.get("topics") or len(log["topics"]) < 4:
-                        continue
-
-                    event_sig = log["topics"][0].lower() if log["topics"] else None
-
-                    # Check for ERC721 Transfer event
-                    if event_sig == erc721_transfer_sig or event_sig == erc721_transfer_sig[2:]:  # With or without 0x
-                        try:
-                            # Extract from, to, and token ID
-                            from_addr = ("0x" + log["topics"][1][-40:]).lower()
-                            to_addr = ("0x" + log["topics"][2][-40:]).lower()
-                            nft_token_id = int(log["topics"][3], 16)
-
-                            # Check if it's a transfer FROM the CDP wallet (staking)
-                            if from_addr == cdp_wallet and to_addr != "0x0000000000000000000000000000000000000000":
-                                logger.info(f"✅ Found ERC721 Transfer in RPC logs: NFT {nft_token_id} from CDP to {to_addr}")
-                                position_event = {
-                                    "type": "STAKING",
-                                    "from_address": from_addr,
-                                    "to_address": to_addr,
-                                    "nft_token_id": nft_token_id,
-                                    "event_detected": "ERC721Transfer_RPC",
-                                    "event_signature": event_sig
-                                }
-                                break
-                        except Exception as e:
-                            logger.warning(f"Failed to parse RPC ERC721 Transfer event: {e}")
-
-        # PRIORITY 2: If no events found, fall back to method signature analysis
-        # But only if we didn't already find a position event
-        if not position_event:
-            for trace in traces:
-                from_addr = trace.get("from", "").lower()
-                to_addr = trace.get("to", "").lower()
-                input_data = trace.get("input", "")
-
-                # Track interactions with contracts that might be pools
-                # Pools typically interact with token contracts and liquidity managers
-                # Look for contracts that aren't known token/protocol addresses
-                if to_addr and to_addr not in [
-                    self.USDC_ADDRESS,
-                    self.AERO_ADDRESS,
-                    self.LIQUIDITY_MANAGER,
-                    cdp_wallet
-                ] and not to_addr.startswith("0x000000"):  # Exclude zero addresses
-                    # Check if it looks like a pool contract (has certain patterns)
-                    # Pools typically receive calls from liquidity manager or interact with tokens
-                    if from_addr == self.LIQUIDITY_MANAGER or to_addr != from_addr:
-                        pool_addresses.add(to_addr)
-
-                # Check for LiquidityManager interaction
-                # Relaxed check: allow indirect calls (not just from CDP wallet)
-                if not position_event and to_addr == self.LIQUIDITY_MANAGER:
-                    if len(input_data) >= 10:
-                        method_sig = input_data[:10]
-
-                        # Check if it's a known position method
-                        if method_sig in self.POSITION_METHOD_SIGNATURES:
-                            position_event = {
-                                "method_sig": method_sig,
-                                "method_name": self.POSITION_METHOD_SIGNATURES[method_sig],
-                                "event_detected": "method_signature_fallback",
-                                "from_address": from_addr
-                            }
-                            logger.info(f"Detected position event via method signature: {method_sig} from {from_addr[:10]}...")
-                        # Also check for other potential close position signatures
-                        elif method_sig in ["0xfcdf9752", "0x8e005082", "0x4f1eb3d8"]:  # Other possible closePosition variants
-                            position_event = {
-                                "method_sig": method_sig,
-                                "method_name": "closePosition",
-                                "event_detected": "alternative_close_signature",
-                                "from_address": from_addr
-                            }
-                            logger.info(f"Detected position close via alternative signature: {method_sig}")
-
-        # Track ACTUAL ERC20 Transfer events from logs (not just attempted calls)
-        has_actual_transfers = False
-        erc20_transfer_sig = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
-
-        # First, check logs for actual Transfer events
-        for trace in traces:
-            if "logs" in trace:
-                for log in trace.get("logs", []):
-                    if not log.get("topics") or len(log["topics"]) < 3:
-                        continue
-
-                    event_sig = log["topics"][0].lower() if log["topics"] else None
-                    log_address = log.get("address", "").lower()
-
-                    # Check for ERC20 Transfer event (same signature as ERC721 but only 3 topics for ERC20)
-                    if event_sig == erc20_transfer_sig.lower() and len(log["topics"]) == 3:
-                        # This is an ERC20 Transfer
-                        from_addr = ("0x" + log["topics"][1][-40:]).lower()
-                        to_addr = ("0x" + log["topics"][2][-40:]).lower()
-
-                        # Decode amount from data field
-                        try:
-                            amount_hex = log.get("data", "0x0")
-                            if amount_hex.startswith("0x"):
-                                amount_hex = amount_hex[2:]
-                            amount = int(amount_hex, 16) if amount_hex else 0
-
-                            # Track USDC flows
-                            if log_address == self.USDC_ADDRESS:
-                                if from_addr == cdp_wallet:
-                                    usdc_flows["out"] += amount
-                                    has_actual_transfers = True
-                                elif to_addr == cdp_wallet:
-                                    usdc_flows["in"] += amount
-                                    has_actual_transfers = True
-
-                            # Track AERO flows
-                            elif log_address == self.AERO_ADDRESS:
-                                if from_addr == cdp_wallet:
-                                    aero_flows["out"] += amount
-                                    has_actual_transfers = True
-                                elif to_addr == cdp_wallet:
-                                    aero_flows["in"] += amount
-                                    has_actual_transfers = True
-
-                        except (ValueError, TypeError) as e:
-                            logger.warning(f"Failed to decode ERC20 Transfer amount: {e}")
-
-        # If no actual transfers found in logs, try checking RPC logs
-        if not has_actual_transfers and tx_hash:
-            rpc_logs = await self._fetch_rpc_logs(tx_hash)
-            for log in rpc_logs:
-                if not log.get("topics") or len(log["topics"]) < 3:
-                    continue
-
-                event_sig = log["topics"][0].lower() if log["topics"] else None
-                log_address = log.get("address", "").lower()
-
-                # Check for ERC20 Transfer event
-                if (event_sig == erc20_transfer_sig.lower() or event_sig == erc20_transfer_sig[2:].lower()) and len(log["topics"]) == 3:
-                    from_addr = ("0x" + log["topics"][1][-40:]).lower()
-                    to_addr = ("0x" + log["topics"][2][-40:]).lower()
-
-                    try:
-                        amount_hex = log.get("data", "0x0")
-                        if amount_hex.startswith("0x"):
-                            amount_hex = amount_hex[2:]
-                        amount = int(amount_hex, 16) if amount_hex else 0
-
-                        if log_address == self.USDC_ADDRESS:
-                            if from_addr == cdp_wallet:
-                                usdc_flows["out"] += amount
-                                has_actual_transfers = True
-                            elif to_addr == cdp_wallet:
-                                usdc_flows["in"] += amount
-                                has_actual_transfers = True
-                        elif log_address == self.AERO_ADDRESS:
-                            if from_addr == cdp_wallet:
-                                aero_flows["out"] += amount
-                                has_actual_transfers = True
-                            elif to_addr == cdp_wallet:
-                                aero_flows["in"] += amount
-                                has_actual_transfers = True
-
-                    except (ValueError, TypeError) as e:
-                        logger.warning(f"Failed to decode RPC ERC20 Transfer amount: {e}")
-
-        # Log if we found actual transfers
-        if has_actual_transfers:
-            logger.info(f"Found actual ERC20 Transfer events: USDC in={usdc_flows['in']}, out={usdc_flows['out']}, AERO in={aero_flows['in']}, out={aero_flows['out']}")
-        else:
-            logger.info(f"No actual ERC20 Transfer events found in transaction")
-        
-        # Final fallback: If we have significant USDC/AERO flows but no position event detected,
-        # check if this might be a position close based on token flows
-        # BUT: Don't confuse deposits (from owner wallet) with position closes (from pools/contracts)
-        if not position_event and (usdc_flows["in"] > 0 or aero_flows["in"] > 0):
-            # Look for patterns that suggest position activity
-            is_likely_close = False
-
-            # Check if USDC is coming from a non-owner source (likely a pool or liquidity manager)
-            # We need to distinguish between deposits and position closes
-            is_from_owner = False
-            if owner_wallet:  # Only check if owner_wallet is provided
-                for trace in traces:
-                    to_addr = trace.get("to", "").lower()
-                    if to_addr == self.USDC_ADDRESS:
-                        decoded = self._decode_erc20_input(trace.get("input", ""))
-                        if decoded and decoded.get("method") == "transfer":
-                            from_addr = trace.get("from", "").lower()
-                            if from_addr == owner_wallet.lower():
-                                is_from_owner = True
-                                break
-
-            # Only consider position close if USDC is NOT from owner wallet
-            if not is_from_owner:
-                # Pattern 1: Both USDC and AERO coming IN (classic position close)
-                if usdc_flows["in"] > 0 and aero_flows["in"] > 0:
-                    is_likely_close = True
-                    logger.info(f"Detected likely position close based on token flows: USDC in={usdc_flows['in']}, AERO in={aero_flows['in']}")
-
-                # Pattern 2: Significant USDC coming IN with no USDC going OUT (pure return)
-                # Only if it's NOT from the owner wallet (which would be a deposit)
-                elif usdc_flows["in"] > 1000 and usdc_flows["out"] == 0:  # More than 1000 USDC returned
-                    is_likely_close = True
-                    logger.info(f"Detected likely position close based on USDC return: {usdc_flows['in']} USDC")
-
-            if is_likely_close:
-                position_event = {
-                    "method_sig": "0xe0891d91",  # Default closePosition signature
-                    "method_name": "closePosition",
-                    "event_detected": "flow_pattern_detection",
-                    "detected_reason": f"USDC_in={usdc_flows['in']}, AERO_in={aero_flows['in']}"
-                }
-                logger.warning(f"Using flow pattern detection for potential position close")
-
+        # If we found a position event, add token flow data
         if position_event:
-            # Don't use pool addresses from traces - they're often wrong
-            # The actual pool address should be looked up from the position NFT
-            # Only include pool if we're confident it's correct
-            # BUT: If we already have a pool from a PositionCreated event, keep it!
-            position_event.update({
-                "usdc_in": usdc_flows["in"],
-                "usdc_out": usdc_flows["out"],
-                "aero_in": aero_flows["in"],
-                "aero_out": aero_flows["out"],
-                "has_actual_transfers": has_actual_transfers
-            })
-            # Only set pool to None if we don't already have one from an event
-            if "pool" not in position_event:
-                position_event["pool"] = None  # Will be fetched from position data later
+            # Track USDC and AERO flows from ERC20 Transfer events
+            usdc_in, usdc_out, aero_in, aero_out = 0, 0, 0, 0
 
-            # Log the complete position event for debugging
-            logger.info(f"✅ Final position_event: method={position_event.get('method_name')}, nft_id={position_event.get('nft_token_id')}, usdc_out={position_event.get('usdc_out')}, usdc_in={position_event.get('usdc_in')}, has_actual_transfers={has_actual_transfers}")
+            for trace in traces:
+                if "logs" in trace:
+                    for log in trace.get("logs", []):
+                        if not log.get("topics") or len(log["topics"]) != 3:  # ERC20 Transfer has 3 topics
+                            continue
+
+                        event_sig = log["topics"][0].lower() if log["topics"] else None
+                        log_address = log.get("address", "").lower()
+
+                        # ERC20 Transfer event
+                        if event_sig == "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef":
+                            try:
+                                from_addr = ("0x" + log["topics"][1][-40:]).lower()
+                                to_addr = ("0x" + log["topics"][2][-40:]).lower()
+                                amount_hex = log.get("data", "0x0")[2:] if log.get("data", "0x0").startswith("0x") else log.get("data", "0x0")
+                                amount = int(amount_hex, 16) if amount_hex else 0
+
+                                # Track USDC flows
+                                if log_address == self.USDC_ADDRESS:
+                                    if from_addr == cdp_wallet.lower():
+                                        usdc_out += amount
+                                    elif to_addr == cdp_wallet.lower():
+                                        usdc_in += amount
+
+                                # Track AERO flows
+                                elif log_address == self.AERO_ADDRESS:
+                                    if from_addr == cdp_wallet.lower():
+                                        aero_out += amount
+                                    elif to_addr == cdp_wallet.lower():
+                                        aero_in += amount
+                            except (ValueError, TypeError) as e:
+                                logger.warning(f"Failed to decode ERC20 Transfer: {e}")
+
+            # Add token flows to position event
+            position_event["usdc_in"] = usdc_in
+            position_event["usdc_out"] = usdc_out
+            position_event["aero_in"] = aero_in
+            position_event["aero_out"] = aero_out
+
+            logger.info(f"✅ Position event with flows: method={position_event['method_name']}, nft_id={position_event.get('nft_token_id')}, USDC in={usdc_in/1e6:.2f}, out={usdc_out/1e6:.2f}, AERO in={aero_in/1e18:.2f}, out={aero_out/1e18:.2f}")
             return position_event
 
-        # If no position event but we have token flows, create a minimal event for swap detection
-        # But only if we have actual transfers
-        if has_actual_transfers and (usdc_flows["in"] > 0 or usdc_flows["out"] > 0 or aero_flows["in"] > 0 or aero_flows["out"] > 0):
-            return {
-                "usdc_in": usdc_flows["in"],
-                "usdc_out": usdc_flows["out"],
-                "aero_in": aero_flows["in"],
-                "aero_out": aero_flows["out"],
-                "has_actual_transfers": has_actual_transfers,
-                "method_name": None,
-                "method_sig": None
-            }
-
         return None
-    
+
     async def _categorize_transaction(
         self,
         tx_data: Dict,
@@ -1044,202 +674,49 @@ class WalletTransactionService:
                                     logger.warning(f"Transaction {details['tx_hash'][:10]}... has NFT burn but wasn't detected as POSITION_CLOSED")
 
         if position_event:
-            # Handle STAKING type separately
-            if position_event.get("type") == "STAKING":
-                details["nft_token_id"] = position_event["nft_token_id"]
-                details["gauge_address"] = position_event["to_address"]
-                details["description"] = f"Staked NFT position {position_event['nft_token_id']} to gauge"
-                details["amount"] = 0  # Staking doesn't have a USDC amount
-
-                # Try to get the position details to find pool name
-                from app.database.models.position import Position
-                from sqlalchemy import select
-                stmt = select(Position).where(Position.token_id == position_event["nft_token_id"])
-                result = await self.db.execute(stmt)
-                position = result.scalar_one_or_none()
-
-                if position:
-                    details["pool_name"] = position.pool_name
-                    details["pool"] = position.pool_address
-
-                return TransactionType.STAKING, details
-
             method_name = position_event["method_name"]
-            method_sig = position_event.get("method_sig", "")
-
-            # Additional logic: detect swaps and position closes based on token flows
-            # TOKEN FLOWS ARE MORE RELIABLE THAN METHOD SIGNATURES
-
-            # POSITION_CLOSED: Check token flows to determine if this is actually a close
-            # Prioritize flow patterns over method signatures as they're more reliable
-
-            # Pattern 1: Both USDC and AERO coming IN (classic position close)
-            # BUT: Must have an NFT burn or a valid position_id to be a real close
-            if position_event["usdc_in"] > 0 and position_event["aero_in"] > 0:
-                # Check if we have evidence of an actual position being closed
-                has_nft_burn = position_event.get("event_detected") == "ERC721Burn"
-                has_position_id = position_event.get("nft_token_id") is not None
-
-                if has_nft_burn or has_position_id:
-                    # This is definitely a position close
-                    method_name = "closePosition"
-                    position_event["method_name"] = "closePosition"
-                    logger.info(f"Overriding method based on flows: USDC+AERO IN with NFT indicates close (was {method_name})")
-                else:
-                    # Tokens coming in but no NFT activity - likely a failed tx or swap
-                    logger.warning(f"USDC+AERO IN but no NFT burn/ID - not a position close: {details['tx_hash'][:10]}...")
-                    return TransactionType.UNKNOWN, details
-
-            # Pattern 2: Significant USDC coming IN with minimal/no USDC OUT
-            # This happens when closing a position that only had USDC liquidity
-            # BUT: Must have NFT evidence to be a real position close
-            elif position_event["usdc_in"] > 1000 and position_event["usdc_out"] < position_event["usdc_in"] * 0.1:
-                # Check for NFT evidence
-                has_nft_burn = position_event.get("event_detected") == "ERC721Burn"
-                has_position_id = position_event.get("nft_token_id") is not None
-
-                if has_nft_burn or has_position_id:
-                    # Net positive USDC flow with NFT activity suggests position close
-                    method_name = "closePosition"
-                    position_event["method_name"] = "closePosition"
-                    logger.info(f"Overriding method based on large USDC return with NFT: {position_event['usdc_in']} USDC IN (was {method_name})")
-                else:
-                    # Large USDC in but no NFT - might be a deposit or failed tx
-                    logger.warning(f"Large USDC IN but no NFT activity - not a position close: {details['tx_hash'][:10]}...")
-                    # Don't mark as UNKNOWN yet, let it fall through to other checks
-
-            # SWAP: AERO (and possibly USDC) goes OUT and net USDC comes IN
-            # This happens when swapping tokens, potentially with some USDC out too
-            # BUT: Require actual ERC20 Transfer events, not just attempted calls
-            elif position_event["aero_out"] > 0 and position_event["usdc_in"] > 0:
-                # CRITICAL: Check if we have actual Transfer events
-                if not position_event.get("has_actual_transfers"):
-                    logger.info(f"Skipping swap without actual Transfer events: AERO out={position_event['aero_out']}, USDC in={position_event['usdc_in']}")
-                    return TransactionType.UNKNOWN, details
-
-                # Check if amounts are meaningful (at least $1 worth of USDC)
-                # Convert raw USDC units to actual USDC (divide by 1e6)
-                usdc_amount = position_event["usdc_in"] / 1_000_000
-                if usdc_amount < 1.0:
-                    # Less than $1 USDC received - likely an empty/failed transaction
-                    logger.info(f"Skipping swap with insignificant USDC amount: {usdc_amount} USDC (raw: {position_event['usdc_in']})")
-                    return TransactionType.UNKNOWN, details
-
-                # This is a swap: selling AERO for USDC
-                # Net amount is USDC received minus USDC sent
-                net_usdc = position_event["usdc_in"] - position_event["usdc_out"]
-                details["amount"] = net_usdc  # Can be negative if more USDC went out
-                details["description"] = f"Swapped AERO for USDC"
-                details["method_sig"] = position_event["method_sig"]
-                details["usdc_in"] = position_event["usdc_in"]
-                details["usdc_out"] = position_event["usdc_out"]
-                details["aero_in"] = position_event["aero_in"]
-                details["aero_out"] = position_event["aero_out"]
-                details["pool"] = position_event.get("pool")
-
-                # Try to get pool name
-                if position_event.get("pool"):
-                    details["pool_name"] = await self._get_pool_name(position_event["pool"])
-
-                return TransactionType.SWAP, details
 
             if method_name == "openPosition":
-                # For position creation, the net amount is what the user actually invested (usdc_out - usdc_in)
-                # usdc_out is what left the wallet, usdc_in is what came back (if any)
+                # POSITION_CREATED - includes auto-staking since positions are staked when created
                 net_amount = position_event["usdc_out"] - position_event["usdc_in"]
 
-                # IMPORTANT: Check for NFT mint first - this is the most reliable indicator
-                has_nft_mint = position_event.get("nft_token_id") is not None
-
-                # Skip if no NFT was actually minted (no position created)
-                # This prevents saving empty/failed transactions as POSITION_CREATED
-                if not has_nft_mint:
-                    logger.warning(f"Skipping openPosition without NFT mint (likely failed/empty tx): {details['tx_hash'][:10]}...")
-                    return TransactionType.UNKNOWN, details
-
-                # Allow 0-value positions if there's an NFT mint (e.g., gauge-minted positions)
-                # But skip negative amounts as those indicate errors
-                if net_amount < 0:
-                    logger.warning(f"Skipping openPosition with negative net amount: {details['tx_hash'][:10]}...")
-                    return TransactionType.UNKNOWN, details
-                elif net_amount == 0 and has_nft_mint:
-                    logger.info(f"Position created with 0 USDC (gauge-minted or special position): {details['tx_hash'][:10]}...")
-
                 details["amount"] = net_amount
-                details["description"] = f"Position opened via LiquidityManager"
-                details["method_sig"] = position_event["method_sig"]
+                details["description"] = f"Position created in pool"
+                details["nft_token_id"] = position_event.get("nft_token_id")
+                details["pool"] = position_event.get("pool")
+
+                # Get pool name if available
+                if position_event.get("pool"):
+                    details["pool_name"] = await self._get_pool_name(position_event["pool"])
+
+                # Store token flows in event_data (includes staking amounts)
                 details["usdc_in"] = position_event["usdc_in"]
                 details["usdc_out"] = position_event["usdc_out"]
                 details["aero_in"] = position_event["aero_in"]
                 details["aero_out"] = position_event["aero_out"]
-                details["pool"] = position_event.get("pool")  # Include pool address
-                details["nft_token_id"] = position_event.get("nft_token_id")  # Include NFT token ID
 
-                # Try to get pool name
-                if position_event.get("pool"):
-                    details["pool_name"] = await self._get_pool_name(position_event["pool"])
-
+                logger.info(f"Detected POSITION_CREATED: {details['tx_hash'][:10]}... NFT: {details.get('nft_token_id')}, Amount: {net_amount/1e6:.2f} USDC")
                 return TransactionType.POSITION_CREATED, details
 
             elif method_name == "closePosition":
-                # IMPORTANT: Only classify as POSITION_CLOSED if there's actual evidence of position closure
-                # Must have either: NFT burn event, PositionClosed event, or DecreaseLiquidity event
-                event_detected = position_event.get("event_detected", "")
-                is_definitive_close = (
-                    event_detected in ["ERC721Burn", "PositionClosed", "PositionClosed_RPC", "DecreaseLiquidity/Collect"] or
-                    position_event.get("is_definitive", False)
-                )
-
-                # If we don't have definitive evidence of position closure, it's likely a swap or other operation
-                if not is_definitive_close:
-                    # Check if it looks like a swap (tokens being exchanged)
-                    # But require actual Transfer events
-                    if position_event.get("has_actual_transfers"):
-                        if position_event["usdc_in"] > 0 and position_event["aero_out"] > 0:
-                            logger.info(f"Reclassifying as SWAP: USDC in and AERO out without NFT burn (was closePosition)")
-                            details["amount"] = position_event["usdc_in"]
-                            details["description"] = f"Swapped AERO for USDC"
-                            details["usdc_in"] = position_event["usdc_in"]
-                            details["aero_out"] = position_event["aero_out"]
-                            details["usdc_out"] = position_event["usdc_out"]
-                            details["aero_in"] = position_event["aero_in"]
-                            return TransactionType.SWAP, details
-                        elif position_event["aero_in"] > 0 and position_event["usdc_out"] > 0:
-                            logger.info(f"Reclassifying as SWAP: AERO in and USDC out without NFT burn (was closePosition)")
-                            details["amount"] = position_event["usdc_out"]
-                            details["description"] = f"Swapped USDC for AERO"
-                            details["aero_in"] = position_event["aero_in"]
-                            details["usdc_out"] = position_event["usdc_out"]
-                            details["usdc_in"] = position_event["usdc_in"]
-                            details["aero_out"] = position_event["aero_out"]
-                            return TransactionType.SWAP, details
-                    else:
-                        logger.info(f"No actual Transfer events - marking as UNKNOWN instead of SWAP")
-                        return TransactionType.UNKNOWN, details
-
-                # For position closing, the amount received back is what matters
-                # This is typically usdc_in (what comes back to wallet) plus any AERO converted to USDC
+                # POSITION_CLOSED - includes swaps and fee transfers
                 amount_received = position_event["usdc_in"]
 
-                # Don't skip closePosition transactions even if amount is 0
-                # Some positions might close with only AERO rewards and no USDC
-                # The important indicator is the NFT burn or the method itself
-
                 details["amount"] = amount_received
-                details["description"] = f"Position closed via LiquidityManager"
-                details["method_sig"] = position_event["method_sig"]
+                details["description"] = f"Position closed"
+                details["nft_token_id"] = position_event.get("nft_token_id")
+
+                # Store all token flows (swaps and fees are included in these flows)
                 details["usdc_in"] = position_event["usdc_in"]
                 details["usdc_out"] = position_event["usdc_out"]
                 details["aero_in"] = position_event["aero_in"]
                 details["aero_out"] = position_event["aero_out"]
-                details["pool"] = position_event.get("pool")  # Include pool address
-                details["nft_token_id"] = position_event.get("nft_token_id")  # Include NFT token ID
 
-                # Try to get pool name
-                if position_event.get("pool"):
-                    details["pool_name"] = await self._get_pool_name(position_event["pool"])
+                # If AERO was received, it means it was swapped to USDC as part of closing
+                if position_event["aero_out"] > 0:
+                    details["aero_swapped_to_usdc"] = position_event["aero_out"]
 
-                logger.info(f"Detected POSITION_CLOSED: {details['tx_hash'][:10]}... Amount: {amount_received} USDC, NFT: {details.get('nft_token_id')}")
+                logger.info(f"Detected POSITION_CLOSED: {details['tx_hash'][:10]}... NFT: {details.get('nft_token_id')}, Amount: {amount_received/1e6:.2f} USDC")
                 return TransactionType.POSITION_CLOSED, details
         
         # Check all traces for patterns
@@ -1268,12 +745,7 @@ class WalletTransactionService:
                         found_withdrawal = True
                         withdrawal_amount += amount
 
-                    # FEE_TRANSFER: CDP wallet sending USDC to fee recipient
-                    elif from_addr == cdp_wallet and recipient == self.FEE_RECIPIENT:
-                        details["amount"] = amount
-                        details["description"] = f"Fee transfer to {self.FEE_RECIPIENT}"
-                        details["fee_recipient"] = self.FEE_RECIPIENT
-                        return TransactionType.FEE_TRANSFER, details
+                    # Note: Fee transfers are now part of POSITION_CLOSED transactions
                 
                 # For transferFrom method
                 elif decoded.get("method") == "transferFrom":
@@ -1290,75 +762,7 @@ class WalletTransactionService:
                         found_withdrawal = True
                         withdrawal_amount += amount
 
-                    # FEE_TRANSFER: CDP wallet sending USDC to fee recipient
-                    elif transfer_from == cdp_wallet and transfer_to == self.FEE_RECIPIENT:
-                        details["amount"] = amount
-                        details["description"] = f"Fee transfer to {self.FEE_RECIPIENT}"
-                        details["fee_recipient"] = self.FEE_RECIPIENT
-                        return TransactionType.FEE_TRANSFER, details
-            
-            # STAKING: Check if CDP wallet is interacting with position managers
-            # BUT only if there's actual NFT transfer evidence
-            if from_addr == cdp_wallet:
-                for pm in self.POSITION_MANAGERS:
-                    if to_addr == pm:
-                        # Try to find the NFT token ID by looking at logs
-                        # We REQUIRE an ERC721 Transfer event to classify as staking
-                        nft_token_id = None
-
-                        # First, check if there are any ERC721 Transfer events in the logs
-                        if "logs" in tx_data:
-                            for log in tx_data["logs"]:
-                                if log.get("topics") and len(log["topics"]) >= 4:
-                                    # ERC721 Transfer event signature
-                                    transfer_sig = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
-                                    event_sig = log["topics"][0]
-
-                                    if event_sig == transfer_sig:
-                                        # Check if it's from CDP wallet (topics[1])
-                                        from_addr_hex = log["topics"][1][-40:] if len(log["topics"][1]) > 40 else log["topics"][1]
-                                        from_addr_log = f"0x{from_addr_hex}".lower()
-
-                                        # Check if to_addr is the position manager (topics[2])
-                                        to_addr_hex = log["topics"][2][-40:] if len(log["topics"][2]) > 40 else log["topics"][2]
-                                        to_addr_log = f"0x{to_addr_hex}".lower()
-
-                                        if from_addr_log == cdp_wallet and to_addr_log == to_addr:
-                                            # Extract NFT token ID from topics[3]
-                                            try:
-                                                nft_token_id = int(log["topics"][3], 16)
-                                                logger.info(f"Found NFT token ID {nft_token_id} from ERC721 Transfer event in staking")
-                                                break
-                                            except Exception as e:
-                                                logger.warning(f"Failed to parse NFT ID from ERC721 Transfer: {e}")
-
-                        # ONLY classify as STAKING if we found an actual NFT transfer
-                        if nft_token_id:
-                            logger.info(f"Found valid staking transaction with NFT {nft_token_id} to position manager {to_addr}")
-                            details["description"] = f"NFT position staked to gauge"
-                            details["gauge_address"] = to_addr
-                            details["cdp_wallet"] = cdp_wallet
-                            details["nft_token_id"] = nft_token_id
-
-                            # Try to get position details for pool information
-                            from app.database.models.position import Position
-                            from sqlalchemy import select
-                            stmt = select(Position).where(Position.token_id == nft_token_id)
-                            result = await self.db.execute(stmt)
-                            position = result.scalar_one_or_none()
-
-                            if position:
-                                details["pool_name"] = position.pool_name
-                                details["pool"] = position.pool_address
-                                details["description"] = f"NFT position staked to gauge"
-                            else:
-                                logger.warning(f"Position {nft_token_id} not found in database for staking transaction")
-
-                            return TransactionType.STAKING, details
-                        else:
-                            # No NFT transfer found, this is NOT a staking transaction
-                            # It's just some other interaction with the position manager
-                            logger.debug(f"CDP wallet interacted with position manager {to_addr} but no NFT transfer found - not classifying as STAKING")
+                    # Note: Fee transfers and staking are now part of POSITION_CREATED/CLOSED transactions
         
         # Also check event logs for USDC transfers (handles Account Abstraction txs)
         # This is crucial for detecting transfers in smart contract wallet transactions
@@ -1434,11 +838,8 @@ class WalletTransactionService:
         categorized = {
             TransactionType.DEPOSIT: [],
             TransactionType.WITHDRAW: [],
-            TransactionType.STAKING: [],
             TransactionType.POSITION_CREATED: [],
             TransactionType.POSITION_CLOSED: [],
-            TransactionType.SWAP: [],
-            TransactionType.FEE_TRANSFER: [],
             TransactionType.UNKNOWN: []
         }
         
@@ -1465,8 +866,7 @@ class WalletTransactionService:
                 
                 # Save to database if it's a financial or position transaction
                 if tx_type in [TransactionType.DEPOSIT, TransactionType.WITHDRAW,
-                              TransactionType.POSITION_CREATED, TransactionType.POSITION_CLOSED,
-                              TransactionType.SWAP, TransactionType.STAKING, TransactionType.FEE_TRANSFER]:
+                              TransactionType.POSITION_CREATED, TransactionType.POSITION_CLOSED]:
                     await self._save_transaction(
                         user_id=user_id,
                         tx_type=tx_type.value,
@@ -1482,11 +882,8 @@ class WalletTransactionService:
             "total": len(transactions),
             "deposits": len(categorized[TransactionType.DEPOSIT]),
             "withdrawals": len(categorized[TransactionType.WITHDRAW]),
-            "stakings": len(categorized[TransactionType.STAKING]),
             "positions_opened": len(categorized[TransactionType.POSITION_CREATED]),
             "positions_closed": len(categorized[TransactionType.POSITION_CLOSED]),
-            "swaps": len(categorized[TransactionType.SWAP]),
-            "fee_transfers": len(categorized[TransactionType.FEE_TRANSFER]),
             "unknown": len(categorized[TransactionType.UNKNOWN]),
             "total_deposited": total_deposited,
             "total_withdrawn": total_withdrawn
@@ -1538,10 +935,9 @@ class WalletTransactionService:
                 "cdp_wallet": details.get("cdp_wallet", "")
             }
             
-            # Add position-specific and swap data if available
-            if tx_type in ["POSITION_CREATED", "POSITION_CLOSED", "SWAP", "STAKING", "FEE_TRANSFER"]:
-                if details.get("method_sig"):
-                    event_data["method_sig"] = details["method_sig"]
+            # Add position-specific data if available
+            if tx_type in ["POSITION_CREATED", "POSITION_CLOSED"]:
+                # Store token flows (includes staking amounts for CREATED, swaps/fees for CLOSED)
                 if details.get("usdc_in") is not None:
                     event_data["usdc_in"] = details["usdc_in"]
                 if details.get("usdc_out") is not None:
@@ -1553,13 +949,9 @@ class WalletTransactionService:
                 if details.get("pool"):
                     event_data["pool"] = details["pool"]
 
-                # Add gauge address for STAKING transactions
-                if tx_type == "STAKING" and details.get("gauge_address"):
-                    event_data["gauge_address"] = details["gauge_address"]
-
-                # Add fee recipient for FEE_TRANSFER transactions
-                if tx_type == "FEE_TRANSFER" and details.get("fee_recipient"):
-                    event_data["fee_recipient"] = details["fee_recipient"]
+                # For POSITION_CLOSED, include swap information if AERO was swapped
+                if tx_type == "POSITION_CLOSED" and details.get("aero_swapped_to_usdc"):
+                    event_data["aero_swapped_to_usdc"] = details["aero_swapped_to_usdc"]
 
                 # The position and pool data fetching is now handled by _ensure_position_data
                 # Just pass through any initial data we have
