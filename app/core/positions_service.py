@@ -567,7 +567,7 @@ class PositionsService:
 
             position_info = PositionInfo(
                 id=token_id,
-                owner=actual_user,  # Use actual_user instead of owner (which might be the gauge)
+                owner=owner,  # CDP wallet from LiquidityManager or NFT owner
                 pool_address=pool_address,
                 tick_lower=tick_lower,
                 tick_upper=tick_upper,
