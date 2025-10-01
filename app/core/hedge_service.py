@@ -162,7 +162,31 @@ class HedgeService:
             is_at_risk, current_hf, min_safe_hf = vault_contract.is_protocol_at_risk()
 
             # Get hedge info for this specific position
+            logger.info(f"Fetching hedge info for token {token_id}")
             hedge_info = vault_contract.get_position_hedge_info(token_id)
+            logger.info(f"Hedge info for token {token_id}: {hedge_info}")
+
+            # Check if position is hedged
+            if not hedge_info.get('is_hedged', False):
+                logger.info(f"Position {token_id} is not hedged")
+                # Return empty response for non-hedged positions
+                return HedgePositionResponse(
+                    wallet=f"token_{token_id}",
+                    positions=[],
+                    global_health=GlobalHealthMetrics(
+                        total_collateral_usd=Decimal(str(global_metrics['total_collateral'])),
+                        total_debt_weth=Decimal(str(global_metrics['total_debt_weth'])),
+                        total_debt_btc=Decimal(str(global_metrics['total_debt_btc'])),
+                        health_factor=Decimal(str(global_metrics['health_factor'])),
+                        available_borrows_usd=Decimal(str(global_metrics['available_borrows_usd'])),
+                        is_at_risk=is_at_risk
+                    ),
+                    total_positions=0,
+                    total_collateral_usd=Decimal(0),
+                    total_debt_usd=Decimal(0),
+                    net_value_usd=Decimal(0),
+                    timestamp=datetime.utcnow().isoformat() + "Z"
+                )
 
             # Get asset symbol
             asset_symbol = vault_contract.get_token_symbol(hedge_info['hedged_asset'])
@@ -217,7 +241,7 @@ class HedgeService:
             return response
 
         except Exception as e:
-            logger.error(f"Error getting hedge position for token {token_id}: {e}")
+            logger.error(f"Error getting hedge position for token {token_id}: {e}", exc_info=True)
             # Return empty position on error
             return HedgePositionResponse(
                 wallet=f"token_{token_id}",
