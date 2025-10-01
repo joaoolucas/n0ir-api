@@ -1366,13 +1366,13 @@ class UserService:
                     # Get current value from blockchain
                     position_info = await positions_service.get_position_by_id(position.token_id)
 
-                    if position_info and position_info.current_value_usdc:
+                    if position_info and position_info.current_value_usd:
                         await self.update_position_value(
                             nft_token_id=position.token_id,
-                            current_value_usdc=Decimal(str(position_info.current_value_usdc)),
-                            unrealized_pnl_usdc=Decimal(str(position_info.unrealized_pnl or 0)),
-                            fees_earned_usdc=Decimal(str(position_info.fees_earned or 0)),
-                            rewards_earned_usdc=Decimal(str(position_info.rewards_earned or 0))
+                            current_value_usdc=Decimal(str(position_info.current_value_usd)),
+                            unrealized_pnl_usdc=Decimal("0"),  # Not available in PositionInfo
+                            fees_earned_usdc=Decimal(str(position_info.unclaimed_fees_usd or 0)),
+                            rewards_earned_usdc=Decimal("0")  # Rewards are in AERO, not USD
                         )
                         positions_updated += 1
                 except Exception as e:
