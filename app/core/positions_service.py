@@ -490,14 +490,12 @@ class PositionsService:
                 gauge_address = None
             
             # Determine owner and staking status
-            liquidity_manager_address = Web3.to_checksum_address(self.LIQUIDITY_MANAGER_ADDRESS)
-
             # If position is managed by LiquidityManager, use CDP wallet from getPositionOwner
             if cdp_wallet:
                 owner = cdp_wallet
-                # Check if staked: NFT owned by gauge means it's staked
-                staked = gauge_address and nft_owner.lower() == gauge_address.lower()
-                logger.info(f"Position {token_id} - LiquidityManager position: owner={owner}, staked={staked}")
+                # All LiquidityManager positions are auto-staked on creation
+                staked = True
+                logger.info(f"Position {token_id} - LiquidityManager position: owner={owner}, staked=True (auto-staked)")
             else:
                 # Legacy position not managed by LiquidityManager
                 owner = nft_owner
