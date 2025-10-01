@@ -509,7 +509,14 @@ class PositionsService:
             unclaimed_rewards_aero = None
 
             # Use the owner (CDP wallet) for Sugar lookups
+            # For LiquidityManager positions, try both CDP wallet AND NFT owner (LiquidityManager)
             sugar_position = await self._fetch_position_from_sugar(token_id, owner, is_unstaked=not staked)
+
+            # If not found and this is a LiquidityManager position, try with NFT owner address
+            if not sugar_position and cdp_wallet:
+                logger.info(f"Position {token_id} - Not found with CDP wallet, trying NFT owner {nft_owner}")
+                sugar_position = await self._fetch_position_from_sugar(token_id, nft_owner, is_unstaked=not staked)
+
             logger.info(f"Position {token_id} - Sugar data: {sugar_position}")
             
             if sugar_position:
@@ -547,21 +554,32 @@ class PositionsService:
             # Fetch pool APR and name from pools_service
             pool_apr = None
             pool_name = None
-            try:
-                from app.core.pools_service import pools_service
-                pool_data = await pools_service.get_pool(pool_address, include_effective_apr=False)
-                pool_apr = pool_data.get('apr', 0)
+            if pool_address:
+                try:
+                    from app.core.pools_service import pools_service
+                    pool_data = await pools_service.get_pool(pool_address, include_effective_apr=False)
 
-                # Extract pool name from symbol
-                symbol = pool_data.get('symbol', '')
-                if symbol and '-' in symbol:
-                    pool_name = symbol.split('-')[0]  # Get everything before the dash (e.g., "WETH/USDC-0.3%" -> "WETH/USDC")
-                else:
-                    pool_name = symbol
+                    if pool_data:
+                        pool_apr = pool_data.get('apr', 0)
 
-                logger.info(f"Position {token_id} - Pool: {pool_name}, APR: {pool_apr}%")
-            except Exception as e:
-                logger.warning(f"Could not fetch pool data for position {token_id}: {e}")
+                        # Extract pool name from symbol
+                        symbol = pool_data.get('symbol', '')
+                        if symbol and '-' in symbol:
+                            pool_name = symbol.split('-')[0]  # Get everything before the dash (e.g., "WETH/USDC-0.3%" -> "WETH/USDC")
+                        else:
+                            pool_name = symbol if symbol else None
+
+                        logger.info(f"Position {token_id} - Pool: {pool_name}, APR: {pool_apr}%")
+                    else:
+                        logger.warning(f"Position {token_id} - pools_service returned None for pool {pool_address}")
+                        pool_apr = 0
+                        pool_name = None
+                except Exception as e:
+                    logger.error(f"Could not fetch pool data for position {token_id} at {pool_address}: {e}", exc_info=True)
+                    pool_apr = 0
+                    pool_name = None
+            else:
+                logger.warning(f"Position {token_id} - No pool address available")
                 pool_apr = 0
                 pool_name = None
 

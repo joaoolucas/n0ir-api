@@ -426,11 +426,14 @@ class WalletTransactionService:
         if len(data) >= 128:
             try:
                 # Parse all fields from event data
+                # Note: Solidity event encoding pads each value to 32 bytes (64 hex chars)
                 liquidity = int(data[0:64], 16)
                 usdc_invested = int(data[64:128], 16)
-                tick_lower_raw = int(data[128:192], 16) if len(data) >= 192 else 0
+                # tick_lower and tick_upper are int24 (signed 24-bit integers)
+                # They're stored in the last 24 bits (6 hex chars) of each 32-byte word
+                tick_lower_raw = int(data[186:192], 16) if len(data) >= 192 else 0  # Last 6 hex chars of word
                 tick_lower = tick_lower_raw if tick_lower_raw < 2**23 else tick_lower_raw - 2**24
-                tick_upper_raw = int(data[192:256], 16) if len(data) >= 256 else 0
+                tick_upper_raw = int(data[250:256], 16) if len(data) >= 256 else 0  # Last 6 hex chars of word
                 tick_upper = tick_upper_raw if tick_upper_raw < 2**23 else tick_upper_raw - 2**24
                 staked = bool(int(data[256:320], 16)) if len(data) >= 320 else False
                 is_hedged = bool(int(data[320:384], 16)) if len(data) >= 384 else False

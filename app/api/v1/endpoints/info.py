@@ -160,6 +160,11 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
             position_dict['current_total_value'] = getattr(position_data, 'current_value_usd', 0)
             position_dict['pool_name'] = getattr(position_data, 'pool_name', 'Unknown/Unknown')
             position_dict['in_range'] = getattr(position_data, 'in_range', False)
+            # Update staked status from blockchain (overrides database value)
+            position_dict['staked'] = getattr(position_data, 'staked', False)
+            # Update gauge_address if available
+            if hasattr(position_data, 'gauge_address') and position_data.gauge_address:
+                position_dict['gauge_address'] = position_data.gauge_address
 
             # Get pool APR data
             if position.pool_address:
