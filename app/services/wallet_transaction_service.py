@@ -413,6 +413,74 @@ class WalletTransactionService:
             logger.error(f"Error fetching token price for {token_address}: {e}")
             return 0.0
 
+    async def _parse_position_created_data(self, data: str) -> tuple:
+        """Parse PositionCreated event data and calculate net USDC.
+
+        Returns:
+            Tuple of (event_data dict, usdc_amount in wei, hedge_debt_usd_value for logging)
+        """
+        event_data = {}
+        usdc_amount = 0
+        hedge_debt_usd_value = 0
+
+        if len(data) >= 128:
+            try:
+                # Parse all fields from event data
+                liquidity = int(data[0:64], 16)
+                usdc_invested = int(data[64:128], 16)
+                tick_lower_raw = int(data[128:192], 16) if len(data) >= 192 else 0
+                tick_lower = tick_lower_raw if tick_lower_raw < 2**23 else tick_lower_raw - 2**24
+                tick_upper_raw = int(data[192:256], 16) if len(data) >= 256 else 0
+                tick_upper = tick_upper_raw if tick_upper_raw < 2**23 else tick_upper_raw - 2**24
+                staked = bool(int(data[256:320], 16)) if len(data) >= 320 else False
+                is_hedged = bool(int(data[320:384], 16)) if len(data) >= 384 else False
+                hedge_collateral = int(data[384:448], 16) if len(data) >= 448 else 0
+                hedge_debt = int(data[448:512], 16) if len(data) >= 512 else 0
+                hedged_asset = "0x" + data[536:576] if len(data) >= 576 else "0x0"
+
+                event_data = {
+                    "liquidity": liquidity,
+                    "usdc_invested": usdc_invested,
+                    "tick_lower": tick_lower,
+                    "tick_upper": tick_upper,
+                    "staked": staked,
+                    "is_hedged": is_hedged,
+                    "hedge_collateral": hedge_collateral,
+                    "hedge_debt": hedge_debt,
+                    "hedged_asset": hedged_asset
+                }
+
+                # Calculate net USDC amount
+                # Net = LP investment + collateral - borrowed amount (in USD)
+                hedge_debt_usd = 0
+
+                if is_hedged and hedge_debt > 0 and hedged_asset != "0x0":
+                    try:
+                        # Get token decimals (WETH = 18, cbBTC = 8)
+                        token_decimals = 18 if "0x42000000" in hedged_asset else 8
+                        hedge_debt_tokens = hedge_debt / (10 ** token_decimals)
+
+                        # Get token price
+                        token_price = await self._get_token_price_usd(hedged_asset)
+                        if token_price > 0:
+                            hedge_debt_usd = int(hedge_debt_tokens * token_price * 1e6)  # Convert to USDC wei
+                            hedge_debt_usd_value = hedge_debt_usd / 1e6
+                            logger.info(f"Hedge debt: {hedge_debt_tokens:.6f} tokens @ ${token_price:.2f} = ${hedge_debt_usd_value:.2f}")
+                        else:
+                            logger.warning(f"Could not get price for hedged asset {hedged_asset}, setting hedge_debt_usd to 0")
+                    except Exception as price_error:
+                        logger.error(f"Error calculating hedge debt USD: {price_error}")
+                        hedge_debt_usd = 0
+
+                # Store hedge info in event_data for reference
+                event_data["hedge_debt_usd"] = hedge_debt_usd_value
+
+                usdc_amount = usdc_invested + hedge_collateral - hedge_debt_usd
+            except Exception as e:
+                logger.warning(f"Failed to parse PositionCreated data field: {e}")
+
+        return event_data, usdc_amount, hedge_debt_usd_value
+
     async def _analyze_position_event(
         self,
         traces: List[Dict],
@@ -485,67 +553,12 @@ class WalletTransactionService:
                                     else:
                                         data = data.hex() if hasattr(data, 'hex') else str(data)
 
-                                    event_data = {}
-                                    usdc_amount = 0
-
-                                    if len(data) >= 128:
-                                        try:
-                                            liquidity = int(data[0:64], 16)
-                                            usdc_invested = int(data[64:128], 16)
-                                            tick_lower_raw = int(data[128:192], 16) if len(data) >= 192 else 0
-                                            tick_lower = tick_lower_raw if tick_lower_raw < 2**23 else tick_lower_raw - 2**24
-                                            tick_upper_raw = int(data[192:256], 16) if len(data) >= 256 else 0
-                                            tick_upper = tick_upper_raw if tick_upper_raw < 2**23 else tick_upper_raw - 2**24
-                                            staked = bool(int(data[256:320], 16)) if len(data) >= 320 else False
-                                            is_hedged = bool(int(data[320:384], 16)) if len(data) >= 384 else False
-                                            hedge_collateral = int(data[384:448], 16) if len(data) >= 448 else 0
-                                            hedge_debt = int(data[448:512], 16) if len(data) >= 512 else 0
-                                            hedged_asset = "0x" + data[536:576] if len(data) >= 576 else "0x0"
-
-                                            event_data = {
-                                                "liquidity": liquidity,
-                                                "usdc_invested": usdc_invested,
-                                                "tick_lower": tick_lower,
-                                                "tick_upper": tick_upper,
-                                                "staked": staked,
-                                                "is_hedged": is_hedged,
-                                                "hedge_collateral": hedge_collateral,
-                                                "hedge_debt": hedge_debt,
-                                                "hedged_asset": hedged_asset
-                                            }
-
-                                            # Calculate net USDC amount
-                                            # Net = LP investment + collateral - borrowed amount (in USD)
-                                            hedge_debt_usd = 0
-                                            hedge_debt_usd_value = 0  # Human-readable value
-
-                                            if is_hedged and hedge_debt > 0 and hedged_asset != "0x0":
-                                                try:
-                                                    # Get token decimals (WETH = 18, cbBTC = 8)
-                                                    token_decimals = 18 if "0x42000000" in hedged_asset else 8
-                                                    hedge_debt_tokens = hedge_debt / (10 ** token_decimals)
-
-                                                    # Get token price
-                                                    token_price = await self._get_token_price_usd(hedged_asset)
-                                                    if token_price > 0:
-                                                        hedge_debt_usd = int(hedge_debt_tokens * token_price * 1e6)  # Convert to USDC wei
-                                                        hedge_debt_usd_value = hedge_debt_usd / 1e6
-                                                        logger.info(f"Hedge debt: {hedge_debt_tokens:.6f} tokens @ ${token_price:.2f} = ${hedge_debt_usd_value:.2f}")
-                                                    else:
-                                                        logger.warning(f"Could not get price for hedged asset {hedged_asset}, setting hedge_debt_usd to 0")
-                                                except Exception as price_error:
-                                                    logger.error(f"Error calculating hedge debt USD: {price_error}")
-                                                    hedge_debt_usd = 0
-
-                                            # Store hedge info in event_data for reference
-                                            event_data["hedge_debt_usd"] = hedge_debt_usd_value
-
-                                            usdc_amount = usdc_invested + hedge_collateral - hedge_debt_usd
-                                        except Exception as e:
-                                            logger.warning(f"Failed to parse PositionCreated data field: {e}")
+                                    # Use shared parsing method
+                                    event_data, usdc_amount, hedge_debt_usd_value = await self._parse_position_created_data(data)
 
                                     logger.info(f"✅ Detected PositionCreated: position {position_id} in pool {pool_addr}, Net USDC: {usdc_amount/1e6:.2f}")
-                                    logger.info(f"   LP: {usdc_invested/1e6:.2f}, Collateral: {hedge_collateral/1e6:.2f}, Debt: ${hedge_debt_usd_value:.2f}")
+                                    if event_data:
+                                        logger.info(f"   LP: {event_data.get('usdc_invested', 0)/1e6:.2f}, Collateral: {event_data.get('hedge_collateral', 0)/1e6:.2f}, Debt: ${hedge_debt_usd_value:.2f}")
 
                                     position_created_event = {
                                         "method_name": "openPosition",
@@ -559,12 +572,12 @@ class WalletTransactionService:
                                         "aero_out": 0,
                                         "aero_in": 0,
                                         # Add hedge info at top level for visibility
-                                        "usdc_invested": usdc_invested,
-                                        "hedge_collateral": hedge_collateral,
-                                        "hedge_debt": hedge_debt,
-                                        "hedge_debt_usd": hedge_debt_usd,
-                                        "is_hedged": is_hedged,
-                                        "hedged_asset": hedged_asset
+                                        "usdc_invested": event_data.get("usdc_invested", 0),
+                                        "hedge_collateral": event_data.get("hedge_collateral", 0),
+                                        "hedge_debt": event_data.get("hedge_debt", 0),
+                                        "hedge_debt_usd": event_data.get("hedge_debt_usd", 0),
+                                        "is_hedged": event_data.get("is_hedged", False),
+                                        "hedged_asset": event_data.get("hedged_asset", "0x0")
                                     }
                             except (ValueError, TypeError, AttributeError) as e:
                                 logger.warning(f"Failed to parse PositionCreated event: {e}")
@@ -667,45 +680,31 @@ class WalletTransactionService:
                                 if isinstance(data, str):
                                     data = data[2:] if data.startswith("0x") else data
 
-                                event_data = {}
-                                usdc_amount = 0
-                                if len(data) >= 128:
-                                    try:
-                                        liquidity = int(data[0:64], 16)
-                                        usdc_invested = int(data[64:128], 16)
-                                        tick_lower_raw = int(data[128:192], 16) if len(data) >= 192 else 0
-                                        tick_lower = tick_lower_raw if tick_lower_raw < 2**23 else tick_lower_raw - 2**24
-                                        tick_upper_raw = int(data[192:256], 16) if len(data) >= 256 else 0
-                                        tick_upper = tick_upper_raw if tick_upper_raw < 2**23 else tick_upper_raw - 2**24
-                                        staked = bool(int(data[256:320], 16)) if len(data) >= 320 else False
-                                        is_hedged = bool(int(data[320:384], 16)) if len(data) >= 384 else False
-                                        hedge_collateral = int(data[384:448], 16) if len(data) >= 448 else 0
-                                        hedge_debt = int(data[448:512], 16) if len(data) >= 512 else 0
-                                        hedged_asset = "0x" + data[536:576] if len(data) >= 576 else "0x0"
+                                # Use shared parsing method
+                                event_data, usdc_amount, hedge_debt_usd_value = await self._parse_position_created_data(data)
 
-                                        event_data = {
-                                            "liquidity": liquidity,
-                                            "usdc_invested": usdc_invested,
-                                            "tick_lower": tick_lower,
-                                            "tick_upper": tick_upper,
-                                            "staked": staked,
-                                            "is_hedged": is_hedged,
-                                            "hedge_collateral": hedge_collateral,
-                                            "hedge_debt": hedge_debt,
-                                            "hedged_asset": hedged_asset
-                                        }
-                                        usdc_amount = usdc_invested
-                                    except Exception as e:
-                                        logger.warning(f"Failed to parse RPC PositionCreated data: {e}")
+                                logger.info(f"✅ Found PositionCreated in RPC logs: position {position_id} in pool {pool_addr}, Net USDC: {usdc_amount/1e6:.2f}")
+                                if event_data:
+                                    logger.info(f"   LP: {event_data.get('usdc_invested', 0)/1e6:.2f}, Collateral: {event_data.get('hedge_collateral', 0)/1e6:.2f}, Debt: ${hedge_debt_usd_value:.2f}")
 
-                                logger.info(f"✅ Found PositionCreated in RPC logs: position {position_id} in pool {pool_addr}, USDC invested: {usdc_amount/1e6:.2f}")
                                 rpc_position_created = {
                                     "method_name": "openPosition",
                                     "nft_token_id": position_id,
                                     "pool": pool_addr,
                                     "event_detected": "PositionCreated_RPC",
                                     "event_data": event_data,
-                                    "usdc_amount": usdc_amount
+                                    "usdc_amount": usdc_amount,
+                                    "usdc_out": usdc_amount,  # Net USDC deployed
+                                    "usdc_in": 0,  # No USDC returned on creation
+                                    "aero_out": 0,
+                                    "aero_in": 0,
+                                    # Add hedge info at top level for visibility
+                                    "usdc_invested": event_data.get("usdc_invested", 0),
+                                    "hedge_collateral": event_data.get("hedge_collateral", 0),
+                                    "hedge_debt": event_data.get("hedge_debt", 0),
+                                    "hedge_debt_usd": event_data.get("hedge_debt_usd", 0),
+                                    "is_hedged": event_data.get("is_hedged", False),
+                                    "hedged_asset": event_data.get("hedged_asset", "0x0")
                                 }
                         except Exception as e:
                             logger.warning(f"Failed to parse RPC PositionCreated event: {e}")
