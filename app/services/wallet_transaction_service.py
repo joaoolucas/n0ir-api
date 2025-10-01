@@ -419,8 +419,9 @@ class WalletTransactionService:
         position_event = None
 
         # Event signatures from LiquidityManager contract (0x8123F467Fa2C53a31D8738D5FAa0DFd881F5DF8A)
-        POSITION_CREATED_EVENT = "0x8998acd79c07bccd21f257f79c807045bab25e93613e79de2c7bdc0bb8be97d9"
-        POSITION_CLOSED_EVENT = "0x88c1305346ac50e10ed13fef7c87d7051d8d41393c2f50bd5086f27b9ba0d88a"
+        # Updated to match new ABI with enriched event data
+        POSITION_CREATED_EVENT = "0x22c1b606e32c54081d4813a6daf0b6ab4522b84a2829c0dfa181ac6f12c62b7c"
+        POSITION_CLOSED_EVENT = "0xfc4e6ac706594637404ad0c7694a5353537a522cc0cf04a16ca51a228b0f2bd4"
 
         # Check CDP logs for PositionCreated or PositionClosed events
         # Collect ALL events first (don't break early) to handle cases where both exist
@@ -462,33 +463,120 @@ class WalletTransactionService:
                                 pool_addr = ("0x" + topics[3][-40:] if isinstance(topics[3], str) else "0x" + str(topics[3])[-40:]).lower()
 
                                 if user_addr == cdp_wallet.lower():
-                                    logger.info(f"✅ Detected PositionCreated: position {position_id} in pool {pool_addr}")
+                                    # Parse data field for non-indexed parameters
+                                    # Data: liquidity(uint128), usdcInvested(uint256), tickLower(int24), tickUpper(int24),
+                                    #       staked(bool), isHedged(bool), hedgeCollateral(uint256), hedgeDebt(uint256), hedgedAsset(address)
+                                    data = log.get("data", "0x")
+                                    if isinstance(data, str):
+                                        data = data[2:] if data.startswith("0x") else data
+                                    else:
+                                        data = data.hex() if hasattr(data, 'hex') else str(data)
+
+                                    event_data = {}
+                                    if len(data) >= 64:  # At least one uint256
+                                        try:
+                                            # liquidity: uint128 (first 16 bytes, but stored in first 32 bytes of data)
+                                            liquidity = int(data[0:64], 16)
+                                            # usdcInvested: uint256 (next 32 bytes)
+                                            usdc_invested = int(data[64:128], 16) if len(data) >= 128 else 0
+                                            # tickLower: int24 (next 32 bytes, but value is in last 6 hex chars = 3 bytes)
+                                            tick_lower_raw = int(data[128:192], 16) if len(data) >= 192 else 0
+                                            # Convert to signed int24
+                                            tick_lower = tick_lower_raw if tick_lower_raw < 2**23 else tick_lower_raw - 2**24
+                                            # tickUpper: int24
+                                            tick_upper_raw = int(data[192:256], 16) if len(data) >= 256 else 0
+                                            tick_upper = tick_upper_raw if tick_upper_raw < 2**23 else tick_upper_raw - 2**24
+                                            # staked: bool (next 32 bytes, but value is 0 or 1)
+                                            staked = bool(int(data[256:320], 16)) if len(data) >= 320 else False
+                                            # isHedged: bool
+                                            is_hedged = bool(int(data[320:384], 16)) if len(data) >= 384 else False
+                                            # hedgeCollateral: uint256
+                                            hedge_collateral = int(data[384:448], 16) if len(data) >= 448 else 0
+                                            # hedgeDebt: uint256
+                                            hedge_debt = int(data[448:512], 16) if len(data) >= 512 else 0
+                                            # hedgedAsset: address (last 20 bytes of 32-byte word)
+                                            hedged_asset = "0x" + data[536:576] if len(data) >= 576 else "0x0"
+
+                                            event_data = {
+                                                "liquidity": liquidity,
+                                                "usdc_invested": usdc_invested,
+                                                "tick_lower": tick_lower,
+                                                "tick_upper": tick_upper,
+                                                "staked": staked,
+                                                "is_hedged": is_hedged,
+                                                "hedge_collateral": hedge_collateral,
+                                                "hedge_debt": hedge_debt,
+                                                "hedged_asset": hedged_asset
+                                            }
+                                        except Exception as e:
+                                            logger.warning(f"Failed to parse PositionCreated data field: {e}")
+
+                                    logger.info(f"✅ Detected PositionCreated: position {position_id} in pool {pool_addr}, USDC invested: {event_data.get('usdc_invested', 0)/1e6:.2f}")
                                     position_created_event = {
                                         "method_name": "openPosition",
                                         "nft_token_id": position_id,
                                         "pool": pool_addr,
-                                        "event_detected": "PositionCreated"
+                                        "event_detected": "PositionCreated",
+                                        "event_data": event_data,
+                                        "usdc_amount": event_data.get('usdc_invested', 0)  # Direct from event
                                     }
                             except (ValueError, TypeError, AttributeError) as e:
                                 logger.warning(f"Failed to parse PositionCreated event: {e}")
 
                     # Check for PositionClosed event
                     elif event_sig_normalized == POSITION_CLOSED_EVENT.lower():
-                        if len(topics) >= 2:
+                        if len(topics) >= 4:
                             try:
                                 # Extract indexed parameters
-                                # Topic 1: position ID (NFT token ID)
-                                position_id_hex = topics[1].hex() if hasattr(topics[1], 'hex') else topics[1]
+                                # Topic 1: user address (CDP wallet)
+                                user_addr = ("0x" + topics[1][-40:] if isinstance(topics[1], str) else "0x" + str(topics[1])[-40:]).lower()
+                                # Topic 2: position ID (NFT token ID)
+                                position_id_hex = topics[2].hex() if hasattr(topics[2], 'hex') else topics[2]
                                 if isinstance(position_id_hex, str):
                                     position_id_hex = position_id_hex.replace('0x', '')
                                 position_id = int(position_id_hex, 16)
+                                # Topic 3: pool address
+                                pool_addr = ("0x" + topics[3][-40:] if isinstance(topics[3], str) else "0x" + str(topics[3])[-40:]).lower()
 
-                                logger.info(f"✅ Detected PositionClosed: position {position_id}")
-                                position_closed_event = {
-                                    "method_name": "closePosition",
-                                    "nft_token_id": position_id,
-                                    "event_detected": "PositionClosed"
-                                }
+                                if user_addr == cdp_wallet.lower():
+                                    # Parse data field for non-indexed parameters
+                                    # Data: usdcReturned(uint256), wasStaked(bool), wasHedged(bool), hedgeCollateralReturned(uint256)
+                                    data = log.get("data", "0x")
+                                    if isinstance(data, str):
+                                        data = data[2:] if data.startswith("0x") else data
+                                    else:
+                                        data = data.hex() if hasattr(data, 'hex') else str(data)
+
+                                    event_data = {}
+                                    if len(data) >= 64:  # At least one uint256
+                                        try:
+                                            # usdcReturned: uint256 (first 32 bytes)
+                                            usdc_returned = int(data[0:64], 16)
+                                            # wasStaked: bool (next 32 bytes, value is 0 or 1)
+                                            was_staked = bool(int(data[64:128], 16)) if len(data) >= 128 else False
+                                            # wasHedged: bool
+                                            was_hedged = bool(int(data[128:192], 16)) if len(data) >= 192 else False
+                                            # hedgeCollateralReturned: uint256
+                                            hedge_collateral_returned = int(data[192:256], 16) if len(data) >= 256 else 0
+
+                                            event_data = {
+                                                "usdc_returned": usdc_returned,
+                                                "was_staked": was_staked,
+                                                "was_hedged": was_hedged,
+                                                "hedge_collateral_returned": hedge_collateral_returned
+                                            }
+                                        except Exception as e:
+                                            logger.warning(f"Failed to parse PositionClosed data field: {e}")
+
+                                    logger.info(f"✅ Detected PositionClosed: position {position_id} in pool {pool_addr}, USDC returned: {event_data.get('usdc_returned', 0)/1e6:.2f}")
+                                    position_closed_event = {
+                                        "method_name": "closePosition",
+                                        "nft_token_id": position_id,
+                                        "pool": pool_addr,
+                                        "event_detected": "PositionClosed",
+                                        "event_data": event_data,
+                                        "usdc_amount": event_data.get('usdc_returned', 0)  # Direct from event
+                                    }
                             except (ValueError, TypeError, AttributeError) as e:
                                 logger.warning(f"Failed to parse PositionClosed event: {e}")
 
@@ -529,27 +617,96 @@ class WalletTransactionService:
                             pool_addr = ("0x" + log["topics"][3][-40:]).lower()
 
                             if user_addr == cdp_wallet.lower():
-                                logger.info(f"✅ Found PositionCreated in RPC logs: position {position_id} in pool {pool_addr}")
+                                # Parse data field
+                                data = log.get("data", "0x")
+                                if isinstance(data, str):
+                                    data = data[2:] if data.startswith("0x") else data
+
+                                event_data = {}
+                                usdc_amount = 0
+                                if len(data) >= 128:
+                                    try:
+                                        liquidity = int(data[0:64], 16)
+                                        usdc_invested = int(data[64:128], 16)
+                                        tick_lower_raw = int(data[128:192], 16) if len(data) >= 192 else 0
+                                        tick_lower = tick_lower_raw if tick_lower_raw < 2**23 else tick_lower_raw - 2**24
+                                        tick_upper_raw = int(data[192:256], 16) if len(data) >= 256 else 0
+                                        tick_upper = tick_upper_raw if tick_upper_raw < 2**23 else tick_upper_raw - 2**24
+                                        staked = bool(int(data[256:320], 16)) if len(data) >= 320 else False
+                                        is_hedged = bool(int(data[320:384], 16)) if len(data) >= 384 else False
+                                        hedge_collateral = int(data[384:448], 16) if len(data) >= 448 else 0
+                                        hedge_debt = int(data[448:512], 16) if len(data) >= 512 else 0
+                                        hedged_asset = "0x" + data[536:576] if len(data) >= 576 else "0x0"
+
+                                        event_data = {
+                                            "liquidity": liquidity,
+                                            "usdc_invested": usdc_invested,
+                                            "tick_lower": tick_lower,
+                                            "tick_upper": tick_upper,
+                                            "staked": staked,
+                                            "is_hedged": is_hedged,
+                                            "hedge_collateral": hedge_collateral,
+                                            "hedge_debt": hedge_debt,
+                                            "hedged_asset": hedged_asset
+                                        }
+                                        usdc_amount = usdc_invested
+                                    except Exception as e:
+                                        logger.warning(f"Failed to parse RPC PositionCreated data: {e}")
+
+                                logger.info(f"✅ Found PositionCreated in RPC logs: position {position_id} in pool {pool_addr}, USDC invested: {usdc_amount/1e6:.2f}")
                                 rpc_position_created = {
                                     "method_name": "openPosition",
                                     "nft_token_id": position_id,
                                     "pool": pool_addr,
-                                    "event_detected": "PositionCreated_RPC"
+                                    "event_detected": "PositionCreated_RPC",
+                                    "event_data": event_data,
+                                    "usdc_amount": usdc_amount
                                 }
                         except Exception as e:
                             logger.warning(f"Failed to parse RPC PositionCreated event: {e}")
 
                 # Check for PositionClosed event
                 elif event_sig in [POSITION_CLOSED_EVENT.lower(), POSITION_CLOSED_EVENT[2:].lower()]:
-                    if len(log["topics"]) >= 2:
+                    if len(log["topics"]) >= 4:
                         try:
-                            position_id = int(log["topics"][1], 16)
-                            logger.info(f"✅ Found PositionClosed in RPC logs: position {position_id}")
-                            rpc_position_closed = {
-                                "method_name": "closePosition",
-                                "nft_token_id": position_id,
-                                "event_detected": "PositionClosed_RPC"
-                            }
+                            user_addr = ("0x" + log["topics"][1][-40:]).lower()
+                            position_id = int(log["topics"][2], 16)
+                            pool_addr = ("0x" + log["topics"][3][-40:]).lower()
+
+                            if user_addr == cdp_wallet.lower():
+                                # Parse data field
+                                data = log.get("data", "0x")
+                                if isinstance(data, str):
+                                    data = data[2:] if data.startswith("0x") else data
+
+                                event_data = {}
+                                usdc_amount = 0
+                                if len(data) >= 64:
+                                    try:
+                                        usdc_returned = int(data[0:64], 16)
+                                        was_staked = bool(int(data[64:128], 16)) if len(data) >= 128 else False
+                                        was_hedged = bool(int(data[128:192], 16)) if len(data) >= 192 else False
+                                        hedge_collateral_returned = int(data[192:256], 16) if len(data) >= 256 else 0
+
+                                        event_data = {
+                                            "usdc_returned": usdc_returned,
+                                            "was_staked": was_staked,
+                                            "was_hedged": was_hedged,
+                                            "hedge_collateral_returned": hedge_collateral_returned
+                                        }
+                                        usdc_amount = usdc_returned
+                                    except Exception as e:
+                                        logger.warning(f"Failed to parse RPC PositionClosed data: {e}")
+
+                                logger.info(f"✅ Found PositionClosed in RPC logs: position {position_id} in pool {pool_addr}, USDC returned: {usdc_amount/1e6:.2f}")
+                                rpc_position_closed = {
+                                    "method_name": "closePosition",
+                                    "nft_token_id": position_id,
+                                    "pool": pool_addr,
+                                    "event_detected": "PositionClosed_RPC",
+                                    "event_data": event_data,
+                                    "usdc_amount": usdc_amount
+                                }
                         except Exception as e:
                             logger.warning(f"Failed to parse RPC PositionClosed event: {e}")
 
@@ -561,89 +718,26 @@ class WalletTransactionService:
             elif rpc_position_closed:
                 position_event = rpc_position_closed
 
-        # If we found a position event, add token flow data
+        # If we found a position event, use the USDC amount from event data
         if position_event:
-            # Track USDC and AERO flows from ERC20 Transfer events
-            usdc_in, usdc_out, aero_in, aero_out = 0, 0, 0, 0
+            # Get USDC amount directly from parsed event data (already set during parsing)
+            usdc_amount = position_event.get("usdc_amount", 0)
 
-            for trace in traces:
-                if "logs" in trace:
-                    for log in trace.get("logs", []):
-                        if not log.get("topics") or len(log["topics"]) != 3:  # ERC20 Transfer has 3 topics
-                            continue
+            # Set token flows based on event type
+            if position_event["method_name"] == "openPosition":
+                # Position created: USDC goes out (invested)
+                position_event["usdc_in"] = 0
+                position_event["usdc_out"] = usdc_amount
+            elif position_event["method_name"] == "closePosition":
+                # Position closed: USDC comes in (returned)
+                position_event["usdc_in"] = usdc_amount
+                position_event["usdc_out"] = 0
 
-                        event_sig = log["topics"][0].lower() if log["topics"] else None
-                        log_address = log.get("address", "").lower()
+            # AERO flows not tracked in new events, set to 0
+            position_event["aero_in"] = 0
+            position_event["aero_out"] = 0
 
-                        # ERC20 Transfer event
-                        if event_sig == "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef":
-                            try:
-                                from_addr = ("0x" + log["topics"][1][-40:]).lower()
-                                to_addr = ("0x" + log["topics"][2][-40:]).lower()
-                                amount_hex = log.get("data", "0x0")[2:] if log.get("data", "0x0").startswith("0x") else log.get("data", "0x0")
-                                amount = int(amount_hex, 16) if amount_hex else 0
-
-                                # Track USDC flows
-                                if log_address == self.USDC_ADDRESS:
-                                    if from_addr == cdp_wallet.lower():
-                                        usdc_out += amount
-                                    elif to_addr == cdp_wallet.lower():
-                                        usdc_in += amount
-
-                                # Track AERO flows
-                                elif log_address == self.AERO_ADDRESS:
-                                    if from_addr == cdp_wallet.lower():
-                                        aero_out += amount
-                                    elif to_addr == cdp_wallet.lower():
-                                        aero_in += amount
-                            except (ValueError, TypeError) as e:
-                                logger.warning(f"Failed to decode ERC20 Transfer: {e}")
-
-            # If no flows found in CDP logs, fetch from RPC as fallback
-            if usdc_in == 0 and usdc_out == 0 and aero_in == 0 and aero_out == 0 and tx_hash:
-                logger.info(f"No token flows in CDP logs, fetching from RPC for {tx_hash[:10]}...")
-                rpc_logs = await self._fetch_rpc_logs(tx_hash)
-
-                for log in rpc_logs:
-                    if not log.get("topics") or len(log["topics"]) != 3:
-                        continue
-
-                    event_sig = log["topics"][0].lower() if log["topics"] else None
-                    log_address = log["address"].lower()
-
-                    # ERC20 Transfer event
-                    if event_sig in ["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef", "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"]:
-                        try:
-                            from_addr = ("0x" + log["topics"][1][-40:]).lower()
-                            to_addr = ("0x" + log["topics"][2][-40:]).lower()
-                            amount_hex = log.get("data", "0x0")
-                            if amount_hex.startswith("0x"):
-                                amount_hex = amount_hex[2:]
-                            amount = int(amount_hex, 16) if amount_hex else 0
-
-                            # Track USDC flows
-                            if log_address == self.USDC_ADDRESS:
-                                if from_addr == cdp_wallet.lower():
-                                    usdc_out += amount
-                                elif to_addr == cdp_wallet.lower():
-                                    usdc_in += amount
-
-                            # Track AERO flows
-                            elif log_address == self.AERO_ADDRESS:
-                                if from_addr == cdp_wallet.lower():
-                                    aero_out += amount
-                                elif to_addr == cdp_wallet.lower():
-                                    aero_in += amount
-                        except Exception as e:
-                            logger.warning(f"Failed to decode RPC ERC20 Transfer: {e}")
-
-            # Add token flows to position event
-            position_event["usdc_in"] = usdc_in
-            position_event["usdc_out"] = usdc_out
-            position_event["aero_in"] = aero_in
-            position_event["aero_out"] = aero_out
-
-            logger.info(f"✅ Position event with flows: method={position_event['method_name']}, nft_id={position_event.get('nft_token_id')}, USDC in={usdc_in/1e6:.2f}, out={usdc_out/1e6:.2f}, AERO in={aero_in/1e18:.2f}, out={aero_out/1e18:.2f}")
+            logger.info(f"✅ Position event: method={position_event['method_name']}, nft_id={position_event.get('nft_token_id')}, USDC amount={usdc_amount/1e6:.2f}")
             return position_event
 
         return None
@@ -753,6 +847,10 @@ class WalletTransactionService:
                 details["aero_in"] = position_event["aero_in"]
                 details["aero_out"] = position_event["aero_out"]
 
+                # Add enriched event data (tick range, hedge info, staking status)
+                if "event_data" in position_event:
+                    details["event_data"] = position_event["event_data"]
+
                 logger.info(f"Detected POSITION_CREATED: {details['tx_hash'][:10]}... NFT: {details.get('nft_token_id')}, Amount: {net_amount/1e6:.2f} USDC")
                 return TransactionType.POSITION_CREATED, details
 
@@ -773,6 +871,10 @@ class WalletTransactionService:
                 # If AERO was received, it means it was swapped to USDC as part of closing
                 if position_event["aero_out"] > 0:
                     details["aero_swapped_to_usdc"] = position_event["aero_out"]
+
+                # Add enriched event data (staking status, hedge info returned)
+                if "event_data" in position_event:
+                    details["event_data"] = position_event["event_data"]
 
                 logger.info(f"Detected POSITION_CLOSED: {details['tx_hash'][:10]}... NFT: {details.get('nft_token_id')}, Amount: {amount_received/1e6:.2f} USDC")
                 return TransactionType.POSITION_CLOSED, details
