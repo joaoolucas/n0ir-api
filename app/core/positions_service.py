@@ -508,14 +508,10 @@ class PositionsService:
             unclaimed_fees_usd = None
             unclaimed_rewards_aero = None
 
-            # Use the owner (CDP wallet) for Sugar lookups
-            # For LiquidityManager positions, try both CDP wallet AND NFT owner (LiquidityManager)
-            sugar_position = await self._fetch_position_from_sugar(token_id, owner, is_unstaked=not staked)
-
-            # If not found and this is a LiquidityManager position, try with NFT owner address
-            if not sugar_position and cdp_wallet:
-                logger.info(f"Position {token_id} - Not found with CDP wallet, trying NFT owner {nft_owner}")
-                sugar_position = await self._fetch_position_from_sugar(token_id, nft_owner, is_unstaked=not staked)
+            # For LiquidityManager positions, use the LiquidityManager contract address for Sugar lookups
+            # For legacy positions, use the NFT owner
+            sugar_owner = self.LIQUIDITY_MANAGER_ADDRESS if cdp_wallet else owner
+            sugar_position = await self._fetch_position_from_sugar(token_id, sugar_owner, is_unstaked=not staked)
 
             logger.info(f"Position {token_id} - Sugar data: {sugar_position}")
             
