@@ -599,6 +599,44 @@ class WalletTransactionService:
                             except (ValueError, TypeError) as e:
                                 logger.warning(f"Failed to decode ERC20 Transfer: {e}")
 
+            # If no flows found in CDP logs, fetch from RPC as fallback
+            if usdc_in == 0 and usdc_out == 0 and aero_in == 0 and aero_out == 0 and tx_hash:
+                logger.info(f"No token flows in CDP logs, fetching from RPC for {tx_hash[:10]}...")
+                rpc_logs = await self._fetch_rpc_logs(tx_hash)
+
+                for log in rpc_logs:
+                    if not log.get("topics") or len(log["topics"]) != 3:
+                        continue
+
+                    event_sig = log["topics"][0].lower() if log["topics"] else None
+                    log_address = log["address"].lower()
+
+                    # ERC20 Transfer event
+                    if event_sig in ["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef", "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"]:
+                        try:
+                            from_addr = ("0x" + log["topics"][1][-40:]).lower()
+                            to_addr = ("0x" + log["topics"][2][-40:]).lower()
+                            amount_hex = log.get("data", "0x0")
+                            if amount_hex.startswith("0x"):
+                                amount_hex = amount_hex[2:]
+                            amount = int(amount_hex, 16) if amount_hex else 0
+
+                            # Track USDC flows
+                            if log_address == self.USDC_ADDRESS:
+                                if from_addr == cdp_wallet.lower():
+                                    usdc_out += amount
+                                elif to_addr == cdp_wallet.lower():
+                                    usdc_in += amount
+
+                            # Track AERO flows
+                            elif log_address == self.AERO_ADDRESS:
+                                if from_addr == cdp_wallet.lower():
+                                    aero_out += amount
+                                elif to_addr == cdp_wallet.lower():
+                                    aero_in += amount
+                        except Exception as e:
+                            logger.warning(f"Failed to decode RPC ERC20 Transfer: {e}")
+
             # Add token flows to position event
             position_event["usdc_in"] = usdc_in
             position_event["usdc_out"] = usdc_out
