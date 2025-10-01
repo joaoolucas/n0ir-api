@@ -156,8 +156,15 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
         if position_data:
             # Update with blockchain data
             # position_data is a PositionInfo object, use attributes not .get()
-            position_dict['current_value_usdc'] = getattr(position_data, 'current_value_usd', 0)
-            position_dict['current_total_value'] = getattr(position_data, 'current_value_usd', 0)
+            blockchain_value = Decimal(str(getattr(position_data, 'current_value_usd', 0)))
+
+            # Add debt value if position is hedged
+            debt_value = Decimal(0)
+            if hedge_info and hedge_info.get('debt_value_usd'):
+                debt_value = Decimal(str(hedge_info['debt_value_usd']))
+
+            position_dict['current_value_usdc'] = blockchain_value + debt_value
+            position_dict['current_total_value'] = blockchain_value + debt_value
             position_dict['pool_name'] = getattr(position_data, 'pool_name', 'Unknown/Unknown')
             position_dict['in_range'] = getattr(position_data, 'in_range', False)
             # Update staked status from blockchain (overrides database value)
@@ -177,7 +184,7 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
                     position_dict['effective_apr'] = Decimal(0)
 
             # Calculate PnL (simple version - current value minus entry amount)
-            current_value = Decimal(str(getattr(position_data, 'current_value_usd', 0)))
+            current_value = blockchain_value + debt_value
 
             # Total PnL includes fees and rewards
             total_fees_rewards = position.fees_earned_usdc + position.rewards_earned_usdc
