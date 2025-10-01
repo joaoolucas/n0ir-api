@@ -423,6 +423,10 @@ class WalletTransactionService:
         POSITION_CLOSED_EVENT = "0x88c1305346ac50e10ed13fef7c87d7051d8d41393c2f50bd5086f27b9ba0d88a"
 
         # Check CDP logs for PositionCreated or PositionClosed events
+        # Collect ALL events first (don't break early) to handle cases where both exist
+        position_created_event = None
+        position_closed_event = None
+
         for trace in traces:
             if "logs" in trace:
                 for log in trace.get("logs", []):
@@ -459,13 +463,12 @@ class WalletTransactionService:
 
                                 if user_addr == cdp_wallet.lower():
                                     logger.info(f"✅ Detected PositionCreated: position {position_id} in pool {pool_addr}")
-                                    position_event = {
+                                    position_created_event = {
                                         "method_name": "openPosition",
                                         "nft_token_id": position_id,
                                         "pool": pool_addr,
                                         "event_detected": "PositionCreated"
                                     }
-                                    break  # Found the event we need
                             except (ValueError, TypeError, AttributeError) as e:
                                 logger.warning(f"Failed to parse PositionCreated event: {e}")
 
@@ -481,19 +484,30 @@ class WalletTransactionService:
                                 position_id = int(position_id_hex, 16)
 
                                 logger.info(f"✅ Detected PositionClosed: position {position_id}")
-                                position_event = {
+                                position_closed_event = {
                                     "method_name": "closePosition",
                                     "nft_token_id": position_id,
                                     "event_detected": "PositionClosed"
                                 }
-                                break  # Found the event we need
                             except (ValueError, TypeError, AttributeError) as e:
                                 logger.warning(f"Failed to parse PositionClosed event: {e}")
+
+        # Prioritize PositionCreated over PositionClosed when both exist
+        # This handles position replacement scenarios
+        if position_created_event:
+            position_event = position_created_event
+            if position_closed_event:
+                logger.info(f"Transaction has both PositionCreated and PositionClosed - prioritizing PositionCreated (position replacement)")
+        elif position_closed_event:
+            position_event = position_closed_event
 
         # If not found in CDP logs and we have a tx_hash, check RPC logs as fallback
         if not position_event and tx_hash:
             logger.info(f"No position event in CDP data for {tx_hash[:10]}..., fetching from RPC")
             rpc_logs = await self._fetch_rpc_logs(tx_hash)
+
+            rpc_position_created = None
+            rpc_position_closed = None
 
             for log in rpc_logs:
                 if not log.get("topics") or len(log["topics"]) < 2:
@@ -516,13 +530,12 @@ class WalletTransactionService:
 
                             if user_addr == cdp_wallet.lower():
                                 logger.info(f"✅ Found PositionCreated in RPC logs: position {position_id} in pool {pool_addr}")
-                                position_event = {
+                                rpc_position_created = {
                                     "method_name": "openPosition",
                                     "nft_token_id": position_id,
                                     "pool": pool_addr,
                                     "event_detected": "PositionCreated_RPC"
                                 }
-                                break
                         except Exception as e:
                             logger.warning(f"Failed to parse RPC PositionCreated event: {e}")
 
@@ -532,14 +545,21 @@ class WalletTransactionService:
                         try:
                             position_id = int(log["topics"][1], 16)
                             logger.info(f"✅ Found PositionClosed in RPC logs: position {position_id}")
-                            position_event = {
+                            rpc_position_closed = {
                                 "method_name": "closePosition",
                                 "nft_token_id": position_id,
                                 "event_detected": "PositionClosed_RPC"
                             }
-                            break
                         except Exception as e:
                             logger.warning(f"Failed to parse RPC PositionClosed event: {e}")
+
+            # Prioritize PositionCreated over PositionClosed in RPC logs too
+            if rpc_position_created:
+                position_event = rpc_position_created
+                if rpc_position_closed:
+                    logger.info(f"RPC logs have both PositionCreated and PositionClosed - prioritizing PositionCreated")
+            elif rpc_position_closed:
+                position_event = rpc_position_closed
 
         # If we found a position event, add token flow data
         if position_event:
