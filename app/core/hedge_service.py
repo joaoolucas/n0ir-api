@@ -157,9 +157,20 @@ class HedgeService:
             # Get asset prices
             prices = await self.get_asset_prices()
 
-            # Get global health metrics
-            global_metrics = vault_contract.get_global_health_metrics()
-            is_at_risk, current_hf, min_safe_hf = vault_contract.is_protocol_at_risk()
+            # Try to get global health metrics (may not be available on all contracts)
+            try:
+                global_metrics = vault_contract.get_global_health_metrics()
+                is_at_risk, current_hf, min_safe_hf = vault_contract.is_protocol_at_risk()
+            except Exception as e:
+                logger.warning(f"Could not fetch global health metrics: {e}")
+                global_metrics = {
+                    'total_collateral': 0,
+                    'total_debt_weth': 0,
+                    'total_debt_btc': 0,
+                    'health_factor': 0,
+                    'available_borrows_usd': 0
+                }
+                is_at_risk = False
 
             # Get hedge info for this specific position
             logger.info(f"Fetching hedge info for token {token_id}")
