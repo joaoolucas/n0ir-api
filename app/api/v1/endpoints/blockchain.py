@@ -431,7 +431,7 @@ async def get_token_info(
 # ============================================================================
 
 @router.get(
-    "/hedge/{wallet}",
+    "/hedge/{wallet_or_token_id}",
     response_model=HedgePositionResponse,
     responses={
         404: {"model": ErrorResponse, "description": "No positions found"},
@@ -440,10 +440,14 @@ async def get_token_info(
 )
 async def get_hedge_position(
     request: Request,
-    wallet: str = Path(..., description="Wallet address", pattern="^0x[a-fA-F0-9]{40}$")
+    wallet_or_token_id: str = Path(..., description="Wallet address (0x...) or token ID (numeric)")
 ):
     """
-    Get vault hedge positions and account health for a wallet.
+    Get vault hedge positions and account health.
+
+    Accepts either:
+    - Wallet address (0x...): Returns all hedged positions for the wallet
+    - Token ID (numeric): Returns hedge info for a specific position
 
     Returns comprehensive information about:
     - All hedged positions (token IDs) with collateral and debt
@@ -461,18 +465,26 @@ async def get_hedge_position(
     - Debt amount in the hedged asset (WETH or cbBTC)
     - Whether position is actively hedged
     """
-    logger.info(f"GET /hedge/{wallet} - IP: {request.client.host}")
+    logger.info(f"GET /hedge/{wallet_or_token_id} - IP: {request.client.host}")
     try:
-        # Get hedge position data from vault
-        position = await hedge_service.get_hedge_position(wallet)
+        # Determine if input is wallet address or token ID
+        is_wallet = wallet_or_token_id.startswith("0x")
+
+        if is_wallet:
+            # Get hedge position data from vault by wallet
+            position = await hedge_service.get_hedge_position(wallet_or_token_id)
+        else:
+            # Get hedge position data by token ID
+            token_id = int(wallet_or_token_id)
+            position = await hedge_service.get_hedge_position_by_token_id(token_id)
 
         # Check if wallet has any positions
         if not position.positions:
-            logger.info(f"No hedge positions found for wallet {wallet}")
+            logger.info(f"No hedge positions found for {wallet_or_token_id}")
             # Still return the response with empty positions
             return position
 
-        logger.info(f"Successfully fetched hedge position for {wallet}")
+        logger.info(f"Successfully fetched hedge position for {wallet_or_token_id}")
         logger.info(f"  Total positions: {len(position.positions)}")
         logger.info(f"  Total collateral: ${position.total_collateral_usd}")
         logger.info(f"  Total debt: ${position.total_debt_usd}")
@@ -481,8 +493,20 @@ async def get_hedge_position(
 
         return position
 
+    except ValueError as e:
+        logger.error(f"Invalid token ID: {wallet_or_token_id}")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": {
+                    "code": "INVALID_INPUT",
+                    "message": "Invalid token ID format",
+                    "details": {"error": str(e)}
+                }
+            }
+        )
     except Exception as e:
-        logger.error(f"Error fetching hedge position for {wallet}: {str(e)}", exc_info=True)
+        logger.error(f"Error fetching hedge position for {wallet_or_token_id}: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail={
