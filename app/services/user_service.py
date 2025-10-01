@@ -1364,18 +1364,15 @@ class UserService:
             for position in positions:
                 try:
                     # Get current value from blockchain
-                    position_info = await positions_service.get_position_info(
-                        position.token_id,
-                        user.cdp_wallet_address
-                    )
+                    position_info = await positions_service.get_position_by_id(position.token_id)
 
-                    if position_info and "current_value_usdc" in position_info:
+                    if position_info and position_info.current_value_usdc:
                         await self.update_position_value(
                             nft_token_id=position.token_id,
-                            current_value_usdc=Decimal(str(position_info["current_value_usdc"])),
-                            unrealized_pnl_usdc=Decimal(str(position_info.get("unrealized_pnl", 0))),
-                            fees_earned_usdc=Decimal(str(position_info.get("fees_earned_usdc", 0))),
-                            rewards_earned_usdc=Decimal(str(position_info.get("rewards_earned_usdc", 0)))
+                            current_value_usdc=Decimal(str(position_info.current_value_usdc)),
+                            unrealized_pnl_usdc=Decimal(str(position_info.unrealized_pnl or 0)),
+                            fees_earned_usdc=Decimal(str(position_info.fees_earned or 0)),
+                            rewards_earned_usdc=Decimal(str(position_info.rewards_earned or 0))
                         )
                         positions_updated += 1
                 except Exception as e:

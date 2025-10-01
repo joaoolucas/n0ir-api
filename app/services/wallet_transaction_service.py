@@ -1034,6 +1034,7 @@ class WalletTransactionService:
             "total": len(transactions),
             "deposits": len(categorized[TransactionType.DEPOSIT]),
             "withdrawals": len(categorized[TransactionType.WITHDRAW]),
+            "stakings": 0,  # Stakings are now included in POSITION_CREATED
             "positions_opened": len(categorized[TransactionType.POSITION_CREATED]),
             "positions_closed": len(categorized[TransactionType.POSITION_CLOSED]),
             "unknown": len(categorized[TransactionType.UNKNOWN]),
