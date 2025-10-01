@@ -517,22 +517,36 @@ class WalletTransactionService:
                                             # Calculate net USDC amount
                                             # Net = LP investment + collateral - borrowed amount (in USD)
                                             hedge_debt_usd = 0
+                                            hedge_debt_usd_value = 0  # Human-readable value
+
                                             if is_hedged and hedge_debt > 0 and hedged_asset != "0x0":
-                                                # Get token decimals (WETH = 18, cbBTC = 8)
-                                                token_decimals = 18 if "0x42000000" in hedged_asset else 8
-                                                hedge_debt_tokens = hedge_debt / (10 ** token_decimals)
+                                                try:
+                                                    # Get token decimals (WETH = 18, cbBTC = 8)
+                                                    token_decimals = 18 if "0x42000000" in hedged_asset else 8
+                                                    hedge_debt_tokens = hedge_debt / (10 ** token_decimals)
 
-                                                # Get token price
-                                                token_price = await self._get_token_price_usd(hedged_asset)
-                                                hedge_debt_usd = int(hedge_debt_tokens * token_price * 1e6)  # Convert to USDC wei
+                                                    # Get token price
+                                                    token_price = await self._get_token_price_usd(hedged_asset)
+                                                    if token_price > 0:
+                                                        hedge_debt_usd = int(hedge_debt_tokens * token_price * 1e6)  # Convert to USDC wei
+                                                        hedge_debt_usd_value = hedge_debt_usd / 1e6
+                                                        logger.info(f"Hedge debt: {hedge_debt_tokens:.6f} tokens @ ${token_price:.2f} = ${hedge_debt_usd_value:.2f}")
+                                                    else:
+                                                        logger.warning(f"Could not get price for hedged asset {hedged_asset}, setting hedge_debt_usd to 0")
+                                                except Exception as price_error:
+                                                    logger.error(f"Error calculating hedge debt USD: {price_error}")
+                                                    hedge_debt_usd = 0
 
-                                                logger.info(f"Hedge debt: {hedge_debt_tokens:.6f} tokens @ ${token_price:.2f} = ${hedge_debt_usd/1e6:.2f}")
+                                            # Store hedge info in event_data for reference
+                                            event_data["hedge_debt_usd"] = hedge_debt_usd_value
 
                                             usdc_amount = usdc_invested + hedge_collateral - hedge_debt_usd
                                         except Exception as e:
                                             logger.warning(f"Failed to parse PositionCreated data field: {e}")
 
                                     logger.info(f"✅ Detected PositionCreated: position {position_id} in pool {pool_addr}, Net USDC: {usdc_amount/1e6:.2f}")
+                                    logger.info(f"   LP: {usdc_invested/1e6:.2f}, Collateral: {hedge_collateral/1e6:.2f}, Debt: ${hedge_debt_usd_value:.2f}")
+
                                     position_created_event = {
                                         "method_name": "openPosition",
                                         "nft_token_id": position_id,
@@ -543,7 +557,14 @@ class WalletTransactionService:
                                         "usdc_out": usdc_amount,  # Net USDC deployed
                                         "usdc_in": 0,  # No USDC returned on creation
                                         "aero_out": 0,
-                                        "aero_in": 0
+                                        "aero_in": 0,
+                                        # Add hedge info at top level for visibility
+                                        "usdc_invested": usdc_invested,
+                                        "hedge_collateral": hedge_collateral,
+                                        "hedge_debt": hedge_debt,
+                                        "hedge_debt_usd": hedge_debt_usd,
+                                        "is_hedged": is_hedged,
+                                        "hedged_asset": hedged_asset
                                     }
                             except (ValueError, TypeError, AttributeError) as e:
                                 logger.warning(f"Failed to parse PositionCreated event: {e}")
