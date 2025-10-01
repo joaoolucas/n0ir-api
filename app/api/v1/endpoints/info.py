@@ -43,13 +43,14 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
     hedge_info = None
 
     # Fetch live hedge info from LiquidityManager contract
+    live_hedge_data = None
     try:
         from app.core.hedge_service import hedge_service
         hedge_response = await hedge_service.get_hedge_position_by_token_id(position.nft_token_id)
 
         if hedge_response.positions and len(hedge_response.positions) > 0:
             live_hedge = hedge_response.positions[0]
-            hedge_info = {
+            live_hedge_data = {
                 'is_hedged': live_hedge.is_hedged,
                 'collateral': live_hedge.collateral_usdc,
                 'debt_asset': live_hedge.hedged_asset_symbol,
@@ -57,7 +58,7 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
                 'debt_value_usd': live_hedge.debt_usd,
                 'hedged_asset': live_hedge.hedged_asset
             }
-            logger.info(f"Position {position.nft_token_id} - Live hedge info: {hedge_info}")
+            logger.info(f"Position {position.nft_token_id} - Live hedge info: {live_hedge_data}")
     except Exception as e:
         logger.warning(f"Could not fetch live hedge info for position {position.nft_token_id}: {e}")
 
@@ -92,43 +93,52 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
             usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
             net_entry_amount = amount - usdc_returned
 
-            # If hedge info wasn't fetched from contract, fall back to event_data
-            if not hedge_info:
-                is_hedged = position_created_tx.event_data.get('is_hedged', False)
-                if is_hedged:
-                    # Get token symbol from address
-                    hedged_asset = position_created_tx.event_data.get('hedged_asset', '0x0')
-                    if hedged_asset and hedged_asset != '0x0':
-                        # Simple mapping for known assets
-                        debt_asset = 'WETH' if '0x42000000' in hedged_asset else 'cbBTC'
-                    else:
-                        debt_asset = None
+            # Build hedge info from event_data (as fallback for missing fields)
+            is_hedged = position_created_tx.event_data.get('is_hedged', False)
+            if is_hedged or live_hedge_data:
+                # Get token symbol from address
+                hedged_asset = position_created_tx.event_data.get('hedged_asset', '0x0')
+                if hedged_asset and hedged_asset != '0x0':
+                    # Simple mapping for known assets
+                    debt_asset = 'WETH' if '0x42000000' in hedged_asset else 'cbBTC'
+                else:
+                    debt_asset = None
 
-                    # Extract hedge values (convert from wei if needed)
-                    usdc_invested = position_created_tx.event_data.get('usdc_invested', 0)
-                    hedge_collateral = position_created_tx.event_data.get('hedge_collateral', 0)
-                    hedge_debt = position_created_tx.event_data.get('hedge_debt', 0)
-                    hedge_debt_usd = position_created_tx.event_data.get('hedge_debt_usd', 0)
+                # Extract hedge values from event_data (convert from wei if needed)
+                usdc_invested = position_created_tx.event_data.get('usdc_invested', 0)
+                hedge_collateral = position_created_tx.event_data.get('hedge_collateral', 0)
+                hedge_debt = position_created_tx.event_data.get('hedge_debt', 0)
+                hedge_debt_usd = position_created_tx.event_data.get('hedge_debt_usd', 0)
 
-                    # Convert from wei if values are large
-                    lp_amount = Decimal(usdc_invested) / Decimal(1_000_000) if usdc_invested > 1000 else Decimal(usdc_invested)
-                    collateral = Decimal(hedge_collateral) / Decimal(1_000_000) if hedge_collateral > 1000 else Decimal(hedge_collateral)
-                    debt_value_usd = Decimal(hedge_debt_usd) if isinstance(hedge_debt_usd, (int, float)) else Decimal(str(hedge_debt_usd))
+                # Convert from wei if values are large
+                lp_amount = Decimal(usdc_invested) / Decimal(1_000_000) if usdc_invested > 1000 else Decimal(usdc_invested)
+                collateral = Decimal(hedge_collateral) / Decimal(1_000_000) if hedge_collateral > 1000 else Decimal(hedge_collateral)
+                debt_value_usd = Decimal(hedge_debt_usd) if isinstance(hedge_debt_usd, (int, float)) else Decimal(str(hedge_debt_usd))
 
-                    # Calculate debt amount in asset (divide by decimals)
-                    decimals = 18 if debt_asset == 'WETH' else 8
-                    debt_amount = Decimal(hedge_debt) / Decimal(10 ** decimals) if hedge_debt > 0 else Decimal(0)
+                # Calculate debt amount in asset (divide by decimals)
+                decimals = 18 if debt_asset == 'WETH' else 8
+                debt_amount = Decimal(hedge_debt) / Decimal(10 ** decimals) if hedge_debt > 0 else Decimal(0)
 
-                    hedge_info = {
-                        'is_hedged': True,
-                        'lp_amount': lp_amount,
-                        'collateral': collateral,
-                        'debt_asset': debt_asset,
-                        'debt_amount': debt_amount,
-                        'debt_value_usd': debt_value_usd,
-                        'tick_lower': position_created_tx.event_data.get('tick_lower'),
-                        'tick_upper': position_created_tx.event_data.get('tick_upper')
-                    }
+                hedge_info = {
+                    'is_hedged': True,
+                    'lp_amount': lp_amount,
+                    'collateral': collateral,
+                    'debt_asset': debt_asset,
+                    'debt_amount': debt_amount,
+                    'debt_value_usd': debt_value_usd,
+                    'tick_lower': position_created_tx.event_data.get('tick_lower'),
+                    'tick_upper': position_created_tx.event_data.get('tick_upper')
+                }
+
+                # Override with live data if available
+                if live_hedge_data:
+                    hedge_info['is_hedged'] = live_hedge_data['is_hedged']
+                    hedge_info['collateral'] = live_hedge_data['collateral']
+                    hedge_info['debt_asset'] = live_hedge_data['debt_asset']
+                    hedge_info['debt_amount'] = live_hedge_data['debt_amount']
+                    hedge_info['debt_value_usd'] = live_hedge_data['debt_value_usd']
+                    if 'hedged_asset' in live_hedge_data:
+                        hedge_info['hedged_asset'] = live_hedge_data['hedged_asset']
 
     # Override the entry_amount_usdc with the net amount
     position_dict['entry_amount_usdc'] = net_entry_amount
