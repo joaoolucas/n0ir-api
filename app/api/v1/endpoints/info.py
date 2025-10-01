@@ -40,6 +40,8 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
 
     # Get the net entry amount from the POSITION_CREATED transaction if db is provided
     net_entry_amount = position.entry_amount_usdc or Decimal(0)
+    hedge_info = None
+
     if db:
         from sqlalchemy import select, and_
         from app.database.models import Transaction
@@ -71,8 +73,46 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
             usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
             net_entry_amount = amount - usdc_returned
 
+            # Extract hedge information from event_data
+            is_hedged = position_created_tx.event_data.get('is_hedged', False)
+            if is_hedged:
+                # Get token symbol from address
+                hedged_asset = position_created_tx.event_data.get('hedged_asset', '0x0')
+                if hedged_asset and hedged_asset != '0x0':
+                    # Simple mapping for known assets
+                    debt_asset = 'WETH' if '0x42000000' in hedged_asset else 'cbBTC'
+                else:
+                    debt_asset = None
+
+                # Extract hedge values (convert from wei if needed)
+                usdc_invested = position_created_tx.event_data.get('usdc_invested', 0)
+                hedge_collateral = position_created_tx.event_data.get('hedge_collateral', 0)
+                hedge_debt = position_created_tx.event_data.get('hedge_debt', 0)
+                hedge_debt_usd = position_created_tx.event_data.get('hedge_debt_usd', 0)
+
+                # Convert from wei if values are large
+                lp_amount = Decimal(usdc_invested) / Decimal(1_000_000) if usdc_invested > 1000 else Decimal(usdc_invested)
+                collateral = Decimal(hedge_collateral) / Decimal(1_000_000) if hedge_collateral > 1000 else Decimal(hedge_collateral)
+                debt_value_usd = Decimal(hedge_debt_usd) if isinstance(hedge_debt_usd, (int, float)) else Decimal(str(hedge_debt_usd))
+
+                # Calculate debt amount in asset (divide by decimals)
+                decimals = 18 if debt_asset == 'WETH' else 8
+                debt_amount = Decimal(hedge_debt) / Decimal(10 ** decimals) if hedge_debt > 0 else Decimal(0)
+
+                hedge_info = {
+                    'is_hedged': True,
+                    'lp_amount': lp_amount,
+                    'collateral': collateral,
+                    'debt_asset': debt_asset,
+                    'debt_amount': debt_amount,
+                    'debt_value_usd': debt_value_usd,
+                    'tick_lower': position_created_tx.event_data.get('tick_lower'),
+                    'tick_upper': position_created_tx.event_data.get('tick_upper')
+                }
+
     # Override the entry_amount_usdc with the net amount
     position_dict['entry_amount_usdc'] = net_entry_amount
+    position_dict['hedge'] = hedge_info
 
     # Skip blockchain fetch for closed positions - they don't exist on-chain anymore
     if position.status == DBPositionStatus.CLOSED:

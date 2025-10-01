@@ -340,6 +340,18 @@ class TransactionResponse(BaseModel):
         return values
 
 
+class HedgeInfoResponse(BaseModel):
+    """Hedge information for a position."""
+    is_hedged: bool = Field(False, description="Whether position is hedged")
+    lp_amount: Optional[Decimal] = Field(None, description="Amount in LP (USDC)")
+    collateral: Optional[Decimal] = Field(None, description="Collateral amount (USDC)")
+    debt_asset: Optional[str] = Field(None, description="Borrowed asset (WETH/cbBTC)")
+    debt_amount: Optional[Decimal] = Field(None, description="Debt amount in asset")
+    debt_value_usd: Optional[Decimal] = Field(None, description="Debt value in USD")
+    tick_lower: Optional[int] = Field(None, description="Lower tick")
+    tick_upper: Optional[int] = Field(None, description="Upper tick")
+
+
 class PositionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -357,6 +369,7 @@ class PositionResponse(BaseModel):
     status: PositionStatus
     entry_date: Optional[datetime] = None
     exit_date: Optional[datetime] = None
+    hedge: Optional[HedgeInfoResponse] = Field(None, description="Hedge information")
 
 
 class PnLResponse(BaseModel):
