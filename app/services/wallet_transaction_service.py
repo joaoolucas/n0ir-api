@@ -419,7 +419,7 @@ class WalletTransactionService:
         position_event = None
 
         # Event signatures from LiquidityManager contract (0x8123F467Fa2C53a31D8738D5FAa0DFd881F5DF8A)
-        # Updated to match new ABI with enriched event data
+        # New ABI with enriched event data
         POSITION_CREATED_EVENT = "0x22c1b606e32c54081d4813a6daf0b6ab4522b84a2829c0dfa181ac6f12c62b7c"
         POSITION_CLOSED_EVENT = "0xfc4e6ac706594637404ad0c7694a5353537a522cc0cf04a16ca51a228b0f2bd4"
 
@@ -473,28 +473,20 @@ class WalletTransactionService:
                                         data = data.hex() if hasattr(data, 'hex') else str(data)
 
                                     event_data = {}
-                                    if len(data) >= 64:  # At least one uint256
+                                    usdc_amount = 0
+
+                                    if len(data) >= 128:
                                         try:
-                                            # liquidity: uint128 (first 16 bytes, but stored in first 32 bytes of data)
                                             liquidity = int(data[0:64], 16)
-                                            # usdcInvested: uint256 (next 32 bytes)
-                                            usdc_invested = int(data[64:128], 16) if len(data) >= 128 else 0
-                                            # tickLower: int24 (next 32 bytes, but value is in last 6 hex chars = 3 bytes)
+                                            usdc_invested = int(data[64:128], 16)
                                             tick_lower_raw = int(data[128:192], 16) if len(data) >= 192 else 0
-                                            # Convert to signed int24
                                             tick_lower = tick_lower_raw if tick_lower_raw < 2**23 else tick_lower_raw - 2**24
-                                            # tickUpper: int24
                                             tick_upper_raw = int(data[192:256], 16) if len(data) >= 256 else 0
                                             tick_upper = tick_upper_raw if tick_upper_raw < 2**23 else tick_upper_raw - 2**24
-                                            # staked: bool (next 32 bytes, but value is 0 or 1)
                                             staked = bool(int(data[256:320], 16)) if len(data) >= 320 else False
-                                            # isHedged: bool
                                             is_hedged = bool(int(data[320:384], 16)) if len(data) >= 384 else False
-                                            # hedgeCollateral: uint256
                                             hedge_collateral = int(data[384:448], 16) if len(data) >= 448 else 0
-                                            # hedgeDebt: uint256
                                             hedge_debt = int(data[448:512], 16) if len(data) >= 512 else 0
-                                            # hedgedAsset: address (last 20 bytes of 32-byte word)
                                             hedged_asset = "0x" + data[536:576] if len(data) >= 576 else "0x0"
 
                                             event_data = {
@@ -508,17 +500,18 @@ class WalletTransactionService:
                                                 "hedge_debt": hedge_debt,
                                                 "hedged_asset": hedged_asset
                                             }
+                                            usdc_amount = usdc_invested
                                         except Exception as e:
                                             logger.warning(f"Failed to parse PositionCreated data field: {e}")
 
-                                    logger.info(f"✅ Detected PositionCreated: position {position_id} in pool {pool_addr}, USDC invested: {event_data.get('usdc_invested', 0)/1e6:.2f}")
+                                    logger.info(f"✅ Detected PositionCreated: position {position_id} in pool {pool_addr}, USDC invested: {usdc_amount/1e6:.2f}")
                                     position_created_event = {
                                         "method_name": "openPosition",
                                         "nft_token_id": position_id,
                                         "pool": pool_addr,
                                         "event_detected": "PositionCreated",
                                         "event_data": event_data,
-                                        "usdc_amount": event_data.get('usdc_invested', 0)  # Direct from event
+                                        "usdc_amount": usdc_amount
                                     }
                             except (ValueError, TypeError, AttributeError) as e:
                                 logger.warning(f"Failed to parse PositionCreated event: {e}")
@@ -548,15 +541,13 @@ class WalletTransactionService:
                                         data = data.hex() if hasattr(data, 'hex') else str(data)
 
                                     event_data = {}
-                                    if len(data) >= 64:  # At least one uint256
+                                    usdc_amount = 0
+
+                                    if len(data) >= 64:
                                         try:
-                                            # usdcReturned: uint256 (first 32 bytes)
                                             usdc_returned = int(data[0:64], 16)
-                                            # wasStaked: bool (next 32 bytes, value is 0 or 1)
                                             was_staked = bool(int(data[64:128], 16)) if len(data) >= 128 else False
-                                            # wasHedged: bool
                                             was_hedged = bool(int(data[128:192], 16)) if len(data) >= 192 else False
-                                            # hedgeCollateralReturned: uint256
                                             hedge_collateral_returned = int(data[192:256], 16) if len(data) >= 256 else 0
 
                                             event_data = {
@@ -565,17 +556,18 @@ class WalletTransactionService:
                                                 "was_hedged": was_hedged,
                                                 "hedge_collateral_returned": hedge_collateral_returned
                                             }
+                                            usdc_amount = usdc_returned
                                         except Exception as e:
                                             logger.warning(f"Failed to parse PositionClosed data field: {e}")
 
-                                    logger.info(f"✅ Detected PositionClosed: position {position_id} in pool {pool_addr}, USDC returned: {event_data.get('usdc_returned', 0)/1e6:.2f}")
+                                    logger.info(f"✅ Detected PositionClosed: position {position_id} in pool {pool_addr}, USDC returned: {usdc_amount/1e6:.2f}")
                                     position_closed_event = {
                                         "method_name": "closePosition",
                                         "nft_token_id": position_id,
                                         "pool": pool_addr,
                                         "event_detected": "PositionClosed",
                                         "event_data": event_data,
-                                        "usdc_amount": event_data.get('usdc_returned', 0)  # Direct from event
+                                        "usdc_amount": usdc_amount
                                     }
                             except (ValueError, TypeError, AttributeError) as e:
                                 logger.warning(f"Failed to parse PositionClosed event: {e}")
