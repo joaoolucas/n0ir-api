@@ -62,7 +62,21 @@ class VaultStrategyService:
             # Minimum amount required to enter a position
             MIN_POSITION_AMOUNT = Decimal("40")
 
-            # Check if balance is sufficient
+            # Check active positions for monitoring alerts FIRST
+            monitoring_info = await self._check_positions_monitoring(user_id, db)
+
+            # If there are monitoring alerts, return them regardless of balance
+            # User needs to close problematic positions
+            if monitoring_info and monitoring_info.alerts:
+                logger.warning(f"User {user_id} has {len(monitoring_info.alerts)} position alerts - returning monitoring-only strategy")
+                return await self._generate_monitoring_only_strategy(
+                    user_id=user_id,
+                    balance=balance,
+                    pool_address=pool_address,
+                    monitoring_info=monitoring_info
+                )
+
+            # No alerts - check if balance is sufficient for opening new position
             if balance <= 0:
                 logger.warning(f"User {user_id} has insufficient balance: ${balance:.2f}")
                 raise ValueError(f"Insufficient USDC balance. Please deposit USDC to your CDP wallet first.")
@@ -71,8 +85,7 @@ class VaultStrategyService:
                 logger.warning(f"User {user_id} balance ${balance:.2f} below minimum ${MIN_POSITION_AMOUNT}")
                 raise ValueError(f"Minimum position size is {MIN_POSITION_AMOUNT} USDC. Current balance: {balance:.2f} USDC")
 
-            # Check active positions for monitoring alerts
-            monitoring_info = await self._check_positions_monitoring(user_id, db)
+            # No alerts and sufficient balance - proceed with normal strategy
             action = "open"
 
             # Get pool data
@@ -330,6 +343,71 @@ class VaultStrategyService:
         except Exception as e:
             logger.error(f"Error checking positions monitoring for user {user_id}: {e}")
             return None
+
+    async def _generate_monitoring_only_strategy(
+        self,
+        user_id: str,
+        balance: float,
+        pool_address: str,
+        monitoring_info: MonitoringInfo
+    ) -> MoonwellStrategyResponse:
+        """
+        Generate a monitoring-only strategy response when positions need attention.
+        This returns alerts without requiring minimum balance.
+        """
+        # Get basic pool data for context
+        try:
+            pool_data = await pools_service.get_pool(pool_address)
+            pool_symbol = pool_data.get('symbol', 'WETH-USDC')
+        except:
+            pool_symbol = 'WETH-USDC'
+
+        # Create minimal contract params (won't be used, but required by schema)
+        deadline = int(datetime.utcnow().timestamp()) + 900
+        contract_params = ContractParameters(
+            pool=pool_address,
+            range_percentage=10,  # Default
+            deadline=deadline,
+            usdc_amount=Decimal(str(balance)),
+            slippage_bps=50,
+            hedge_ratio=9500,
+            collateral_ratio_bps=6500
+        )
+
+        # Create minimal simulation (won't be used)
+        simulation = VaultHedgeSimulation(
+            hedge_asset="WETH",
+            collateral_amount=Decimal(0),
+            borrow_amount_usd=Decimal(0),
+            borrow_amount_asset=Decimal(0),
+            total_lp_amount=Decimal(0),
+            asset_exposure_usd=Decimal(0),
+            net_delta_usd=Decimal(0),
+            expected_health_factor=Decimal(0),
+            liquidation_price=Decimal(0),
+            delta_neutral_score=Decimal(0)
+        )
+
+        # Create minimal aerodrome pool info
+        aerodrome_pool = AerodromeLP(
+            pool=pool_symbol,
+            pool_address=pool_address,
+            amount_usdc=Decimal(0),
+            range_percentage=10,
+            effective_apr=None
+        )
+
+        return MoonwellStrategyResponse(
+            user_id=user_id,
+            strategy_type="delta_neutral",
+            timestamp=datetime.utcnow().isoformat(),
+            action="close",  # User should close problematic positions
+            capital=CapitalInfo(total_usd=Decimal(str(balance))),
+            contract_params=contract_params,
+            simulation=simulation,
+            aerodrome_pool=aerodrome_pool,
+            monitoring=monitoring_info
+        )
 
 
 # Singleton instance
