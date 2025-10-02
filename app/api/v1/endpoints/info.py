@@ -218,6 +218,11 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
             position_dict['token0_amount'] = getattr(position_data, 'token0_amount', None)
             position_dict['token1_amount'] = getattr(position_data, 'token1_amount', None)
 
+            # Add tick information from blockchain
+            position_dict['tick_lower'] = getattr(position_data, 'tick_lower', None)
+            position_dict['tick_upper'] = getattr(position_data, 'tick_upper', None)
+            position_dict['current_tick'] = getattr(position_data, 'current_tick', None)
+
             # Add unclaimed fees and rewards from blockchain (also at top level)
             position_dict['unclaimed_fees_usd'] = getattr(position_data, 'unclaimed_fees_usd', None)
             position_dict['unclaimed_rewards_aero'] = getattr(position_data, 'unclaimed_rewards_aero', None)

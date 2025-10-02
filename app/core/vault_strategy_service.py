@@ -59,10 +59,17 @@ class VaultStrategyService:
             balance = await blockchain_service.get_usdc_balance(user.cdp_wallet_address)
             logger.info(f"User {user_id} balance: ${balance:.2f}")
 
+            # Minimum amount required to enter a position
+            MIN_POSITION_AMOUNT = Decimal("40")
+
             # Check if balance is sufficient
             if balance <= 0:
                 logger.warning(f"User {user_id} has insufficient balance: ${balance:.2f}")
                 raise ValueError(f"Insufficient USDC balance. Please deposit USDC to your CDP wallet first.")
+
+            if balance < MIN_POSITION_AMOUNT:
+                logger.warning(f"User {user_id} balance ${balance:.2f} below minimum ${MIN_POSITION_AMOUNT}")
+                raise ValueError(f"Minimum position size is {MIN_POSITION_AMOUNT} USDC. Current balance: {balance:.2f} USDC")
 
             # Get existing positions to check for range breaks
             positions = await positions_service.get_positions_by_owner(user.cdp_wallet_address)
