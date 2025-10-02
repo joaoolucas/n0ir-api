@@ -281,7 +281,7 @@ class VaultContract:
                         continue
 
                     # Skip if health factor too low
-                    if simulation['expected_health_factor'] < 1.75:
+                    if simulation['expected_health_factor'] < 1.5:
                         low_hf_count += 1
                         logger.debug(f"Health factor too low ({simulation['expected_health_factor']}) for {collateral_ratio}/{hedge_ratio}")
                         continue
