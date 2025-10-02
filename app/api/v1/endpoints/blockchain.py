@@ -4,15 +4,13 @@ from typing import List, Optional, Union
 from fastapi import APIRouter, HTTPException, Query, Path, Request, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from statistics import median
 
 # Import schemas
 from app.schemas.pools import (
     PoolData,
     PoolsListResponse,
     PoolBatchRequest,
-    PoolStatsResponse,
-    MedianAPRResponse
+    PoolStatsResponse
 )
 from app.schemas.tokens import (
     TokenInfoResponse,
@@ -92,47 +90,6 @@ async def get_pool(
                 "error": {
                     "code": "INTERNAL_ERROR",
                     "message": "Failed to fetch pool",
-                    "details": {"error": str(e)}
-                }
-            }
-        )
-
-
-@router.get(
-    "/pools/whitelist/median-apr",
-    response_model=MedianAPRResponse,
-    responses={
-        500: {"model": ErrorResponse, "description": "Internal Server Error"}
-    }
-)
-async def get_whitelist_median_apr(request: Request) -> MedianAPRResponse:
-    """
-    Median APR for whitelisted pools.
-
-    Computes the median of APRs across pools listed in the global whitelist.
-    """
-    logger.info(f"GET /pools/whitelist/median-apr - IP: {request.client.host}")
-    try:
-        addresses = list(WHITELISTED_POOLS)
-        if not addresses:
-            return MedianAPRResponse(median_apr=0.0)
-
-        pools = await pools_service.get_pools_batch(addresses)
-        aprs = [float(p.get('apr', 0) or 0) for p in pools if p]
-
-        if not aprs:
-            return MedianAPRResponse(median_apr=0.0)
-
-        med = float(median(aprs))
-        return MedianAPRResponse(median_apr=med)
-    except Exception as e:
-        logger.error(f"Error computing whitelist median APR: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": {
-                    "code": "INTERNAL_ERROR",
-                    "message": "Failed to compute median APR",
                     "details": {"error": str(e)}
                 }
             }
