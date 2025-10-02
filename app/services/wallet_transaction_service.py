@@ -413,7 +413,57 @@ class WalletTransactionService:
             logger.error(f"Error fetching token price for {token_address}: {e}")
             return 0.0
 
-    async def _parse_position_created_data(self, data: str) -> tuple:
+    def _calculate_usdc_returned_from_transfers(self, traces: List[Dict], cdp_wallet: str, liquidity_manager: str) -> int:
+        """Calculate USDC returned to user by analyzing Transfer events.
+
+        Looks for USDC Transfer from LiquidityManager back to CDP wallet.
+
+        Returns:
+            USDC amount returned in wei (6 decimals)
+        """
+        USDC_ADDRESS = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+        TRANSFER_EVENT_SIG = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"  # Transfer(address,address,uint256)
+
+        usdc_returned = 0
+
+        for trace in traces:
+            if "logs" in trace:
+                for log in trace.get("logs", []):
+                    topics = log.get("topics", [])
+                    if not topics:
+                        continue
+
+                    log_address = log.get("address", "").lower()
+                    event_sig = topics[0].lower() if isinstance(topics[0], str) else str(topics[0]).lower()
+
+                    # Check if this is a USDC Transfer event
+                    if log_address == USDC_ADDRESS.lower() and event_sig == TRANSFER_EVENT_SIG.lower():
+                        if len(topics) >= 3:
+                            try:
+                                # Topic 1: from address
+                                from_addr = ("0x" + topics[1][-40:] if isinstance(topics[1], str) else "0x" + str(topics[1])[-40:]).lower()
+                                # Topic 2: to address
+                                to_addr = ("0x" + topics[2][-40:] if isinstance(topics[2], str) else "0x" + str(topics[2])[-40:]).lower()
+
+                                # Check if this is a transfer FROM LiquidityManager TO CDP wallet
+                                if from_addr == liquidity_manager.lower() and to_addr == cdp_wallet.lower():
+                                    # Parse amount from data field
+                                    data = log.get("data", "0x")
+                                    if isinstance(data, str):
+                                        data = data[2:] if data.startswith("0x") else data
+                                    else:
+                                        data = data.hex() if hasattr(data, 'hex') else str(data)
+
+                                    if len(data) >= 64:
+                                        amount = int(data[0:64], 16)
+                                        usdc_returned += amount
+                                        logger.info(f"Found USDC return: {amount/1e6:.6f} USDC from LiquidityManager to CDP wallet")
+                            except Exception as e:
+                                logger.warning(f"Failed to parse USDC Transfer event: {e}")
+
+        return usdc_returned
+
+    async def _parse_position_created_data(self, data: str, traces: List[Dict] = None, cdp_wallet: str = None) -> tuple:
         """Parse PositionCreated event data and calculate net USDC.
 
         Returns:
@@ -478,7 +528,15 @@ class WalletTransactionService:
                 # Store hedge info in event_data for reference
                 event_data["hedge_debt_usd"] = hedge_debt_usd_value
 
-                usdc_amount = usdc_invested + hedge_collateral - hedge_debt_usd
+                # Calculate USDC returned from transfer logs if available
+                usdc_returned = 0
+                if traces and cdp_wallet:
+                    usdc_returned = self._calculate_usdc_returned_from_transfers(traces, cdp_wallet, self.LIQUIDITY_MANAGER)
+                    if usdc_returned > 0:
+                        event_data["usdc_returned"] = usdc_returned
+                        logger.info(f"USDC returned to user: {usdc_returned/1e6:.6f} USDC")
+
+                usdc_amount = usdc_invested + hedge_collateral - hedge_debt_usd - usdc_returned
             except Exception as e:
                 logger.warning(f"Failed to parse PositionCreated data field: {e}")
 
@@ -556,8 +614,8 @@ class WalletTransactionService:
                                     else:
                                         data = data.hex() if hasattr(data, 'hex') else str(data)
 
-                                    # Use shared parsing method
-                                    event_data, usdc_amount, hedge_debt_usd_value = await self._parse_position_created_data(data)
+                                    # Use shared parsing method with traces to calculate USDC returned
+                                    event_data, usdc_amount, hedge_debt_usd_value = await self._parse_position_created_data(data, traces, cdp_wallet)
 
                                     logger.info(f"✅ Detected PositionCreated: position {position_id} in pool {pool_addr}, Net USDC: {usdc_amount/1e6:.2f}")
                                     if event_data:
@@ -683,8 +741,11 @@ class WalletTransactionService:
                                 if isinstance(data, str):
                                     data = data[2:] if data.startswith("0x") else data
 
-                                # Use shared parsing method
-                                event_data, usdc_amount, hedge_debt_usd_value = await self._parse_position_created_data(data)
+                                # Convert RPC logs to traces-like structure for USDC calculation
+                                traces_from_rpc = [{"logs": rpc_logs}]
+
+                                # Use shared parsing method with RPC logs
+                                event_data, usdc_amount, hedge_debt_usd_value = await self._parse_position_created_data(data, traces_from_rpc, cdp_wallet)
 
                                 logger.info(f"✅ Found PositionCreated in RPC logs: position {position_id} in pool {pool_addr}, Net USDC: {usdc_amount/1e6:.2f}")
                                 if event_data:
