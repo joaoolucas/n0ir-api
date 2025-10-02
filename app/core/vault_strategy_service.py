@@ -22,7 +22,8 @@ from app.schemas.users import (
     VaultHedgeSimulation,
     AerodromeLP,
     MonitoringInfo,
-    PositionAlert
+    PositionAlert,
+    RecommendedPosition
 )
 
 
@@ -85,7 +86,18 @@ class VaultStrategyService:
                 logger.warning(f"User {user_id} balance ${balance:.2f} below minimum ${MIN_POSITION_AMOUNT}")
                 raise ValueError(f"Minimum position size is {MIN_POSITION_AMOUNT} USDC. Current balance: {balance:.2f} USDC")
 
-            # No alerts and sufficient balance - proceed with normal strategy
+            # No alerts and sufficient balance - determine strategy type
+            DUAL_POSITION_THRESHOLD = Decimal("2000")
+
+            # Check if balance qualifies for dual position strategy
+            if balance > DUAL_POSITION_THRESHOLD:
+                logger.info(f"User {user_id} balance ${balance:.2f} > ${DUAL_POSITION_THRESHOLD} - recommending dual positions")
+                return await self._generate_dual_position_strategy(
+                    user_id=user_id,
+                    balance=balance
+                )
+
+            # Single position strategy for balance <= $2000
             action = "open"
 
             # Get pool data
@@ -407,6 +419,101 @@ class VaultStrategyService:
             simulation=simulation,
             aerodrome_pool=aerodrome_pool,
             monitoring=monitoring_info
+        )
+
+    async def _generate_dual_position_strategy(
+        self,
+        user_id: str,
+        balance: float
+    ) -> MoonwellStrategyResponse:
+        """
+        Generate dual position strategy for balances > $2000.
+        70% WETH/USDC + 30% USDC/cbBTC
+        """
+        # Pool addresses
+        WETH_USDC_POOL = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59"
+        CBBTC_USDC_POOL = "0x9b2d25297db97d5c8a4e1e65dfb6e5a4c42e5c07"  # TODO: Verify this address
+
+        # Allocation percentages
+        WETH_ALLOCATION_PCT = 70
+        CBBTC_ALLOCATION_PCT = 30
+
+        # Calculate allocations
+        total_balance = Decimal(str(balance))
+        weth_allocation = total_balance * Decimal(str(WETH_ALLOCATION_PCT)) / Decimal("100")
+        cbbtc_allocation = total_balance * Decimal(str(CBBTC_ALLOCATION_PCT)) / Decimal("100")
+
+        logger.info(f"Dual position strategy: ${weth_allocation:.2f} WETH/USDC + ${cbbtc_allocation:.2f} USDC/cbBTC")
+
+        # Build recommended positions
+        recommended_positions = [
+            RecommendedPosition(
+                pool_name="WETH/USDC",
+                pool_address=WETH_USDC_POOL,
+                allocation_percentage=WETH_ALLOCATION_PCT,
+                allocation_usdc=weth_allocation
+            ),
+            RecommendedPosition(
+                pool_name="USDC/cbBTC",
+                pool_address=CBBTC_USDC_POOL,
+                allocation_percentage=CBBTC_ALLOCATION_PCT,
+                allocation_usdc=cbbtc_allocation
+            )
+        ]
+
+        # Get pool data for the primary (WETH) pool
+        try:
+            pool_data = await pools_service.get_pool(WETH_USDC_POOL)
+            pool_symbol = pool_data.get('symbol', 'WETH/USDC')
+        except:
+            pool_symbol = 'WETH/USDC'
+
+        # Create contract params for first position (WETH/USDC with 70%)
+        deadline = int(datetime.utcnow().timestamp()) + 900
+        contract_params = ContractParameters(
+            pool=WETH_USDC_POOL,
+            range_percentage=10,
+            deadline=deadline,
+            usdc_amount=weth_allocation,
+            slippage_bps=50,
+            hedge_ratio=9500,
+            collateral_ratio_bps=6500
+        )
+
+        # Create minimal simulation (user will call strategy for each position separately)
+        simulation = VaultHedgeSimulation(
+            hedge_asset="WETH",
+            collateral_amount=Decimal(0),
+            borrow_amount_usd=Decimal(0),
+            borrow_amount_asset=Decimal(0),
+            total_lp_amount=Decimal(0),
+            asset_exposure_usd=Decimal(0),
+            net_delta_usd=Decimal(0),
+            expected_health_factor=Decimal(0),
+            liquidation_price=Decimal(0),
+            delta_neutral_score=Decimal(0)
+        )
+
+        # Create aerodrome pool info
+        aerodrome_pool = AerodromeLP(
+            pool=pool_symbol,
+            pool_address=WETH_USDC_POOL,
+            amount_usdc=weth_allocation,
+            range_percentage=10,
+            effective_apr=None
+        )
+
+        return MoonwellStrategyResponse(
+            user_id=user_id,
+            strategy_type="delta_neutral",
+            timestamp=datetime.utcnow().isoformat(),
+            action="open_dual",
+            capital=CapitalInfo(total_usd=total_balance),
+            contract_params=contract_params,
+            simulation=simulation,
+            aerodrome_pool=aerodrome_pool,
+            monitoring=None,
+            recommended_positions=recommended_positions
         )
 
 

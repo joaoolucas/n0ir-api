@@ -71,6 +71,14 @@ class AerodromeLP(BaseModel):
     effective_apr: Optional[Decimal] = Field(None, description="Effective APR with range adjustment")
 
 
+class RecommendedPosition(BaseModel):
+    """Recommended position allocation for dual strategy"""
+    pool_name: str = Field(..., description="Pool name (e.g., 'WETH/USDC')")
+    pool_address: str = Field(..., description="Pool contract address")
+    allocation_percentage: int = Field(..., description="Percentage of capital to allocate (e.g., 70)")
+    allocation_usdc: Decimal = Field(..., description="USDC amount for this position")
+
+
 class ContractParameters(BaseModel):
     """Parameters for calling createPosition on the vault contract"""
     pool: str = Field(..., description="Aerodrome pool address")
@@ -141,13 +149,14 @@ class MoonwellStrategyResponse(BaseModel):
     user_id: str = Field(..., description="User ID")
     strategy_type: str = Field(default="delta_neutral", description="Strategy type")
     timestamp: str = Field(..., description="ISO timestamp")
-    action: str = Field(..., description="Action: 'open', 'close', 'rebalance'")
+    action: str = Field(..., description="Action: 'open', 'close', 'open_dual'")
 
     capital: CapitalInfo = Field(..., description="Capital information")
     contract_params: ContractParameters = Field(..., description="Parameters for calling vault contract")
     simulation: VaultHedgeSimulation = Field(..., description="Expected strategy simulation results")
     aerodrome_pool: AerodromeLP = Field(..., description="Aerodrome LP pool details")
     monitoring: Optional[MonitoringInfo] = Field(None, description="Monitoring information")
+    recommended_positions: Optional[List[RecommendedPosition]] = Field(None, description="Recommended position allocations for dual strategy (when action='open_dual')")
 
 
 
