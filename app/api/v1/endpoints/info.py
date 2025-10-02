@@ -56,7 +56,9 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
                 'debt_asset': live_hedge.hedged_asset_symbol,
                 'debt_amount': live_hedge.debt_amount,
                 'debt_value_usd': live_hedge.debt_usd,
-                'hedged_asset': live_hedge.hedged_asset
+                'hedged_asset': live_hedge.hedged_asset,
+                'collateral_supply_apy': live_hedge.collateral_supply_apy,
+                'hedged_asset_borrow_apy': live_hedge.hedged_asset_borrow_apy
             }
             logger.info(f"Position {position.nft_token_id} - Live hedge info: {live_hedge_data}")
     except Exception as e:
@@ -139,6 +141,10 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
                     hedge_info['debt_value_usd'] = live_hedge_data['debt_value_usd']
                     if 'hedged_asset' in live_hedge_data:
                         hedge_info['hedged_asset'] = live_hedge_data['hedged_asset']
+                    if 'collateral_supply_apy' in live_hedge_data:
+                        hedge_info['collateral_supply_apy'] = live_hedge_data['collateral_supply_apy']
+                    if 'hedged_asset_borrow_apy' in live_hedge_data:
+                        hedge_info['hedged_asset_borrow_apy'] = live_hedge_data['hedged_asset_borrow_apy']
 
     # Override the entry_amount_usdc with the net amount
     position_dict['entry_amount_usdc'] = net_entry_amount

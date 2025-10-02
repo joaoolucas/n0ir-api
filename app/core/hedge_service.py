@@ -87,7 +87,9 @@ class HedgeService:
                         hedged_asset_symbol=asset_symbol,
                         is_hedged=position_details['is_hedged'],
                         exposure_usd=None,  # Would need LP position data to calculate
-                        net_delta_usd=None  # Would need exposure to calculate
+                        net_delta_usd=None,  # Would need exposure to calculate
+                        collateral_supply_apy=Decimal(str(position_details.get('collateral_supply_apy', 0))) if position_details.get('collateral_supply_apy') else None,
+                        hedged_asset_borrow_apy=Decimal(str(position_details.get('hedged_asset_borrow_apy', 0))) if position_details.get('hedged_asset_borrow_apy') else None
                     )
 
                     positions.append(position_info)
@@ -224,7 +226,9 @@ class HedgeService:
                 hedged_asset_symbol=asset_symbol,
                 is_hedged=position_details['is_hedged'],
                 exposure_usd=None,
-                net_delta_usd=None
+                net_delta_usd=None,
+                collateral_supply_apy=Decimal(str(position_details.get('collateral_supply_apy', 0))) if position_details.get('collateral_supply_apy') else None,
+                hedged_asset_borrow_apy=Decimal(str(position_details.get('hedged_asset_borrow_apy', 0))) if position_details.get('hedged_asset_borrow_apy') else None
             )
 
             # Build global health metrics response

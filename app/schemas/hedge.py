@@ -17,6 +17,8 @@ class VaultPositionInfo(BaseModel):
     is_hedged: bool = Field(..., description="Whether position has an active hedge")
     exposure_usd: Optional[Decimal] = Field(None, description="LP exposure to the hedged asset in USD")
     net_delta_usd: Optional[Decimal] = Field(None, description="Net delta (debt - exposure)")
+    collateral_supply_apy: Optional[Decimal] = Field(None, description="Current supply APY on USDC collateral (Aave)")
+    hedged_asset_borrow_apy: Optional[Decimal] = Field(None, description="Current borrow APY on hedged asset (Aave)")
 
 
 class GlobalHealthMetrics(BaseModel):
