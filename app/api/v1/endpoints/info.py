@@ -459,7 +459,7 @@ async def list_users(
                 'active_positions_count': len(enriched_active_positions),
                 'total_pnl_usdc': total_pnl_usdc,
                 'total_pnl_percentage': total_pnl_percentage,
-                'agent_active': bool(user.cdp_wallet_address)
+                'agent_active': user.agent_status == 'running' if hasattr(user, 'agent_status') and user.agent_status else False
             }
 
             enriched_users.append(user_dict)
@@ -476,7 +476,7 @@ async def list_users(
                 'active_positions_count': 0,
                 'total_pnl_usdc': Decimal(0),
                 'total_pnl_percentage': Decimal(0),
-                'agent_active': bool(user.cdp_wallet_address)
+                'agent_active': user.agent_status == 'running' if hasattr(user, 'agent_status') and user.agent_status else False
             })
 
     # Commit updates to database
