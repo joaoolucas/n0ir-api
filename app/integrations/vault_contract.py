@@ -360,8 +360,8 @@ class VaultContract:
                 'debt': result[2],  # Keep in wei for now
                 'hedged_asset': result[3],
                 'is_hedged': result[4],
-                'collateral_supply_apy': result[5] / 1e18,  # APY in 18 decimals
-                'hedged_asset_borrow_apy': result[6] / 1e18  # APY in 18 decimals
+                'collateral_supply_apy': result[5] / 1e25,  # APY in ray format (1e27) as percentage
+                'hedged_asset_borrow_apy': result[6] / 1e25  # APY in ray format (1e27) as percentage
             }
 
             return position_details

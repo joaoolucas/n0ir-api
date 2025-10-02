@@ -220,9 +220,12 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
             if position.pool_address:
                 try:
                     pool_info = await pools_service.get_pool_info(position.pool_address)
-                    position_dict['pool_base_apr'] = Decimal(str(pool_info.get('apr_7d', 0)))
-                    position_dict['effective_apr'] = Decimal(str(pool_info.get('apr_7d', 0)))
-                except:
+                    apr_value = pool_info.get('apr_7d') or pool_info.get('apr') or 0
+                    position_dict['pool_base_apr'] = Decimal(str(apr_value))
+                    position_dict['effective_apr'] = Decimal(str(apr_value))
+                    logger.debug(f"Position {position.nft_token_id} pool APR: {apr_value}")
+                except Exception as e:
+                    logger.warning(f"Could not fetch pool APR for {position.pool_address}: {e}")
                     position_dict['pool_base_apr'] = Decimal(0)
                     position_dict['effective_apr'] = Decimal(0)
 
