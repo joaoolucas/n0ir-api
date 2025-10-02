@@ -239,8 +239,8 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
                     position_dict['pool_base_apr'] = Decimal(0)
                     position_dict['effective_apr'] = Decimal(0)
 
-            # Calculate net_apr (weighted APR considering all position components)
-            # Formula: (effective_apr × lp_value) + (collateral_apy × collateral) - (borrow_apy × debt)
+            # Calculate net_apr (weighted average APR considering all position components)
+            # Formula: ((effective_apr × lp_value) + (collateral_apy × collateral) - (borrow_apy × debt)) / (lp_value + collateral - debt)
             net_apr = None
             if hedge_info and hedge_info.get('is_hedged'):
                 try:
@@ -251,12 +251,20 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
                     borrow_apy = hedge_info.get('hedged_asset_borrow_apy', Decimal(0)) or Decimal(0)
                     debt_value = hedge_info.get('debt_value_usd', Decimal(0)) or Decimal(0)
 
+                    # Calculate total position value (denominator)
+                    total_value = lp_value + collateral - debt_value
+
                     # Calculate weighted net APR
-                    net_apr = (
-                        (effective_apr * lp_value) +
-                        (collateral_apy * collateral) -
-                        (borrow_apy * debt_value)
-                    )
+                    if total_value > 0:
+                        numerator = (
+                            (effective_apr * lp_value) +
+                            (collateral_apy * collateral) -
+                            (borrow_apy * debt_value)
+                        )
+                        net_apr = numerator / total_value
+                    else:
+                        net_apr = Decimal(0)
+
                     position_dict['net_apr'] = net_apr
                     logger.debug(f"Position {position.nft_token_id} - Net APR: {net_apr}")
                 except Exception as e:
