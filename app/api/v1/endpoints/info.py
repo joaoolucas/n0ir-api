@@ -660,19 +660,21 @@ async def get_performance(
         for position in active_positions:
             # Get position details with net_apr
             try:
-                position_dict = await get_position_details(user_id, position.nft_token_id, db)
+                position_dict = await enrich_position_with_pool_data(position, db)
                 net_apr = position_dict.get('net_apr')
                 current_value = position_dict.get('current_value_usdc')
 
                 if net_apr is not None and current_value and current_value > 0:
                     weighted_apr_sum += Decimal(str(net_apr)) * Decimal(str(current_value))
                     total_value += Decimal(str(current_value))
+                    logger.debug(f"Position {position.nft_token_id}: net_apr={net_apr}, value={current_value}")
             except Exception as e:
                 logger.warning(f"Could not get net_apr for position {position.nft_token_id}: {e}")
                 continue
 
         if total_value > 0:
             apr = weighted_apr_sum / total_value
+            logger.info(f"Calculated weighted APR: {apr} from {len(active_positions)} positions")
 
     # Return performance data
     return PerformanceResponse(
