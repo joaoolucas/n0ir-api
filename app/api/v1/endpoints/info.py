@@ -245,6 +245,41 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
                     position_dict['pool_base_apr'] = Decimal(0)
                     position_dict['effective_apr'] = Decimal(0)
 
+            # Calculate neutral_ratio for hedged positions
+            # Formula: debt_amount / relevant_token_amount (token0 for WETH, token1 for cbBTC)
+            neutral_ratio = None
+            if hedge_info and hedge_info.get('is_hedged'):
+                try:
+                    debt_amount = hedge_info.get('debt_amount')
+                    token0 = position_dict.get('token0', '').lower()
+                    token1 = position_dict.get('token1', '').lower()
+                    token0_amount = position_dict.get('token0_amount')
+                    token1_amount = position_dict.get('token1_amount')
+
+                    # Determine which token to use based on pool composition
+                    # For WETH/USDC: use token0_amount (WETH is typically token0)
+                    # For USDC/cbBTC: use token1_amount (cbBTC is typically token1)
+                    from app.core.config import settings
+                    weth_address = settings.weth_address.lower()
+                    cbbtc_address = settings.cbbtc_address.lower() if hasattr(settings, 'cbbtc_address') else None
+
+                    if debt_amount and debt_amount > 0:
+                        if token0 == weth_address and token0_amount and token0_amount > 0:
+                            # WETH/USDC pool - use token0_amount (WETH)
+                            neutral_ratio = Decimal(str(debt_amount)) / Decimal(str(token0_amount))
+                            logger.debug(f"Position {position.nft_token_id} - WETH pool neutral_ratio: {neutral_ratio}")
+                        elif cbbtc_address and token1 == cbbtc_address and token1_amount and token1_amount > 0:
+                            # USDC/cbBTC pool - use token1_amount (cbBTC)
+                            neutral_ratio = Decimal(str(debt_amount)) / Decimal(str(token1_amount))
+                            logger.debug(f"Position {position.nft_token_id} - cbBTC pool neutral_ratio: {neutral_ratio}")
+
+                    position_dict['neutral_ratio'] = neutral_ratio
+                except Exception as e:
+                    logger.warning(f"Could not calculate neutral_ratio for position {position.nft_token_id}: {e}")
+                    position_dict['neutral_ratio'] = None
+            else:
+                position_dict['neutral_ratio'] = None
+
             # Calculate net_apr (weighted average APR considering all position components)
             # Formula: ((effective_apr × lp_value) + (collateral_apy × collateral) - (borrow_apy × debt)) / (lp_value + collateral - debt)
             net_apr = None

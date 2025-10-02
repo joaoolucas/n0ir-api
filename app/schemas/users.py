@@ -368,6 +368,7 @@ class PositionResponse(BaseModel):
     pool_base_apr: Optional[Decimal] = Field(None, description="Pool base APR")
     effective_apr: Optional[Decimal] = Field(None, description="Effective APR with range adjustment")
     net_apr: Optional[Decimal] = Field(None, description="Net APR accounting for LP yield, collateral APY, and borrow costs")
+    neutral_ratio: Optional[Decimal] = Field(None, description="Ratio of debt to hedged asset in LP (debt_amount / token_amount)")
     in_range: Optional[bool] = Field(None, description="Whether the position is in range")
     token0: Optional[str] = Field(None, description="Token0 address")
     token1: Optional[str] = Field(None, description="Token1 address")
