@@ -4,6 +4,7 @@ Handles user creation, activation, and strategy generation.
 """
 from typing import Optional
 from decimal import Decimal
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
@@ -151,8 +152,10 @@ async def activate_agent(
         )
 
         if result.get('success'):
-            # Update user status to ACTIVE
+            # Update user status to ACTIVE and set agent_status to running
             user.status = 'ACTIVE'
+            user.agent_status = 'running'
+            user.agent_started_at = datetime.utcnow()
             await db.commit()
 
             return ActivateResponse(
@@ -220,8 +223,10 @@ async def deactivate_agent(
         )
 
         if result.get('success'):
-            # Update user status to INACTIVE
+            # Update user status to INACTIVE and set agent_status to stopped
             user.status = 'INACTIVE'
+            user.agent_status = 'stopped'
+            user.agent_stopped_at = datetime.utcnow()
             await db.commit()
 
             return DeactivateResponse(
