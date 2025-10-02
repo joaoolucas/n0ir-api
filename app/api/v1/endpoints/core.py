@@ -226,8 +226,8 @@ async def deactivate_agent(
         )
 
         if result.get('success'):
-            # Update user status to INACTIVE and set agent_status to stopped
-            user.status = 'INACTIVE'
+            # Update user status to SUSPENDED and set agent_status to stopped
+            user.status = 'SUSPENDED'
             user.agent_status = 'stopped'
             user.agent_stopped_at = datetime.utcnow()
             # Mark JSONB field as modified so SQLAlchemy commits the changes
