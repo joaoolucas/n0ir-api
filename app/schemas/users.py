@@ -340,6 +340,8 @@ class HedgeInfoResponse(BaseModel):
     debt_value_usd: Optional[Decimal] = Field(None, description="Debt value in USD")
     tick_lower: Optional[int] = Field(None, description="Lower tick")
     tick_upper: Optional[int] = Field(None, description="Upper tick")
+    collateral_supply_apy: Optional[Decimal] = Field(None, description="Current USDC supply APY on Aave")
+    hedged_asset_borrow_apy: Optional[Decimal] = Field(None, description="Current borrow APY on hedged asset (Aave)")
 
 
 class PositionResponse(BaseModel):
@@ -360,6 +362,8 @@ class PositionResponse(BaseModel):
     entry_date: Optional[datetime] = None
     exit_date: Optional[datetime] = None
     hedge: Optional[HedgeInfoResponse] = Field(None, description="Hedge information")
+    pool_base_apr: Optional[Decimal] = Field(None, description="Pool base APR")
+    effective_apr: Optional[Decimal] = Field(None, description="Effective APR with range adjustment")
 
 
 class PnLResponse(BaseModel):
