@@ -220,7 +220,7 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
             # Get pool APR data from pools service
             if position.pool_address:
                 try:
-                    pool_info = await pools_service.get_pool_info(position.pool_address, include_effective_apr=True)
+                    pool_info = await pools_service.get_pool(position.pool_address, include_effective_apr=True)
                     base_apr = pool_info.get('apr') or 0
                     # Get standard effective APR from the range options
                     effective_apr_range = pool_info.get('effective_apr_range')
