@@ -151,6 +151,10 @@ async def activate_agent(
         )
 
         if result.get('success'):
+            # Update user status to ACTIVE
+            user.status = 'ACTIVE'
+            await db.commit()
+
             return ActivateResponse(
                 user_id=user_id,
                 status="activated" if result.get('newly_activated') else "already_active",
@@ -216,6 +220,10 @@ async def deactivate_agent(
         )
 
         if result.get('success'):
+            # Update user status to INACTIVE
+            user.status = 'INACTIVE'
+            await db.commit()
+
             return DeactivateResponse(
                 user_id=user_id,
                 status="deactivated" if result.get('was_active') else "already_inactive",
