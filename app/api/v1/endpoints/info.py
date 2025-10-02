@@ -650,25 +650,29 @@ async def get_performance(
         realized_pnl_pct = Decimal(0)
         total_pnl_percentage = Decimal(0)
 
-    # Calculate average APR from active positions
+    # Calculate weighted average APR from active positions using net_apr
+    # Formula: Σ(current_value_usdc × net_apr) / Σ(current_value_usdc)
     apr = Decimal(0)
     if active_positions:
-        # Try to get APR from pool data
-        total_apr = 0
-        active_count = 0
-        for position in active_positions:
-            if position.pool_address:
-                try:
-                    pool_data = await pools_service.get_pool_info(position.pool_address)
-                    if pool_data and 'apr_7d' in pool_data:
-                        pool_apr = float(pool_data.get('apr_7d', 0))
-                        total_apr += pool_apr
-                        active_count += 1
-                except:
-                    pass
+        weighted_apr_sum = Decimal(0)
+        total_value = Decimal(0)
 
-        if active_count > 0:
-            apr = Decimal(str(total_apr / active_count))
+        for position in active_positions:
+            # Get position details with net_apr
+            try:
+                position_dict = await get_position_details(user_id, position.nft_token_id, db)
+                net_apr = position_dict.get('net_apr')
+                current_value = position_dict.get('current_value_usdc')
+
+                if net_apr is not None and current_value and current_value > 0:
+                    weighted_apr_sum += Decimal(str(net_apr)) * Decimal(str(current_value))
+                    total_value += Decimal(str(current_value))
+            except Exception as e:
+                logger.warning(f"Could not get net_apr for position {position.nft_token_id}: {e}")
+                continue
+
+        if total_value > 0:
+            apr = weighted_apr_sum / total_value
 
     # Return performance data
     return PerformanceResponse(
