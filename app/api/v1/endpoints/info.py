@@ -384,63 +384,103 @@ async def list_users(
 
     enriched_users = []
     for user in users:
-        # Build user dict from scratch with required fields
-        user_dict = {
-            'user_id': user.user_id,
-            'cdp_wallet_address': user.cdp_wallet_address,
-            'status': user.status,
-            'created_at': user.created_at,
-            'total_portfolio_value': Decimal(0),  # Will be calculated below
-            'active_positions_count': 0,
-            'total_pnl_usdc': Decimal(0),
-            'total_pnl_percentage': Decimal(0),
-            'agent_active': bool(user.cdp_wallet_address)
-        }
+        try:
+            # Get wallet balance
+            wallet_balance = Decimal(0)
+            if user.cdp_wallet_address:
+                try:
+                    balance = await blockchain_service.get_usdc_balance(user.cdp_wallet_address)
+                    wallet_balance = Decimal(str(balance))
+                except:
+                    wallet_balance = Decimal(0)
 
-        # Get wallet balance if CDP wallet exists
-        if user.cdp_wallet_address:
-            try:
-                balance = await blockchain_service.get_usdc_balance(user.cdp_wallet_address)
-                user_dict['wallet_balance'] = Decimal(str(balance))
-            except:
-                user_dict['wallet_balance'] = Decimal(0)
+            # Get positions
+            positions = await service.get_user_positions(user.user_id)
+            active_positions = [p for p in positions if p.status == 'ACTIVE']
+            closed_positions = [p for p in positions if p.status == 'CLOSED']
 
-        # Get position counts and total value
-        positions = await service.get_user_positions(user.user_id)
-        active_positions = [p for p in positions if p.status == 'ACTIVE']
+            # Enrich active positions with blockchain data (same as performance endpoint)
+            enriched_active_positions = []
+            for position in active_positions:
+                try:
+                    enriched = await enrich_position_with_pool_data(position, db)
+                    enriched_active_positions.append(enriched)
+                except Exception as e:
+                    logger.warning(f"Could not enrich position {position.nft_token_id} for user {user.user_id}: {e}")
+                    continue
 
-        user_dict['active_positions_count'] = len(active_positions)
+            # Calculate positions value from enriched blockchain data
+            positions_value = sum(
+                Decimal(str(p.get('current_value_usdc', 0))) for p in enriched_active_positions
+                if p.get('current_value_usdc')
+            )
 
-        # Calculate total portfolio value (wallet + positions)
-        positions_value = sum(
-            p.current_value_usdc for p in active_positions
-            if p.current_value_usdc
-        )
-        wallet_balance = user_dict.get('wallet_balance', Decimal(0))
-        user_dict['total_portfolio_value'] = wallet_balance + positions_value
+            # Total portfolio value = wallet + positions
+            total_portfolio_value = wallet_balance + positions_value
 
-        # Calculate total PnL
-        total_realized_pnl = sum(
-            p.realized_pnl_usdc for p in positions
-            if p.realized_pnl_usdc
-        )
-        total_fees = sum(
-            p.fees_earned_usdc for p in positions
-            if p.fees_earned_usdc
-        )
-        user_dict['total_pnl_usdc'] = total_realized_pnl + total_fees
+            # Calculate PnL (same logic as performance endpoint)
+            # Realized PnL from closed positions
+            realized_pnl = sum(p.realized_pnl_usdc for p in closed_positions if p.realized_pnl_usdc)
 
-        # Calculate PnL percentage if there's an investment
-        total_invested = sum(
-            p.entry_amount_usdc for p in positions
-            if p.entry_amount_usdc
-        )
-        if total_invested > 0:
-            user_dict['total_pnl_percentage'] = (user_dict['total_pnl_usdc'] / total_invested) * 100
-        else:
-            user_dict['total_pnl_percentage'] = Decimal(0)
+            # Unrealized PnL from active positions
+            unrealized_pnl = sum(
+                Decimal(str(p.get('unrealized_pnl_usdc', 0))) for p in enriched_active_positions
+                if p.get('unrealized_pnl_usdc') is not None
+            )
 
-        enriched_users.append(user_dict)
+            # Fees and rewards
+            total_fees = sum(p.fees_earned_usdc for p in positions if p.fees_earned_usdc)
+            total_rewards = sum(p.rewards_earned_usdc for p in positions if p.rewards_earned_usdc)
+
+            # Total PnL = unrealized + realized + fees + rewards
+            total_pnl_usdc = unrealized_pnl + realized_pnl + total_fees + total_rewards
+
+            # Calculate PnL percentage
+            total_invested = sum(p.entry_amount_usdc for p in positions if p.entry_amount_usdc)
+            if total_invested > 0:
+                total_pnl_percentage = round((total_pnl_usdc / total_invested) * 100, 2)  # Round to 2 decimals
+            else:
+                total_pnl_percentage = Decimal(0)
+
+            # Update user table with latest PnL data
+            user.usdc_balance = wallet_balance
+            user.unrealized_pnl_usd = unrealized_pnl
+            user.unrealized_pnl_pct = round((unrealized_pnl / total_invested * 100), 2) if total_invested > 0 else Decimal(0)
+            user.realized_pnl_usd = realized_pnl
+            user.realized_pnl_pct = round((realized_pnl / total_invested * 100), 2) if total_invested > 0 else Decimal(0)
+
+            # Build response
+            user_dict = {
+                'user_id': user.user_id,
+                'cdp_wallet_address': user.cdp_wallet_address,
+                'status': user.status,
+                'created_at': user.created_at,
+                'total_portfolio_value': total_portfolio_value,
+                'active_positions_count': len(enriched_active_positions),
+                'total_pnl_usdc': total_pnl_usdc,
+                'total_pnl_percentage': total_pnl_percentage,
+                'agent_active': bool(user.cdp_wallet_address)
+            }
+
+            enriched_users.append(user_dict)
+
+        except Exception as e:
+            logger.error(f"Error enriching user {user.user_id}: {e}")
+            # Return basic data if enrichment fails
+            enriched_users.append({
+                'user_id': user.user_id,
+                'cdp_wallet_address': user.cdp_wallet_address,
+                'status': user.status,
+                'created_at': user.created_at,
+                'total_portfolio_value': Decimal(0),
+                'active_positions_count': 0,
+                'total_pnl_usdc': Decimal(0),
+                'total_pnl_percentage': Decimal(0),
+                'agent_active': bool(user.cdp_wallet_address)
+            })
+
+    # Commit updates to database
+    await db.commit()
 
     return enriched_users
 
