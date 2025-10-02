@@ -516,6 +516,8 @@ class PositionsService:
             current_value_usd = None
             unclaimed_fees_usd = None
             unclaimed_rewards_aero = None
+            token0_amount = None
+            token1_amount = None
 
             # For LiquidityManager positions, use the LiquidityManager contract address for Sugar lookups
             # For legacy positions, use the NFT owner
@@ -523,35 +525,39 @@ class PositionsService:
             sugar_position = await self._fetch_position_from_sugar(token_id, sugar_owner, is_unstaked=not staked)
 
             logger.info(f"Position {token_id} - Sugar data: {sugar_position}")
-            
+
             if sugar_position:
                 # Get token prices
                 token0_price = await self._get_token_price_usd(token0)
                 token1_price = await self._get_token_price_usd(token1)
                 aero_price = await self._get_token_price_usd(self.AERO_ADDRESS)
-                
+
                 logger.info(f"Position {token_id} - Prices: token0={token0_price}, token1={token1_price}, aero={aero_price}")
                 logger.info(f"Position {token_id} - Tokens: token0={token0}, token1={token1}")
-                
+
                 # Get token decimals
                 token0_decimals = await self._get_token_decimals(token0)
                 token1_decimals = await self._get_token_decimals(token1)
-                
+
                 logger.info(f"Position {token_id} - Decimals: token0={token0_decimals}, token1={token1_decimals}")
-                
+
                 # Calculate current value USD (staked0 * token0_price + staked1 * token1_price)
                 staked0_amount = sugar_position['staked0'] / (10 ** token0_decimals)
                 staked1_amount = sugar_position['staked1'] / (10 ** token1_decimals)
                 current_value_usd = (staked0_amount * token0_price) + (staked1_amount * token1_price)
-                
+
+                # Store token amounts
+                token0_amount = staked0_amount
+                token1_amount = staked1_amount
+
                 logger.info(f"Position {token_id} - Staked amounts: token0={staked0_amount}, token1={staked1_amount}")
                 logger.info(f"Position {token_id} - Current value USD: {current_value_usd}")
-                
+
                 # Calculate unclaimed fees USD (emissions_earned * aero_price)
                 emissions_amount = sugar_position['emissions_earned'] / 1e18  # Assuming 18 decimals
                 unclaimed_fees_usd = emissions_amount * aero_price
                 unclaimed_rewards_aero = emissions_amount  # Store AERO amount
-                
+
                 logger.info(f"Position {token_id} - Emissions: {emissions_amount} AERO = ${unclaimed_fees_usd}")
             else:
                 logger.warning(f"Position {token_id} - No Sugar data found")
@@ -605,6 +611,8 @@ class PositionsService:
                 token0=token0,
                 token1=token1,
                 tick_spacing=tick_spacing,
+                token0_amount=token0_amount,
+                token1_amount=token1_amount,
                 pool_name=pool_name,  # Add pool name to position info
                 apr=pool_apr  # Add APR to position info
             )

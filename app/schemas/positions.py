@@ -43,7 +43,11 @@ class PositionInfo(BaseModel):
     token0: Optional[str] = Field(None, description="Token0 address")
     token1: Optional[str] = Field(None, description="Token1 address")
     tick_spacing: Optional[int] = Field(None, description="Pool tick spacing")
-    
+
+    # Token amounts
+    token0_amount: Optional[float] = Field(None, description="Amount of token0 in the position")
+    token1_amount: Optional[float] = Field(None, description="Amount of token1 in the position")
+
     # Pool information
     pool_name: Optional[str] = Field(None, description="Pool name/symbol (e.g., WETH/USDC-0.3%)")
     apr: Optional[float] = Field(None, description="Pool's current APR percentage")
