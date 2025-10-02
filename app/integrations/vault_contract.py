@@ -360,8 +360,8 @@ class VaultContract:
                 'debt': result[2],  # Keep in wei for now
                 'hedged_asset': result[3],
                 'is_hedged': result[4],
-                'collateral_supply_apy': (result[5] / 1e27) * 100,  # Convert from ray (decimal) to percentage
-                'hedged_asset_borrow_apy': (result[6] / 1e27) * 100  # Convert from ray (decimal) to percentage
+                'collateral_supply_apy': result[5] / 1e2,  # APY in basis points (divide by 100 to get percentage)
+                'hedged_asset_borrow_apy': result[6] / 1e2  # APY in basis points (divide by 100 to get percentage)
             }
 
             return position_details

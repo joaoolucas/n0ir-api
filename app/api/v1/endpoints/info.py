@@ -217,14 +217,18 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
             if hasattr(position_data, 'gauge_address') and position_data.gauge_address:
                 position_dict['gauge_address'] = position_data.gauge_address
 
-            # Get pool APR data
+            # Get pool APR data from pools service
             if position.pool_address:
                 try:
-                    pool_info = await pools_service.get_pool_info(position.pool_address)
-                    apr_value = pool_info.get('apr_7d') or pool_info.get('apr') or 0
-                    position_dict['pool_base_apr'] = Decimal(str(apr_value))
-                    position_dict['effective_apr'] = Decimal(str(apr_value))
-                    logger.debug(f"Position {position.nft_token_id} pool APR: {apr_value}")
+                    pool_info = await pools_service.get_pool_info(position.pool_address, include_effective_apr=True)
+                    base_apr = pool_info.get('apr') or 0
+                    # Get standard effective APR from the range options
+                    effective_apr_range = pool_info.get('effective_apr_range')
+                    standard_apr = effective_apr_range.get('standard', 0) if effective_apr_range else 0
+
+                    position_dict['pool_base_apr'] = Decimal(str(base_apr))
+                    position_dict['effective_apr'] = Decimal(str(standard_apr))
+                    logger.debug(f"Position {position.nft_token_id} - Base APR: {base_apr}, Effective APR: {standard_apr}")
                 except Exception as e:
                     logger.warning(f"Could not fetch pool APR for {position.pool_address}: {e}")
                     position_dict['pool_base_apr'] = Decimal(0)
