@@ -664,23 +664,43 @@ async def get_performance(
     # Get positions for metrics calculation
     positions = await service.get_user_positions(user_id)
 
-    # Calculate current positions value
+    # Enrich active positions with blockchain data to get accurate current values
     active_positions = [p for p in positions if p.status == 'ACTIVE']
+    enriched_active_positions = []
+    for position in active_positions:
+        try:
+            enriched = await enrich_position_with_pool_data(position, db)
+            enriched_active_positions.append(enriched)
+        except Exception as e:
+            logger.warning(f"Could not enrich position {position.nft_token_id}: {e}")
+            continue
+
+    # Calculate current positions value using enriched blockchain data
     current_positions_value = sum(
-        p.current_value_usdc for p in active_positions
-        if p.current_value_usdc
+        Decimal(str(p.get('current_value_usdc', 0))) for p in enriched_active_positions
+        if p.get('current_value_usdc')
     )
 
     # Total portfolio value
     total_portfolio_value = Decimal(str(wallet_balance)) + current_positions_value
 
-    # Calculate realized PnL from all positions
-    realized_pnl = sum(p.realized_pnl_usdc for p in positions if p.realized_pnl_usdc)
+    # Calculate PnL metrics
+    # Realized PnL from closed positions only
+    closed_positions = [p for p in positions if p.status == 'CLOSED']
+    realized_pnl = sum(p.realized_pnl_usdc for p in closed_positions if p.realized_pnl_usdc)
+
+    # Unrealized PnL from active positions (current_value - entry_amount)
+    unrealized_pnl = sum(
+        Decimal(str(p.get('unrealized_pnl_usdc', 0))) for p in enriched_active_positions
+        if p.get('unrealized_pnl_usdc') is not None
+    )
+
+    # Fees and rewards from all positions
     total_fees = sum(p.fees_earned_usdc for p in positions if p.fees_earned_usdc)
     total_rewards = sum(p.rewards_earned_usdc for p in positions if p.rewards_earned_usdc)
 
-    # Calculate total PnL (realized + fees + rewards)
-    total_pnl = realized_pnl + total_fees + total_rewards
+    # Total PnL = unrealized + realized + fees + rewards
+    total_pnl = unrealized_pnl + realized_pnl + total_fees + total_rewards
 
     # Calculate PnL percentage based on total invested
     total_invested = sum(p.entry_amount_usdc for p in positions if p.entry_amount_usdc)
@@ -691,31 +711,25 @@ async def get_performance(
         realized_pnl_pct = Decimal(0)
         total_pnl_percentage = Decimal(0)
 
-    # Calculate weighted average APR from active positions using net_apr
+    # Calculate weighted average APR from enriched active positions using net_apr
     # Formula: Σ(current_value_usdc × net_apr) / Σ(current_value_usdc)
     apr = Decimal(0)
-    if active_positions:
+    if enriched_active_positions:
         weighted_apr_sum = Decimal(0)
         total_value = Decimal(0)
 
-        for position in active_positions:
-            # Get position details with net_apr
-            try:
-                position_dict = await enrich_position_with_pool_data(position, db)
-                net_apr = position_dict.get('net_apr')
-                current_value = position_dict.get('current_value_usdc')
+        for position_dict in enriched_active_positions:
+            net_apr = position_dict.get('net_apr')
+            current_value = position_dict.get('current_value_usdc')
 
-                if net_apr is not None and current_value and current_value > 0:
-                    weighted_apr_sum += Decimal(str(net_apr)) * Decimal(str(current_value))
-                    total_value += Decimal(str(current_value))
-                    logger.debug(f"Position {position.nft_token_id}: net_apr={net_apr}, value={current_value}")
-            except Exception as e:
-                logger.warning(f"Could not get net_apr for position {position.nft_token_id}: {e}")
-                continue
+            if net_apr is not None and current_value and current_value > 0:
+                weighted_apr_sum += Decimal(str(net_apr)) * Decimal(str(current_value))
+                total_value += Decimal(str(current_value))
+                logger.debug(f"Position {position_dict.get('nft_token_id')}: net_apr={net_apr}, value={current_value}")
 
         if total_value > 0:
             apr = weighted_apr_sum / total_value
-            logger.info(f"Calculated weighted APR: {apr} from {len(active_positions)} positions")
+            logger.info(f"Calculated weighted APR: {apr} from {len(enriched_active_positions)} positions")
 
     # Return performance data
     return PerformanceResponse(
