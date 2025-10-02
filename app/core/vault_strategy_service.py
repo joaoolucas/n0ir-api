@@ -22,7 +22,7 @@ from app.schemas.users import (
     VaultHedgeSimulation,
     AerodromeLP,
     MonitoringInfo,
-    RangeBreakMonitoring
+    PositionAlert
 )
 
 
@@ -71,24 +71,9 @@ class VaultStrategyService:
                 logger.warning(f"User {user_id} balance ${balance:.2f} below minimum ${MIN_POSITION_AMOUNT}")
                 raise ValueError(f"Minimum position size is {MIN_POSITION_AMOUNT} USDC. Current balance: {balance:.2f} USDC")
 
-            # Get existing positions to check for range breaks
-            positions = await positions_service.get_positions_by_owner(user.cdp_wallet_address)
-            monitoring_info = None
+            # Check active positions for monitoring alerts
+            monitoring_info = await self._check_positions_monitoring(user_id, db)
             action = "open"
-
-            # Check for range breaks in existing positions
-            if positions:
-                for position in positions:
-                    if self._is_position_out_of_range(position):
-                        monitoring_info = MonitoringInfo(
-                            range_break=RangeBreakMonitoring(
-                                trigger="price_outside_tick_bounds",
-                                suggested_action="close_and_rebalance"
-                            )
-                        )
-                        action = "rebalance"
-                        logger.info(f"Position {position.nft_token_id} is out of range")
-                        break
 
             # Get pool data
             try:
@@ -268,9 +253,83 @@ class VaultStrategyService:
         )
         return result.scalar_one_or_none()
 
-    def _is_position_out_of_range(self, position) -> bool:
-        """Check if position is out of range."""
-        return getattr(position, 'in_range', True) is False
+    async def _check_positions_monitoring(self, user_id: str, db: AsyncSession) -> Optional[MonitoringInfo]:
+        """
+        Check active positions for monitoring alerts.
+
+        Rules:
+        - Hedged positions: Check neutral_ratio (0.8-1.2) and in_range
+        - Non-hedged positions: Only check in_range
+
+        Returns:
+            MonitoringInfo with list of alerts, or None if no alerts
+        """
+        from app.services.user_service import UserService
+
+        try:
+            # Get active positions using the positions endpoint logic
+            service = UserService(db)
+            positions = await service.get_user_positions(user_id=user_id, status='ACTIVE')
+
+            if not positions:
+                return None
+
+            alerts = []
+            NEUTRAL_RATIO_MIN = Decimal("0.8")
+            NEUTRAL_RATIO_MAX = Decimal("1.2")
+
+            # Enrich positions with full data
+            from app.api.v1.endpoints.info import enrich_position_with_pool_data
+
+            for position in positions:
+                try:
+                    enriched = await enrich_position_with_pool_data(position, db)
+
+                    in_range = enriched.get('in_range', True)
+                    neutral_ratio = enriched.get('neutral_ratio')
+                    is_hedged = enriched.get('hedge', {}).get('is_hedged', False) if enriched.get('hedge') else False
+                    pool_address = enriched.get('pool_address', '')
+                    position_id = enriched.get('nft_token_id')
+
+                    # Check rules
+                    reasons = []
+
+                    # Rule 1: in_range must be True (for all positions)
+                    if not in_range:
+                        reasons.append('out_of_range')
+
+                    # Rule 2: neutral_ratio must be 0.8-1.2 (only for hedged positions)
+                    if is_hedged and neutral_ratio is not None:
+                        if neutral_ratio < NEUTRAL_RATIO_MIN or neutral_ratio > NEUTRAL_RATIO_MAX:
+                            reasons.append('neutral_ratio_breach')
+
+                    # Create alert if any rule violated
+                    if reasons:
+                        alert = PositionAlert(
+                            position_id=position_id,
+                            pool_address=pool_address,
+                            reason=', '.join(reasons),
+                            suggested_action="close",
+                            current_in_range=in_range,
+                            current_neutral_ratio=Decimal(str(neutral_ratio)) if neutral_ratio is not None else None,
+                            threshold_min=NEUTRAL_RATIO_MIN if is_hedged else None,
+                            threshold_max=NEUTRAL_RATIO_MAX if is_hedged else None
+                        )
+                        alerts.append(alert)
+                        logger.warning(f"Position {position_id} alert: {reasons}, neutral_ratio={neutral_ratio}, in_range={in_range}")
+
+                except Exception as e:
+                    logger.error(f"Error checking position {position.nft_token_id} for monitoring: {e}")
+                    continue
+
+            if alerts:
+                return MonitoringInfo(alerts=alerts)
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error checking positions monitoring for user {user_id}: {e}")
+            return None
 
 
 # Singleton instance

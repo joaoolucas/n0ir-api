@@ -119,15 +119,21 @@ class CapitalInfo(BaseModel):
     base_asset: str = Field(default="USDC", description="Base asset")
 
 
-class RangeBreakMonitoring(BaseModel):
-    """Range break monitoring info"""
-    trigger: str = Field(..., description="Trigger condition")
-    suggested_action: str = Field(..., description="Suggested action")
+class PositionAlert(BaseModel):
+    """Alert for a position that needs attention"""
+    position_id: int = Field(..., description="NFT token ID")
+    pool_address: str = Field(..., description="Pool address")
+    reason: str = Field(..., description="Reason for alert: 'neutral_ratio_breach' or 'out_of_range'")
+    suggested_action: str = Field(default="close", description="Suggested action")
+    current_in_range: bool = Field(..., description="Current in_range status")
+    current_neutral_ratio: Optional[Decimal] = Field(None, description="Current neutral_ratio if hedged")
+    threshold_min: Optional[Decimal] = Field(None, description="Minimum threshold for neutral_ratio (0.8)")
+    threshold_max: Optional[Decimal] = Field(None, description="Maximum threshold for neutral_ratio (1.2)")
 
 
 class MonitoringInfo(BaseModel):
     """Monitoring information"""
-    range_break: Optional[RangeBreakMonitoring] = None
+    alerts: List[PositionAlert] = Field(default_factory=list, description="List of position alerts")
 
 
 class MoonwellStrategyResponse(BaseModel):

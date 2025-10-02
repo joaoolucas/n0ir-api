@@ -287,8 +287,10 @@ async def get_vault_strategy(
         logger.info(f"  Health factor: {strategy.simulation.expected_health_factor:.2f}")
         logger.info(f"  Aerodrome LP: ${strategy.aerodrome_pool.amount_usdc}")
 
-        if strategy.monitoring and strategy.monitoring.range_break:
-            logger.warning(f"  ⚠️ Range break detected: {strategy.monitoring.range_break.trigger}")
+        if strategy.monitoring and strategy.monitoring.alerts:
+            logger.warning(f"  ⚠️ {len(strategy.monitoring.alerts)} position(s) need attention")
+            for alert in strategy.monitoring.alerts:
+                logger.warning(f"    Position {alert.position_id}: {alert.reason}")
 
         return strategy
 
