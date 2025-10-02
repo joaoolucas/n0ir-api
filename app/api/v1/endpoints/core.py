@@ -7,6 +7,7 @@ from decimal import Decimal
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import attributes
 from loguru import logger
 
 from app.database.session import get_db
@@ -156,6 +157,8 @@ async def activate_agent(
             user.status = 'ACTIVE'
             user.agent_status = 'running'
             user.agent_started_at = datetime.utcnow()
+            # Mark JSONB field as modified so SQLAlchemy commits the changes
+            attributes.flag_modified(user, 'user_metadata')
             await db.commit()
 
             return ActivateResponse(
@@ -227,6 +230,8 @@ async def deactivate_agent(
             user.status = 'INACTIVE'
             user.agent_status = 'stopped'
             user.agent_stopped_at = datetime.utcnow()
+            # Mark JSONB field as modified so SQLAlchemy commits the changes
+            attributes.flag_modified(user, 'user_metadata')
             await db.commit()
 
             return DeactivateResponse(
