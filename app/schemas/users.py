@@ -9,6 +9,7 @@ import enum
 # Enums matching database models
 class UserStatus(str, enum.Enum):
     ACTIVE = "ACTIVE"
+    INACTIVE = "INACTIVE"
     SUSPENDED = "SUSPENDED"
     CLOSED = "CLOSED"
 
