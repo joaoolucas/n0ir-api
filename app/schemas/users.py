@@ -367,6 +367,7 @@ class PositionResponse(BaseModel):
     hedge: Optional[HedgeInfoResponse] = Field(None, description="Hedge information")
     pool_base_apr: Optional[Decimal] = Field(None, description="Pool base APR")
     effective_apr: Optional[Decimal] = Field(None, description="Effective APR with range adjustment")
+    net_apr: Optional[Decimal] = Field(None, description="Net APR accounting for LP yield, collateral APY, and borrow costs")
 
 
 class PnLResponse(BaseModel):

@@ -239,6 +239,33 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
                     position_dict['pool_base_apr'] = Decimal(0)
                     position_dict['effective_apr'] = Decimal(0)
 
+            # Calculate net_apr (weighted APR considering all position components)
+            # Formula: (effective_apr × lp_value) + (collateral_apy × collateral) - (borrow_apy × debt)
+            net_apr = None
+            if hedge_info and hedge_info.get('is_hedged'):
+                try:
+                    effective_apr = position_dict.get('effective_apr', Decimal(0))
+                    lp_value = hedge_info.get('lp_current_value_usd', Decimal(0)) or Decimal(0)
+                    collateral_apy = hedge_info.get('collateral_supply_apy', Decimal(0)) or Decimal(0)
+                    collateral = hedge_info.get('collateral', Decimal(0)) or Decimal(0)
+                    borrow_apy = hedge_info.get('hedged_asset_borrow_apy', Decimal(0)) or Decimal(0)
+                    debt_value = hedge_info.get('debt_value_usd', Decimal(0)) or Decimal(0)
+
+                    # Calculate weighted net APR
+                    net_apr = (
+                        (effective_apr * lp_value) +
+                        (collateral_apy * collateral) -
+                        (borrow_apy * debt_value)
+                    )
+                    position_dict['net_apr'] = net_apr
+                    logger.debug(f"Position {position.nft_token_id} - Net APR: {net_apr}")
+                except Exception as e:
+                    logger.warning(f"Could not calculate net_apr for position {position.nft_token_id}: {e}")
+                    position_dict['net_apr'] = None
+            else:
+                # For non-hedged positions, net_apr = effective_apr
+                position_dict['net_apr'] = position_dict.get('effective_apr')
+
             # Calculate PnL (simple version - current value minus entry amount)
             current_value = blockchain_value + net_hedge_value
 
