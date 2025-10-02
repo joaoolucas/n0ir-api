@@ -305,14 +305,17 @@ class UserService:
         """Get user transactions with optional filters, including CDP wallet transactions."""
         # First get transactions from the main Transaction table
         stmt = select(Transaction).where(Transaction.user_id == user_id)
-        
+
+        # Filter out deprecated transaction types (STAKING, SWAP, FEE_TRANSFER)
+        stmt = stmt.where(Transaction.tx_type.not_in(['STAKING', 'SWAP', 'FEE_TRANSFER']))
+
         if transaction_type:
             # Use the enum value directly - it should match the database
             tx_type_value = transaction_type.value if hasattr(transaction_type, 'value') else str(transaction_type)
             stmt = stmt.where(Transaction.tx_type == tx_type_value)
         if status:
             stmt = stmt.where(Transaction.status == status)
-        
+
         # Order by block_timestamp for true chronological ordering
         # Use COALESCE to handle nulls (though all should have block_timestamp)
         if sort_order.lower() == "asc":
@@ -325,14 +328,14 @@ class UserService:
             stmt = stmt.order_by(
                 func.coalesce(Transaction.block_timestamp, Transaction.created_at).desc()
             )
-        
+
         # Execute regular transactions query
         result = await self.db.execute(stmt)
         transactions = list(result.scalars().all())
-        
+
         # Note: CDP wallet transactions are now stored directly in the transactions table
         # with appropriate tx_type instead of a separate WalletTransaction table
-        
+
         # Apply limit and offset to results
         return transactions[offset:offset + limit]
     

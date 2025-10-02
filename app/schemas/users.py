@@ -16,11 +16,8 @@ class UserStatus(str, enum.Enum):
 class TransactionType(str, enum.Enum):
     DEPOSIT = "DEPOSIT"
     WITHDRAW = "WITHDRAW"
-    STAKING = "STAKING"
     POSITION_CREATED = "POSITION_CREATED"
     POSITION_CLOSED = "POSITION_CLOSED"
-    SWAP = "SWAP"
-    FEE_TRANSFER = "FEE_TRANSFER"
 
 
 class TransactionStatus(str, enum.Enum):
@@ -324,13 +321,6 @@ class TransactionResponse(BaseModel):
                 'POSITION_CLOSED': 'POSITION_CLOSED',
                 'POSITION_OPENED': 'POSITION_CREATED',  # Map variations
                 'position_opened': 'POSITION_CREATED',
-                'staking': 'STAKING',
-                'STAKING': 'STAKING',
-                # Map swap types
-                'aero_swap': 'SWAP',
-                'AERO_SWAP': 'SWAP',
-                'swap': 'SWAP',
-                'SWAP': 'SWAP',
                 'fee_collection': 'POSITION_CLOSED',
                 'FEE_COLLECTION': 'POSITION_CLOSED',
                 'PROTOCOL_FEE': 'POSITION_CLOSED',

@@ -407,7 +407,7 @@ async def get_transactions(
         tx_dict = TransactionResponse.model_validate(tx).model_dump()
 
         # Check if position is in range for position-related transactions
-        if tx.position_id and tx.tx_type in ['POSITION_CREATED', 'POSITION_CLOSED', 'STAKING']:
+        if tx.position_id and tx.tx_type in ['POSITION_CREATED', 'POSITION_CLOSED']:
             # Check if this position is still active
             position = active_positions.get(tx.position_id)
             if position:
