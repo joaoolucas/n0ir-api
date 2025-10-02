@@ -159,8 +159,16 @@ class PositionsService:
             },
             {
                 "inputs": [{"internalType": "uint256", "name": "tokenId", "type": "uint256"}],
-                "name": "getPositionOwner",
-                "outputs": [{"internalType": "address", "name": "", "type": "address"}],
+                "name": "getPositionDetails",
+                "outputs": [
+                    {"internalType": "address", "name": "owner", "type": "address"},
+                    {"internalType": "uint256", "name": "collateral", "type": "uint256"},
+                    {"internalType": "uint256", "name": "debt", "type": "uint256"},
+                    {"internalType": "address", "name": "hedgedAsset", "type": "address"},
+                    {"internalType": "bool", "name": "isHedged", "type": "bool"},
+                    {"internalType": "uint256", "name": "collateralSupplyAPY", "type": "uint256"},
+                    {"internalType": "uint256", "name": "hedgedAssetBorrowAPY", "type": "uint256"}
+                ],
                 "stateMutability": "view",
                 "type": "function"
             }
@@ -447,9 +455,10 @@ class PositionsService:
             # Always try to get owner from LiquidityManager first (CDP wallet address)
             cdp_wallet = None
             try:
-                cdp_wallet = liquidity_manager.functions.getPositionOwner(token_id).call()
+                position_details = liquidity_manager.functions.getPositionDetails(token_id).call()
+                cdp_wallet = position_details[0]  # owner
                 if cdp_wallet and cdp_wallet != "0x0000000000000000000000000000000000000000":
-                    logger.info(f"Position {token_id} CDP wallet from LiquidityManager.getPositionOwner: {cdp_wallet}")
+                    logger.info(f"Position {token_id} CDP wallet from LiquidityManager.getPositionDetails: {cdp_wallet}")
             except Exception as e:
                 logger.debug(f"Position {token_id} not in LiquidityManager: {e}")
 

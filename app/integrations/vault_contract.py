@@ -78,12 +78,15 @@ class VaultContract:
                 "inputs": [
                     {"internalType": "uint256", "name": "tokenId", "type": "uint256"}
                 ],
-                "name": "getPositionHedgeInfo",
+                "name": "getPositionDetails",
                 "outputs": [
+                    {"internalType": "address", "name": "owner", "type": "address"},
                     {"internalType": "uint256", "name": "collateral", "type": "uint256"},
                     {"internalType": "uint256", "name": "debt", "type": "uint256"},
                     {"internalType": "address", "name": "hedgedAsset", "type": "address"},
-                    {"internalType": "bool", "name": "isHedged", "type": "bool"}
+                    {"internalType": "bool", "name": "isHedged", "type": "bool"},
+                    {"internalType": "uint256", "name": "collateralSupplyAPY", "type": "uint256"},
+                    {"internalType": "uint256", "name": "hedgedAssetBorrowAPY", "type": "uint256"}
                 ],
                 "stateMutability": "view",
                 "type": "function"
@@ -338,30 +341,33 @@ class VaultContract:
             logger.error(f"Error getting user positions: {e}")
             return []
 
-    def get_position_hedge_info(self, token_id: int) -> Dict:
+    def get_position_details(self, token_id: int) -> Dict:
         """
-        Get hedge info for a specific position.
+        Get full details for a specific position.
 
         Args:
             token_id: NFT token ID
 
         Returns:
-            Dictionary with hedge info
+            Dictionary with position details
         """
         try:
-            result = self.contract.functions.getPositionHedgeInfo(token_id).call()
+            result = self.contract.functions.getPositionDetails(token_id).call()
 
-            hedge_info = {
-                'collateral': result[0] / 1e6,  # USDC has 6 decimals
-                'debt': result[1],  # Keep in wei for now
-                'hedged_asset': result[2],
-                'is_hedged': result[3]
+            position_details = {
+                'owner': result[0],
+                'collateral': result[1] / 1e6,  # USDC has 6 decimals
+                'debt': result[2],  # Keep in wei for now
+                'hedged_asset': result[3],
+                'is_hedged': result[4],
+                'collateral_supply_apy': result[5] / 1e18,  # APY in 18 decimals
+                'hedged_asset_borrow_apy': result[6] / 1e18  # APY in 18 decimals
             }
 
-            return hedge_info
+            return position_details
 
         except Exception as e:
-            logger.error(f"Error getting position hedge info for token {token_id}: {e}")
+            logger.error(f"Error getting position details for token {token_id}: {e}")
             raise
 
     def get_global_health_metrics(self) -> Dict:

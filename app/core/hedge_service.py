@@ -60,32 +60,32 @@ class HedgeService:
 
             for token_id in token_ids:
                 try:
-                    hedge_info = vault_contract.get_position_hedge_info(token_id)
+                    position_details = vault_contract.get_position_details(token_id)
 
                     # Get asset symbol
-                    asset_symbol = vault_contract.get_token_symbol(hedge_info['hedged_asset'])
+                    asset_symbol = vault_contract.get_token_symbol(position_details['hedged_asset'])
 
                     # Calculate debt in USD (need to determine decimals based on asset)
                     if asset_symbol == "WETH":
-                        debt_amount = hedge_info['debt'] / 1e18
+                        debt_amount = position_details['debt'] / 1e18
                         debt_usd = debt_amount * prices.get("WETH", 4000)
                     elif asset_symbol == "cbBTC":
-                        debt_amount = hedge_info['debt'] / 1e8
+                        debt_amount = position_details['debt'] / 1e8
                         debt_usd = debt_amount * prices.get("cbBTC", 100000)
                     else:
-                        debt_amount = hedge_info['debt'] / 1e18  # Default to 18 decimals
+                        debt_amount = position_details['debt'] / 1e18  # Default to 18 decimals
                         debt_usd = 0
 
-                    collateral_usdc = Decimal(str(hedge_info['collateral']))
+                    collateral_usdc = Decimal(str(position_details['collateral']))
 
                     position_info = VaultPositionInfo(
                         token_id=token_id,
                         collateral_usdc=collateral_usdc,
                         debt_amount=Decimal(str(debt_amount)),
                         debt_usd=Decimal(str(debt_usd)),
-                        hedged_asset=hedge_info['hedged_asset'],
+                        hedged_asset=position_details['hedged_asset'],
                         hedged_asset_symbol=asset_symbol,
-                        is_hedged=hedge_info['is_hedged'],
+                        is_hedged=position_details['is_hedged'],
                         exposure_usd=None,  # Would need LP position data to calculate
                         net_delta_usd=None  # Would need exposure to calculate
                     )
@@ -172,13 +172,13 @@ class HedgeService:
                 }
                 is_at_risk = False
 
-            # Get hedge info for this specific position
-            logger.info(f"Fetching hedge info for token {token_id}")
-            hedge_info = vault_contract.get_position_hedge_info(token_id)
-            logger.info(f"Hedge info for token {token_id}: {hedge_info}")
+            # Get position details
+            logger.info(f"Fetching position details for token {token_id}")
+            position_details = vault_contract.get_position_details(token_id)
+            logger.info(f"Position details for token {token_id}: {position_details}")
 
             # Check if position is hedged
-            if not hedge_info.get('is_hedged', False):
+            if not position_details.get('is_hedged', False):
                 logger.info(f"Position {token_id} is not hedged")
                 # Return empty response for non-hedged positions
                 return HedgePositionResponse(
@@ -200,29 +200,29 @@ class HedgeService:
                 )
 
             # Get asset symbol
-            asset_symbol = vault_contract.get_token_symbol(hedge_info['hedged_asset'])
+            asset_symbol = vault_contract.get_token_symbol(position_details['hedged_asset'])
 
             # Calculate debt in USD (need to determine decimals based on asset)
             if asset_symbol == "WETH":
-                debt_amount = hedge_info['debt'] / 1e18
+                debt_amount = position_details['debt'] / 1e18
                 debt_usd = debt_amount * prices.get("WETH", 4000)
             elif asset_symbol == "cbBTC":
-                debt_amount = hedge_info['debt'] / 1e8
+                debt_amount = position_details['debt'] / 1e8
                 debt_usd = debt_amount * prices.get("cbBTC", 100000)
             else:
-                debt_amount = hedge_info['debt'] / 1e18  # Default to 18 decimals
+                debt_amount = position_details['debt'] / 1e18  # Default to 18 decimals
                 debt_usd = 0
 
-            collateral_usdc = Decimal(str(hedge_info['collateral']))
+            collateral_usdc = Decimal(str(position_details['collateral']))
 
             position_info = VaultPositionInfo(
                 token_id=token_id,
                 collateral_usdc=collateral_usdc,
                 debt_amount=Decimal(str(debt_amount)),
                 debt_usd=Decimal(str(debt_usd)),
-                hedged_asset=hedge_info['hedged_asset'],
+                hedged_asset=position_details['hedged_asset'],
                 hedged_asset_symbol=asset_symbol,
-                is_hedged=hedge_info['is_hedged'],
+                is_hedged=position_details['is_hedged'],
                 exposure_usd=None,
                 net_delta_usd=None
             )
