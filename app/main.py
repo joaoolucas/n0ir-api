@@ -3,12 +3,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 import asyncio
+import sentry_sdk
 from app.core.config import settings
 from app.api.v1.api import api_router
 from app.core.logger import logger
 from app.services.agent_management_service import get_agent_service
 from app.services.blockchain_event_consumer import blockchain_consumer
 from app.services.position_sync_service import run_position_sync_task
+
+# Initialize Sentry
+if settings.sentry_dsn:
+    sentry_sdk.init(
+        dsn=settings.sentry_dsn,
+        send_default_pii=True,
+    )
 
 
 @asynccontextmanager

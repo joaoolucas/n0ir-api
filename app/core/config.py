@@ -137,6 +137,12 @@ class Settings(BaseSettings):
         env="API_BEARER_TOKEN"
     )
 
+    # Sentry Configuration
+    sentry_dsn: Optional[str] = Field(
+        default=None,
+        env="SENTRY_DSN"
+    )
+
     # Wallet Registry Configuration
     wallet_registry_contract_address: Optional[str] = Field(default=None, env="WALLET_REGISTRY_CONTRACT_ADDRESS")
     wallet_registry_operator_address: Optional[str] = Field(default=None, env="WALLET_REGISTRY_OPERATOR_ADDRESS")
