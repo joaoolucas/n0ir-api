@@ -242,7 +242,6 @@ async def deactivate_agent(
 @router.post("/{user_id}/strategy", response_model=MoonwellStrategyResponse)
 async def get_vault_strategy(
     user_id: str,
-    pool_address: Optional[str] = None,
     db: AsyncSession = Depends(get_db)
 ) -> MoonwellStrategyResponse:
     """
@@ -269,9 +268,8 @@ async def get_vault_strategy(
     - monitoring: Range break alerts if applicable
     """
     try:
-        # Use provided pool address or default to WETH/USDC
-        if not pool_address:
-            pool_address = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59"  # WETH/USDC pool
+        # Default to WETH/USDC pool
+        pool_address = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59"  # WETH/USDC pool
 
         strategy = await vault_strategy_service.generate_strategy(
             user_id=user_id,
