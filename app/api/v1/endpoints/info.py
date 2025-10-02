@@ -92,7 +92,8 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
                 amount = raw_in / Decimal(1_000_000) if raw_in > 1000 else raw_in
             else:
                 amount = Decimal(str(amt_field))
-            usdc_returned = Decimal(str(position_created_tx.event_data.get('usdc_returned', 0))) if position_created_tx.event_data.get('usdc_returned') else Decimal(0)
+            usdc_returned_wei = position_created_tx.event_data.get('usdc_returned', 0)
+            usdc_returned = Decimal(str(usdc_returned_wei)) / Decimal(1_000_000) if usdc_returned_wei else Decimal(0)
             net_entry_amount = amount - usdc_returned
 
             # Build hedge info from event_data (as fallback for missing fields)
