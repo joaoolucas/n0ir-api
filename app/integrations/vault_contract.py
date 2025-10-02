@@ -259,6 +259,8 @@ class VaultContract:
         best_score = 0
         best_strategy = None
         errors = []
+        unhealthy_count = 0
+        low_hf_count = 0
 
         # Simple grid search
         for collateral_ratio in range(5500, 7000, 500):  # 55-70% in 5% steps
@@ -274,11 +276,13 @@ class VaultContract:
 
                     # Skip unhealthy positions
                     if not simulation['is_healthy']:
+                        unhealthy_count += 1
                         logger.debug(f"Unhealthy position for {collateral_ratio}/{hedge_ratio}")
                         continue
 
                     # Skip if health factor too low
                     if simulation['expected_health_factor'] < 1.75:
+                        low_hf_count += 1
                         logger.debug(f"Health factor too low ({simulation['expected_health_factor']}) for {collateral_ratio}/{hedge_ratio}")
                         continue
 
@@ -305,16 +309,22 @@ class VaultContract:
                         }
 
                 except Exception as e:
-                    error_msg = str(e)
+                    error_msg = f"{type(e).__name__}: {str(e)}"
                     if error_msg not in errors:
                         errors.append(error_msg)
                     logger.debug(f"Simulation failed for params {collateral_ratio}/{hedge_ratio}: {e}")
                     continue
 
         if not best_strategy:
-            # Log all unique errors
+            # Log detailed diagnostics
+            total_attempts = len(range(5500, 7000, 500)) * len(range(9200, 10000, 200))
+            logger.error(f"Could not find viable strategy. Diagnostics:")
+            logger.error(f"  Total attempts: {total_attempts}")
+            logger.error(f"  Failed with exceptions: {len(errors)}")
+            logger.error(f"  Unhealthy positions: {unhealthy_count}")
+            logger.error(f"  Low health factor (<1.75): {low_hf_count}")
             if errors:
-                logger.error(f"All simulations failed. Errors encountered: {errors[:3]}")
+                logger.error(f"  Sample errors: {errors[:3]}")
             raise ValueError("Could not find a viable hedge strategy - all simulations failed or returned unhealthy positions")
 
         logger.info(f"Found optimal strategy with delta-neutral score: {best_score:.4f}")
