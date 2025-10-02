@@ -274,7 +274,7 @@ async def get_vault_strategy(
       - rangePercentage: Position range (e.g., 10 = ±5%)
       - deadline: Transaction deadline timestamp
       - usdcAmount: USDC amount to deploy
-      - slippageBps: Slippage tolerance (default 100 = 1%)
+      - slippageBps: Slippage tolerance (default 50 = 0.5%)
       - hedgeRatio: Hedge ratio in bps (e.g., 9200 = 92%)
       - collateralRatioBps: Collateral ratio in bps (e.g., 6500 = 65%)
 

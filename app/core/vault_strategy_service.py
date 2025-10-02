@@ -144,7 +144,7 @@ class VaultStrategyService:
                     range_percentage=range_percentage,
                     deadline=deadline,
                     usdc_amount=Decimal(str(balance)),
-                    slippage_bps=100,  # 1% slippage
+                    slippage_bps=50,  # 0.5% slippage
                     hedge_ratio=optimal_strategy['hedge_ratio'],
                     collateral_ratio_bps=optimal_strategy['collateral_ratio_bps']
                 )
@@ -181,7 +181,7 @@ class VaultStrategyService:
                     range_percentage=range_percentage,
                     deadline=deadline,
                     usdc_amount=Decimal(str(balance)),
-                    slippage_bps=100,
+                    slippage_bps=50,
                     hedge_ratio=9500,
                     collateral_ratio_bps=6500
                 )
@@ -381,7 +381,7 @@ class VaultStrategyService:
             range_percentage=10,  # Default
             deadline=deadline,
             usdc_amount=Decimal(str(balance)),
-            slippage_bps=100,
+            slippage_bps=50,
             hedge_ratio=9500,
             collateral_ratio_bps=6500
         )
@@ -475,7 +475,7 @@ class VaultStrategyService:
             range_percentage=10,
             deadline=deadline,
             usdc_amount=weth_allocation,
-            slippage_bps=100,
+            slippage_bps=50,
             hedge_ratio=9500,
             collateral_ratio_bps=6500
         )
