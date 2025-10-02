@@ -334,6 +334,7 @@ class HedgeInfoResponse(BaseModel):
     """Hedge information for a position."""
     is_hedged: bool = Field(False, description="Whether position is hedged")
     lp_amount: Optional[Decimal] = Field(None, description="Amount in LP (USDC)")
+    lp_current_value_usd: Optional[Decimal] = Field(None, description="Current LP position value in USD")
     collateral: Optional[Decimal] = Field(None, description="Collateral amount (USDC)")
     debt_asset: Optional[str] = Field(None, description="Borrowed asset (WETH/cbBTC)")
     debt_amount: Optional[Decimal] = Field(None, description="Debt amount in asset")
@@ -342,6 +343,8 @@ class HedgeInfoResponse(BaseModel):
     tick_upper: Optional[int] = Field(None, description="Upper tick")
     collateral_supply_apy: Optional[Decimal] = Field(None, description="Current USDC supply APY on Aave")
     hedged_asset_borrow_apy: Optional[Decimal] = Field(None, description="Current borrow APY on hedged asset (Aave)")
+    unclaimed_fees_usd: Optional[Decimal] = Field(None, description="Unclaimed fees in USD")
+    unclaimed_rewards_aero: Optional[Decimal] = Field(None, description="Unclaimed AERO rewards")
 
 
 class PositionResponse(BaseModel):

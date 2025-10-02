@@ -202,12 +202,17 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
                 debt_value_usd = Decimal(str(hedge_info.get('debt_value_usd', 0)))
                 net_hedge_value = collateral - debt_value_usd
 
+                # Enrich hedge_info with LP position data
+                hedge_info['lp_current_value_usd'] = blockchain_value
+                hedge_info['unclaimed_fees_usd'] = getattr(position_data, 'unclaimed_fees_usd', None)
+                hedge_info['unclaimed_rewards_aero'] = getattr(position_data, 'unclaimed_rewards_aero', None)
+
             position_dict['current_value_usdc'] = blockchain_value + net_hedge_value
             position_dict['current_total_value'] = blockchain_value + net_hedge_value
             position_dict['pool_name'] = getattr(position_data, 'pool_name', 'Unknown/Unknown')
             position_dict['in_range'] = getattr(position_data, 'in_range', False)
 
-            # Add unclaimed fees and rewards from blockchain
+            # Add unclaimed fees and rewards from blockchain (also at top level)
             position_dict['unclaimed_fees_usd'] = getattr(position_data, 'unclaimed_fees_usd', None)
             position_dict['unclaimed_rewards_aero'] = getattr(position_data, 'unclaimed_rewards_aero', None)
 
