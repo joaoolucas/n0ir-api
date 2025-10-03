@@ -83,8 +83,13 @@ class VaultStrategyService:
                 raise ValueError(f"Insufficient USDC balance. Please deposit USDC to your CDP wallet first.")
 
             if balance < MIN_POSITION_AMOUNT:
-                logger.warning(f"User {user_id} balance ${balance:.2f} below minimum ${MIN_POSITION_AMOUNT}")
-                raise ValueError(f"Minimum position size is {MIN_POSITION_AMOUNT} USDC. Current balance: {balance:.2f} USDC")
+                logger.warning(f"User {user_id} balance ${balance:.2f} below minimum ${MIN_POSITION_AMOUNT} - returning no_action strategy")
+                return await self._generate_no_action_strategy(
+                    user_id=user_id,
+                    balance=balance,
+                    pool_address=pool_address,
+                    reason=f"Insufficient balance for new position. Minimum: {MIN_POSITION_AMOUNT} USDC, Current: {balance:.2f} USDC"
+                )
 
             # No alerts and sufficient balance - determine strategy type
             DUAL_POSITION_THRESHOLD = Decimal("2000")
@@ -419,6 +424,73 @@ class VaultStrategyService:
             simulation=simulation,
             aerodrome_pool=aerodrome_pool,
             monitoring=monitoring_info
+        )
+
+    async def _generate_no_action_strategy(
+        self,
+        user_id: str,
+        balance: float,
+        pool_address: str,
+        reason: str
+    ) -> MoonwellStrategyResponse:
+        """
+        Generate a no_action strategy response when balance is insufficient.
+        Returns minimal data with action='no_action'.
+        """
+        logger.info(f"Generating no_action strategy for {user_id}: {reason}")
+
+        # Get basic pool data for context
+        try:
+            pool_data = await pools_service.get_pool(pool_address)
+            pool_symbol = pool_data.get('symbol', 'WETH-USDC')
+        except:
+            pool_symbol = 'WETH-USDC'
+
+        # Create minimal contract params (won't be used)
+        deadline = int(datetime.utcnow().timestamp()) + 900
+        contract_params = ContractParameters(
+            pool=pool_address,
+            range_percentage=10,
+            deadline=deadline,
+            usdc_amount=Decimal(str(balance)),
+            slippage_bps=50,
+            hedge_ratio=9500,
+            collateral_ratio_bps=6500
+        )
+
+        # Create minimal simulation (won't be used)
+        simulation = VaultHedgeSimulation(
+            hedge_asset="WETH",
+            collateral_amount=Decimal(0),
+            borrow_amount_usd=Decimal(0),
+            borrow_amount_asset=Decimal(0),
+            total_lp_amount=Decimal(0),
+            asset_exposure_usd=Decimal(0),
+            net_delta_usd=Decimal(0),
+            expected_health_factor=Decimal(0),
+            liquidation_price=Decimal(0),
+            delta_neutral_score=Decimal(0)
+        )
+
+        # Create minimal aerodrome pool info
+        aerodrome_pool = AerodromeLP(
+            pool=pool_symbol,
+            pool_address=pool_address,
+            amount_usdc=Decimal(0),
+            range_percentage=10,
+            effective_apr=None
+        )
+
+        return MoonwellStrategyResponse(
+            user_id=user_id,
+            strategy_type="delta_neutral",
+            timestamp=datetime.utcnow().isoformat(),
+            action="no_action",  # Insufficient balance for action
+            capital=CapitalInfo(total_usd=Decimal(str(balance))),
+            contract_params=contract_params,
+            simulation=simulation,
+            aerodrome_pool=aerodrome_pool,
+            monitoring=None
         )
 
     async def _generate_dual_position_strategy(
