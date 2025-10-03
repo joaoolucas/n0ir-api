@@ -366,10 +366,12 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
 
 @router.get("", response_model=List[UserListResponse])
 async def list_users(
+    _: bool = Depends(verify_bearer_token),
     db: AsyncSession = Depends(get_db)
 ):
     """
     List all users with comprehensive metrics.
+    Admin-only endpoint.
 
     Returns:
     - User details with CDP wallet address
