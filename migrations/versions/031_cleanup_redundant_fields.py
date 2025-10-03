@@ -17,7 +17,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 revision = '031_cleanup_redundant_fields'
-down_revision = '030_consolidate_transactions'
+down_revision = '031_add_confirmed_at_column'
 branch_labels = None
 depends_on = None
 

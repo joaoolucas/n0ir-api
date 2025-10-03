@@ -9,6 +9,12 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
+# revision identifiers, used by Alembic.
+revision = '030'
+down_revision = '029_consolidate_transactions'
+branch_labels = None
+depends_on = None
+
 def upgrade():
     """Add tables for blockchain data synchronization."""
     
