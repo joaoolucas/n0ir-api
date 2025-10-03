@@ -22,39 +22,44 @@ from app.schemas.users import (
 from app.database.models import User
 from app.core.auth import get_authenticated_wallet, create_session_token
 from app.core.signature_verification import verify_wallet_signature
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/users")
 
 
+class LoginRequest(BaseModel):
+    wallet: str
+    signature: str
+    message: str
+
+
 @router.post("/auth/login")
-async def login(wallet: str, signature: str, message: str):
+async def login(request: LoginRequest):
     """
     Authenticate user with wallet signature and receive session token.
 
     Args:
-        wallet: Ethereum wallet address
-        signature: Signature from wallet
-        message: Original message that was signed
+        request: Login request with wallet, signature, and message
 
     Returns:
         session_token: JWT token valid for 24 hours
         wallet: Authenticated wallet address
     """
     # Verify wallet signature
-    if not verify_wallet_signature(wallet, signature, message):
+    if not verify_wallet_signature(request.wallet, request.signature, request.message):
         raise HTTPException(
             status_code=401,
             detail="Invalid signature"
         )
 
     # Create session token
-    session_token = create_session_token(wallet)
+    session_token = create_session_token(request.wallet)
 
-    logger.info(f"User {wallet[:10]}... authenticated successfully")
+    logger.info(f"User {request.wallet[:10]}... authenticated successfully")
 
     return {
         "session_token": session_token,
-        "wallet": wallet.lower()
+        "wallet": request.wallet.lower()
     }
 
 
