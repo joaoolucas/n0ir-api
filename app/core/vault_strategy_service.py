@@ -89,7 +89,8 @@ class VaultStrategyService:
                     user_id=user_id,
                     balance=balance,
                     pool_address=pool_address,
-                    reason=f"Insufficient balance for new position. Minimum: {MIN_POSITION_AMOUNT} USDC, Current: {balance:.2f} USDC"
+                    reason=f"Insufficient balance for new position. Minimum: {MIN_POSITION_AMOUNT} USDC, Current: {balance:.2f} USDC",
+                    db=db
                 )
 
             # No alerts and sufficient balance - determine strategy type
@@ -432,7 +433,8 @@ class VaultStrategyService:
         user_id: str,
         balance: float,
         pool_address: str,
-        reason: str
+        reason: str,
+        db: AsyncSession
     ) -> MoonwellStrategyResponse:
         """
         Generate a no_action strategy response when balance is insufficient.
@@ -442,13 +444,9 @@ class VaultStrategyService:
 
         # Get positions for performance calculation
         from app.services.user_service import UserService
-        from sqlalchemy import select
-        from app.database.models import User
-        from app.api.v1.endpoints.info import enrich_position_with_pool_data
 
-        # Import db from calling context - we need to get it
-        # For now, let's compute performance inline
-        user_positions = await positions_service.get_user_positions(user_id)
+        user_service = UserService(db)
+        user_positions = await user_service.get_user_positions(user_id)
 
         # Calculate active positions value
         active_positions = [p for p in user_positions if p.status == 'ACTIVE']
