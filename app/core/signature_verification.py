@@ -18,6 +18,8 @@ def verify_wallet_signature(wallet: str, signature: str, message: str) -> bool:
         True if signature is valid and matches wallet, False otherwise
     """
     try:
+        logger.debug(f"Verifying signature - wallet: {wallet[:10]}..., sig length: {len(signature)}, message: {message[:50]}...")
+
         # Encode message for eth_sign
         message_hash = encode_defunct(text=message)
 
@@ -36,4 +38,5 @@ def verify_wallet_signature(wallet: str, signature: str, message: str) -> bool:
 
     except Exception as e:
         logger.error(f"Signature verification error: {e}")
+        logger.error(f"Signature length: {len(signature)}, first 50 chars: {signature[:50]}")
         return False
