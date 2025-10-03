@@ -140,7 +140,13 @@ class VaultStrategyService:
                     range_percentage=range_percentage
                 )
 
+                if not optimal_strategy or 'simulation' not in optimal_strategy:
+                    raise ValueError("Invalid optimal strategy returned from vault contract")
+
                 sim = optimal_strategy['simulation']
+
+                if not sim:
+                    raise ValueError("Simulation data is None")
 
                 # Calculate deadline (15 minutes from now)
                 deadline = int(datetime.utcnow().timestamp()) + 900
