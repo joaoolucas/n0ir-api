@@ -448,55 +448,38 @@ class VaultStrategyService:
         """
         logger.info(f"Generating no_action strategy for {user_id}: {reason}")
 
-        # Get positions for performance calculation
-        from app.services.user_service import UserService
+        # Get performance data from the performance endpoint
+        from app.api.v1.endpoints.info import get_performance
 
-        user_service = UserService(db)
-        user_positions = await user_service.get_user_positions(user_id)
+        try:
+            # Call the performance endpoint to get accurate APR and PnL data
+            performance_response = await get_performance(user_id=user_id, period=None, db=db)
 
-        # Calculate active positions value
-        active_positions = [p for p in user_positions if p.status == 'ACTIVE']
-        positions_value = Decimal(0)
-        total_apr = Decimal(0)
-        apr_count = 0
-
-        for position in active_positions:
-            if position.entry_amount_usdc:
-                positions_value += Decimal(str(position.entry_amount_usdc))
-            # Get APR if available
-            if hasattr(position, 'apr') and position.apr:
-                total_apr += Decimal(str(position.apr))
-                apr_count += 1
-
-        # Calculate average APR
-        avg_apr = (total_apr / apr_count) if apr_count > 0 else None
-
-        # Calculate PnL
-        closed_positions = [p for p in user_positions if p.status == 'CLOSED']
-        realized_pnl = sum(Decimal(str(p.realized_pnl_usdc)) for p in closed_positions if p.realized_pnl_usdc) or Decimal(0)
-
-        # Unrealized PnL (simplified - would need blockchain data for accuracy)
-        unrealized_pnl = Decimal(0)
-
-        total_pnl = realized_pnl + unrealized_pnl
-        total_balance = Decimal(str(balance)) + positions_value
-
-        # Calculate PnL percentages
-        total_invested = sum(Decimal(str(p.entry_amount_usdc)) for p in user_positions if p.entry_amount_usdc) or Decimal(1)
-        realized_pnl_pct = (realized_pnl / total_invested * 100) if total_invested > 0 else None
-        pnl_pct = (total_pnl / total_invested * 100) if total_invested > 0 else None
-
-        performance = PerformanceData(
-            apr=avg_apr,
-            wallet_balance=Decimal(str(balance)),
-            positions_value=positions_value,
-            total_balance=total_balance,
-            active_positions=len(active_positions),
-            realized_pnl_usdc=realized_pnl,
-            realized_pnl_pct=realized_pnl_pct,
-            pnl_usdc=total_pnl,
-            pnl_pct=pnl_pct
-        )
+            performance = PerformanceData(
+                apr=performance_response.apr,
+                wallet_balance=performance_response.wallet_balance,
+                positions_value=performance_response.positions_value,
+                total_balance=performance_response.total_balance,
+                active_positions=performance_response.active_positions,
+                realized_pnl_usdc=performance_response.realized_pnl_usdc,
+                realized_pnl_pct=performance_response.realized_pnl_pct,
+                pnl_usdc=performance_response.pnl_usdc,
+                pnl_pct=performance_response.pnl_pct
+            )
+        except Exception as e:
+            logger.error(f"Error fetching performance data for {user_id}: {e}")
+            # Fallback to basic data
+            performance = PerformanceData(
+                apr=None,
+                wallet_balance=Decimal(str(balance)),
+                positions_value=Decimal(0),
+                total_balance=Decimal(str(balance)),
+                active_positions=0,
+                realized_pnl_usdc=Decimal(0),
+                realized_pnl_pct=None,
+                pnl_usdc=Decimal(0),
+                pnl_pct=None
+            )
 
         return MoonwellStrategyResponse(
             user_id=user_id,
