@@ -22,7 +22,8 @@ from app.schemas.users import (
     TransactionType,
     TransactionStatus,
     PositionStatus,
-    TimePeriod
+    TimePeriod,
+    MoonwellStrategyResponse
 )
 
 # Enums for database compatibility
@@ -791,3 +792,84 @@ async def get_performance(
         pnl_usdc=total_pnl,  # Total PnL (realized + fees + rewards)
         pnl_pct=total_pnl_percentage  # Total PnL percentage
     )
+
+
+@router.post("/{user_id}/strategy", response_model=MoonwellStrategyResponse)
+async def get_vault_strategy(
+    user_id: str,
+    db: AsyncSession = Depends(get_db)
+) -> MoonwellStrategyResponse:
+    """
+    Generate vault-based delta-neutral strategy for a user.
+
+    This endpoint generates a strategy and returns all parameters needed
+    to call the vault contract's createPosition function:
+
+    Returns:
+    - contract_params: Ready-to-use parameters for vault.createPosition()
+      - pool: Aerodrome pool address
+      - rangePercentage: Position range (e.g., 10 = ±5%)
+      - deadline: Transaction deadline timestamp
+      - usdcAmount: USDC amount to deploy
+      - slippageBps: Slippage tolerance (default 50 = 0.5%)
+      - hedgeRatio: Hedge ratio in bps (e.g., 9200 = 92%)
+      - collateralRatioBps: Collateral ratio in bps (e.g., 6500 = 65%)
+
+    - simulation: Expected results from the strategy
+      - Health factor, liquidation price, delta-neutral score
+      - Collateral, borrow, and LP amounts
+
+    - aerodrome_pool: Pool details and expected APR
+    - monitoring: Range break alerts if applicable
+    """
+    from app.core.vault_strategy_service import vault_strategy_service
+
+    try:
+        # Default to WETH/USDC pool
+        pool_address = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59"  # WETH/USDC pool
+
+        strategy = await vault_strategy_service.generate_strategy(
+            user_id=user_id,
+            db=db,
+            pool_address=pool_address
+        )
+
+        # Log strategy details
+        logger.info(f"Vault strategy for user {user_id}:")
+        logger.info(f"  Action: {strategy.action}")
+        logger.info(f"  Total capital: ${strategy.capital.total_usd}")
+
+        if strategy.action == "no_action":
+            # Log performance data for no_action
+            if strategy.performance:
+                logger.info(f"  Wallet balance: ${strategy.performance.wallet_balance}")
+                logger.info(f"  Positions value: ${strategy.performance.positions_value}")
+                logger.info(f"  Total balance: ${strategy.performance.total_balance}")
+                logger.info(f"  Active positions: {strategy.performance.active_positions}")
+                logger.info(f"  Realized PnL: ${strategy.performance.realized_pnl_usdc}")
+                logger.info(f"  Total PnL: ${strategy.performance.pnl_usdc}")
+        elif strategy.simulation:
+            # Log simulation data for actionable strategies
+            logger.info(f"  Collateral: ${strategy.simulation.collateral_amount}")
+            logger.info(f"  Borrow: ${strategy.simulation.borrow_amount_usd}")
+            logger.info(f"  Delta-neutral score: {strategy.simulation.delta_neutral_score:.4f}")
+            logger.info(f"  Health factor: ${strategy.simulation.expected_health_factor:.2f}")
+            if strategy.aerodrome_pool:
+                logger.info(f"  Aerodrome LP: ${strategy.aerodrome_pool.amount_usdc}")
+
+        if strategy.monitoring and strategy.monitoring.alerts:
+            logger.warning(f"  ⚠️ {len(strategy.monitoring.alerts)} position(s) need attention")
+            for alert in strategy.monitoring.alerts:
+                logger.warning(f"    Position {alert.position_id}: {alert.reason}")
+
+        return strategy
+
+    except ValueError as e:
+        # User not found or no CDP wallet
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error generating strategy for user {user_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate strategy: {str(e)}"
+        )
