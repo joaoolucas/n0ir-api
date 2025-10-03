@@ -366,13 +366,17 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
 
 @router.get("", response_model=List[UserListResponse])
 async def list_users(
+    request: Request,
     user_id: Optional[str] = Query(None, description="Filter by specific user_id (wallet address)"),
-    _: bool = Depends(verify_bearer_token),
+    authenticated_wallet: str = Depends(get_authenticated_wallet),
     db: AsyncSession = Depends(get_db)
 ):
     """
     List all users or a specific user with comprehensive metrics.
-    Admin-only endpoint.
+
+    Supports both JWT session tokens and API_BEARER_TOKEN.
+    - JWT users can only see their own data
+    - API_BEARER_TOKEN can see all users or filter by user_id
 
     Args:
         user_id: Optional filter to get a specific user by wallet address
@@ -386,11 +390,17 @@ async def list_users(
     """
     service = UserService(db)
 
-    # If user_id is provided, filter for specific user
-    if user_id:
+    # If JWT auth (authenticated_wallet is not empty), restrict to that user only
+    if authenticated_wallet:
+        # JWT session token - can only see their own data
+        users = await service.list_all_users()
+        users = [u for u in users if u.user_id.lower() == authenticated_wallet.lower()]
+    elif user_id:
+        # API Bearer token with user_id filter
         users = await service.list_all_users()
         users = [u for u in users if u.user_id.lower() == user_id.lower()]
     else:
+        # API Bearer token without filter - return all users
         users = await service.list_all_users()
 
     # Enrich with balance data
