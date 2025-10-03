@@ -2,7 +2,7 @@
 Info API endpoints for querying user data and performance.
 Read-only endpoints for retrieving user information, transactions, positions, and metrics.
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, List
 from decimal import Decimal
@@ -492,6 +492,7 @@ async def list_users(
 @router.get("/{user_id}/transactions", response_model=TransactionListResponse)
 async def get_transactions(
     user_id: str,
+    request: Request,
     authenticated_wallet: str = Depends(get_authenticated_wallet),
     limit: int = 100,
     offset: int = 0,
@@ -614,6 +615,7 @@ async def get_transactions(
 @router.get("/{user_id}/positions", response_model=PositionListResponse)
 async def get_positions(
     user_id: str,
+    request: Request,
     authenticated_wallet: str = Depends(get_authenticated_wallet),
     status: Optional[DBPositionStatus] = None,
     db: AsyncSession = Depends(get_db)
@@ -664,6 +666,7 @@ async def get_positions(
 @router.get("/{user_id}/performance", response_model=PerformanceResponse)
 async def get_performance(
     user_id: str,
+    request: Request,
     authenticated_wallet: str = Depends(get_authenticated_wallet),
     period: Optional[TimePeriod] = Query(None, description="Time period for performance calculation (24h, 7d, 30d, all)"),
     db: AsyncSession = Depends(get_db)

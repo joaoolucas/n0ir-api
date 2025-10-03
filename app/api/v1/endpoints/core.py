@@ -5,7 +5,7 @@ Handles user creation, activation, and strategy generation.
 from typing import Optional
 from decimal import Decimal
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import attributes
 from loguru import logger
@@ -66,6 +66,7 @@ async def login(request: LoginRequest):
 @router.post("/{user_id}/create", response_model=CreateResponse)
 async def create_user(
     user_id: str,
+    request: Request,
     authenticated_wallet: str = Depends(get_authenticated_wallet),
     db: AsyncSession = Depends(get_db)
 ) -> CreateResponse:
@@ -157,6 +158,7 @@ async def create_user(
 @router.post("/{user_id}/activate", response_model=ActivateResponse)
 async def activate_agent(
     user_id: str,
+    request: Request,
     authenticated_wallet: str = Depends(get_authenticated_wallet),
     db: AsyncSession = Depends(get_db)
 ) -> ActivateResponse:
@@ -242,6 +244,7 @@ async def activate_agent(
 @router.post("/{user_id}/deactivate", response_model=DeactivateResponse)
 async def deactivate_agent(
     user_id: str,
+    request: Request,
     authenticated_wallet: str = Depends(get_authenticated_wallet),
     db: AsyncSession = Depends(get_db)
 ) -> DeactivateResponse:

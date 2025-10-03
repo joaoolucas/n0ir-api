@@ -24,7 +24,8 @@ api_router.include_router(
     tags=["Core"]
 )
 
-# Include Info endpoints for querying data (read-only, no auth required)
+# Include Info endpoints for querying data
+# Auth handled per-endpoint (JWT session tokens or Bearer token)
 api_router.include_router(
     info.router,
     tags=["Info"]
