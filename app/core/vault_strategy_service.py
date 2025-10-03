@@ -23,7 +23,8 @@ from app.schemas.users import (
     AerodromeLP,
     MonitoringInfo,
     PositionAlert,
-    RecommendedPosition
+    RecommendedPosition,
+    PerformanceData
 )
 
 
@@ -435,50 +436,62 @@ class VaultStrategyService:
     ) -> MoonwellStrategyResponse:
         """
         Generate a no_action strategy response when balance is insufficient.
-        Returns minimal data with action='no_action'.
+        Returns performance data instead of contract params.
         """
         logger.info(f"Generating no_action strategy for {user_id}: {reason}")
 
-        # Get basic pool data for context
-        try:
-            pool_data = await pools_service.get_pool(pool_address)
-            pool_symbol = pool_data.get('symbol', 'WETH-USDC')
-        except:
-            pool_symbol = 'WETH-USDC'
+        # Get positions for performance calculation
+        from app.services.user_service import UserService
+        from sqlalchemy import select
+        from app.database.models import User
+        from app.api.v1.endpoints.info import enrich_position_with_pool_data
 
-        # Create minimal contract params (won't be used)
-        deadline = int(datetime.utcnow().timestamp()) + 900
-        contract_params = ContractParameters(
-            pool=pool_address,
-            range_percentage=10,
-            deadline=deadline,
-            usdc_amount=Decimal(str(balance)),
-            slippage_bps=50,
-            hedge_ratio=9500,
-            collateral_ratio_bps=6500
-        )
+        # Import db from calling context - we need to get it
+        # For now, let's compute performance inline
+        user_positions = await positions_service.get_user_positions(user_id)
 
-        # Create minimal simulation (won't be used)
-        simulation = VaultHedgeSimulation(
-            hedge_asset="WETH",
-            collateral_amount=Decimal(0),
-            borrow_amount_usd=Decimal(0),
-            borrow_amount_asset=Decimal(0),
-            total_lp_amount=Decimal(0),
-            asset_exposure_usd=Decimal(0),
-            net_delta_usd=Decimal(0),
-            expected_health_factor=Decimal(0),
-            liquidation_price=Decimal(0),
-            delta_neutral_score=Decimal(0)
-        )
+        # Calculate active positions value
+        active_positions = [p for p in user_positions if p.status == 'ACTIVE']
+        positions_value = Decimal(0)
+        total_apr = Decimal(0)
+        apr_count = 0
 
-        # Create minimal aerodrome pool info
-        aerodrome_pool = AerodromeLP(
-            pool=pool_symbol,
-            pool_address=pool_address,
-            amount_usdc=Decimal(0),
-            range_percentage=10,
-            effective_apr=None
+        for position in active_positions:
+            if position.entry_amount_usdc:
+                positions_value += Decimal(str(position.entry_amount_usdc))
+            # Get APR if available
+            if hasattr(position, 'apr') and position.apr:
+                total_apr += Decimal(str(position.apr))
+                apr_count += 1
+
+        # Calculate average APR
+        avg_apr = (total_apr / apr_count) if apr_count > 0 else None
+
+        # Calculate PnL
+        closed_positions = [p for p in user_positions if p.status == 'CLOSED']
+        realized_pnl = sum(Decimal(str(p.realized_pnl_usdc)) for p in closed_positions if p.realized_pnl_usdc) or Decimal(0)
+
+        # Unrealized PnL (simplified - would need blockchain data for accuracy)
+        unrealized_pnl = Decimal(0)
+
+        total_pnl = realized_pnl + unrealized_pnl
+        total_balance = Decimal(str(balance)) + positions_value
+
+        # Calculate PnL percentages
+        total_invested = sum(Decimal(str(p.entry_amount_usdc)) for p in user_positions if p.entry_amount_usdc) or Decimal(1)
+        realized_pnl_pct = (realized_pnl / total_invested * 100) if total_invested > 0 else None
+        pnl_pct = (total_pnl / total_invested * 100) if total_invested > 0 else None
+
+        performance = PerformanceData(
+            apr=avg_apr,
+            wallet_balance=Decimal(str(balance)),
+            positions_value=positions_value,
+            total_balance=total_balance,
+            active_positions=len(active_positions),
+            realized_pnl_usdc=realized_pnl,
+            realized_pnl_pct=realized_pnl_pct,
+            pnl_usdc=total_pnl,
+            pnl_pct=pnl_pct
         )
 
         return MoonwellStrategyResponse(
@@ -487,10 +500,11 @@ class VaultStrategyService:
             timestamp=datetime.utcnow().isoformat(),
             action="no_action",  # Insufficient balance for action
             capital=CapitalInfo(total_usd=Decimal(str(balance))),
-            contract_params=contract_params,
-            simulation=simulation,
-            aerodrome_pool=aerodrome_pool,
-            monitoring=None
+            contract_params=None,
+            simulation=None,
+            aerodrome_pool=None,
+            monitoring=None,
+            performance=performance
         )
 
     async def _generate_dual_position_strategy(

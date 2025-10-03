@@ -145,19 +145,33 @@ class MonitoringInfo(BaseModel):
     alerts: List[PositionAlert] = Field(default_factory=list, description="List of position alerts")
 
 
+class PerformanceData(BaseModel):
+    """Performance metrics for no_action response"""
+    apr: Optional[Decimal] = Field(None, description="Average APR across active positions")
+    wallet_balance: Decimal = Field(..., description="Current wallet balance in USDC")
+    positions_value: Decimal = Field(..., description="Total value of active positions in USDC")
+    total_balance: Decimal = Field(..., description="Total portfolio value (wallet + positions)")
+    active_positions: int = Field(..., description="Number of active positions")
+    realized_pnl_usdc: Decimal = Field(..., description="Realized PnL in USDC")
+    realized_pnl_pct: Optional[Decimal] = Field(None, description="Realized PnL percentage")
+    pnl_usdc: Decimal = Field(..., description="Total PnL (realized + unrealized) in USDC")
+    pnl_pct: Optional[Decimal] = Field(None, description="Total PnL percentage")
+
+
 class MoonwellStrategyResponse(BaseModel):
     """Delta-neutral strategy response with contract parameters"""
     user_id: str = Field(..., description="User ID")
     strategy_type: str = Field(default="delta_neutral", description="Strategy type")
     timestamp: str = Field(..., description="ISO timestamp")
-    action: str = Field(..., description="Action: 'open', 'close', 'open_dual'")
+    action: str = Field(..., description="Action: 'open', 'close', 'open_dual', 'no_action'")
 
     capital: CapitalInfo = Field(..., description="Capital information")
-    contract_params: ContractParameters = Field(..., description="Parameters for calling vault contract")
-    simulation: VaultHedgeSimulation = Field(..., description="Expected strategy simulation results")
-    aerodrome_pool: AerodromeLP = Field(..., description="Aerodrome LP pool details")
+    contract_params: Optional[ContractParameters] = Field(None, description="Parameters for calling vault contract (null when action='no_action')")
+    simulation: Optional[VaultHedgeSimulation] = Field(None, description="Expected strategy simulation results (null when action='no_action')")
+    aerodrome_pool: Optional[AerodromeLP] = Field(None, description="Aerodrome LP pool details (null when action='no_action')")
     monitoring: Optional[MonitoringInfo] = Field(None, description="Monitoring information")
     recommended_positions: Optional[List[RecommendedPosition]] = Field(None, description="Recommended position allocations for dual strategy (when action='open_dual')")
+    performance: Optional[PerformanceData] = Field(None, description="Performance metrics (when action='no_action')")
 
 
 
