@@ -12,6 +12,7 @@ from app.database.session import get_db
 from app.services.user_service import UserService
 from app.core.pools_service import pools_service
 from app.core.positions_service import positions_service
+from app.core.auth import get_authenticated_wallet, verify_bearer_token
 from app.schemas.users import (
     UserListResponse,
     TransactionListResponse,
@@ -489,6 +490,7 @@ async def list_users(
 @router.get("/{user_id}/transactions", response_model=TransactionListResponse)
 async def get_transactions(
     user_id: str,
+    authenticated_wallet: str = Depends(get_authenticated_wallet),
     limit: int = 100,
     offset: int = 0,
     transaction_type: Optional[DBTransactionType] = None,
@@ -508,6 +510,13 @@ async def get_transactions(
     Returns:
         List of transactions with pool names and details
     """
+    # Verify user can only access their own transactions
+    if authenticated_wallet.lower() != user_id.lower():
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot access another user's transactions"
+        )
+
     # Sync blockchain data to get latest transactions
     service = UserService(db)
     sync_result = await service.sync_blockchain_data(user_id)
@@ -603,6 +612,7 @@ async def get_transactions(
 @router.get("/{user_id}/positions", response_model=PositionListResponse)
 async def get_positions(
     user_id: str,
+    authenticated_wallet: str = Depends(get_authenticated_wallet),
     status: Optional[DBPositionStatus] = None,
     db: AsyncSession = Depends(get_db)
 ):
@@ -615,6 +625,13 @@ async def get_positions(
     - Range status
     - Fees and rewards earned
     """
+    # Verify user can only access their own positions
+    if authenticated_wallet.lower() != user_id.lower():
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot access another user's positions"
+        )
+
     service = UserService(db)
 
     # Sync blockchain data to get latest positions
@@ -645,6 +662,7 @@ async def get_positions(
 @router.get("/{user_id}/performance", response_model=PerformanceResponse)
 async def get_performance(
     user_id: str,
+    authenticated_wallet: str = Depends(get_authenticated_wallet),
     period: Optional[TimePeriod] = Query(None, description="Time period for performance calculation (24h, 7d, 30d, all)"),
     db: AsyncSession = Depends(get_db)
 ):
@@ -658,6 +676,13 @@ async def get_performance(
     - Realized and total PnL metrics
     - Active position count
     """
+    # Verify user can only access their own performance
+    if authenticated_wallet.lower() != user_id.lower():
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot access another user's performance"
+        )
+
     from sqlalchemy import select
     from app.database.models import User
     from app.core.blockchain_service import blockchain_service
@@ -797,6 +822,7 @@ async def get_performance(
 @router.post("/{user_id}/strategy", response_model=MoonwellStrategyResponse)
 async def get_vault_strategy(
     user_id: str,
+    _: bool = Depends(verify_bearer_token),
     db: AsyncSession = Depends(get_db)
 ) -> MoonwellStrategyResponse:
     """
