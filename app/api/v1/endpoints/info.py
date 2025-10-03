@@ -366,12 +366,16 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
 
 @router.get("", response_model=List[UserListResponse])
 async def list_users(
+    user_id: Optional[str] = Query(None, description="Filter by specific user_id (wallet address)"),
     _: bool = Depends(verify_bearer_token),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    List all users with comprehensive metrics.
+    List all users or a specific user with comprehensive metrics.
     Admin-only endpoint.
+
+    Args:
+        user_id: Optional filter to get a specific user by wallet address
 
     Returns:
     - User details with CDP wallet address
@@ -381,7 +385,13 @@ async def list_users(
     - Agent status
     """
     service = UserService(db)
-    users = await service.list_all_users()
+
+    # If user_id is provided, filter for specific user
+    if user_id:
+        users = await service.list_all_users()
+        users = [u for u in users if u.user_id.lower() == user_id.lower()]
+    else:
+        users = await service.list_all_users()
 
     # Enrich with balance data
     from app.core.blockchain_service import blockchain_service
