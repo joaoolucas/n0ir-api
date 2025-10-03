@@ -3,9 +3,9 @@
 
 echo "🚀 Starting n0ir API..."
 
-# Run Alembic migrations to create/update tables
-echo "📦 Running Alembic migrations..."
-alembic upgrade head || echo "⚠️ Alembic migration failed"
+# Create tables from SQLAlchemy models
+echo "📦 Creating database tables..."
+python create_tables.py || echo "⚠️ Table creation failed"
 
 # Start the application
 echo "✅ Starting server..."
