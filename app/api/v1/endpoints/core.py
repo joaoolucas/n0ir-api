@@ -20,13 +20,48 @@ from app.schemas.users import (
     MoonwellStrategyResponse
 )
 from app.database.models import User
+from app.core.auth import get_authenticated_wallet, create_session_token
+from app.core.signature_verification import verify_wallet_signature
 
 router = APIRouter(prefix="/users")
+
+
+@router.post("/auth/login")
+async def login(wallet: str, signature: str, message: str):
+    """
+    Authenticate user with wallet signature and receive session token.
+
+    Args:
+        wallet: Ethereum wallet address
+        signature: Signature from wallet
+        message: Original message that was signed
+
+    Returns:
+        session_token: JWT token valid for 24 hours
+        wallet: Authenticated wallet address
+    """
+    # Verify wallet signature
+    if not verify_wallet_signature(wallet, signature, message):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid signature"
+        )
+
+    # Create session token
+    session_token = create_session_token(wallet)
+
+    logger.info(f"User {wallet[:10]}... authenticated successfully")
+
+    return {
+        "session_token": session_token,
+        "wallet": wallet.lower()
+    }
 
 
 @router.post("/{user_id}/create", response_model=CreateResponse)
 async def create_user(
     user_id: str,
+    authenticated_wallet: str = Depends(get_authenticated_wallet),
     db: AsyncSession = Depends(get_db)
 ) -> CreateResponse:
     """
@@ -40,6 +75,13 @@ async def create_user(
     Does NOT activate the agent.
     """
     from app.services.agent_management_service import get_agent_service
+
+    # Verify user can only create their own account
+    if authenticated_wallet.lower() != user_id.lower():
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot create account for another wallet"
+        )
 
     try:
         # Check if user exists
@@ -110,6 +152,7 @@ async def create_user(
 @router.post("/{user_id}/activate", response_model=ActivateResponse)
 async def activate_agent(
     user_id: str,
+    authenticated_wallet: str = Depends(get_authenticated_wallet),
     db: AsyncSession = Depends(get_db)
 ) -> ActivateResponse:
     """
@@ -122,6 +165,13 @@ async def activate_agent(
     Requires user to exist with CDP wallet (use /create first).
     """
     from app.services.agent_management_service import get_agent_service
+
+    # Verify user can only activate their own agent
+    if authenticated_wallet.lower() != user_id.lower():
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot activate agent for another wallet"
+        )
 
     try:
         # Check user exists with wallet
@@ -187,6 +237,7 @@ async def activate_agent(
 @router.post("/{user_id}/deactivate", response_model=DeactivateResponse)
 async def deactivate_agent(
     user_id: str,
+    authenticated_wallet: str = Depends(get_authenticated_wallet),
     db: AsyncSession = Depends(get_db)
 ) -> DeactivateResponse:
     """
@@ -197,6 +248,12 @@ async def deactivate_agent(
     2. Close all open positions
     3. Withdraw all funds to user's wallet
     """
+    # Verify user can only deactivate their own agent
+    if authenticated_wallet.lower() != user_id.lower():
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot deactivate agent for another wallet"
+        )
     from app.services.agent_management_service import get_agent_service
     from sqlalchemy import select
 

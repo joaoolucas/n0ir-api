@@ -137,6 +137,12 @@ class Settings(BaseSettings):
         env="API_BEARER_TOKEN"
     )
 
+    # JWT Secret for session tokens
+    jwt_secret: str = Field(
+        default="",
+        env="JWT_SECRET"
+    )
+
     # Sentry Configuration
     sentry_dsn: Optional[str] = Field(
         default=None,

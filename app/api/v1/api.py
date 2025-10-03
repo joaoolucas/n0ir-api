@@ -18,15 +18,14 @@ api_router.include_router(
 )
 
 # Include Core endpoints for essential operations
+# Auth handled per-endpoint (JWT session tokens)
 api_router.include_router(
     core.router,
-    tags=["Core"],
-    dependencies=[Depends(verify_bearer_token)]
+    tags=["Core"]
 )
 
-# Include Info endpoints for querying data
+# Include Info endpoints for querying data (read-only, no auth required)
 api_router.include_router(
     info.router,
-    tags=["Info"],
-    dependencies=[Depends(verify_bearer_token)]
+    tags=["Info"]
 )

@@ -18,3 +18,5 @@ tenacity>=8.2.0
 openai>=1.0.0
 avantis-trader-sdk==0.8.4
 sentry-sdk[fastapi]>=2.0.0
+pyjwt==2.8.0
+eth-account==0.11.0
