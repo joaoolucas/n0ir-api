@@ -374,14 +374,66 @@ class WalletTransactionService:
         
         return None
     
-    async def _fetch_rpc_logs(self, tx_hash: str) -> List[Dict]:
+    async def _batch_fetch_rpc_logs(self, tx_hashes: List[str]) -> Dict[str, List[Dict]]:
+        """Batch fetch transaction logs from RPC for multiple transactions in parallel."""
+        from web3 import Web3
+        import asyncio
+
+        if not tx_hashes:
+            return {}
+
+        def _sync_fetch(tx_hash: str):
+            try:
+                w3 = Web3(Web3.HTTPProvider(settings.rpc_url))
+                receipt = w3.eth.get_transaction_receipt(tx_hash)
+
+                # Convert logs to dict format
+                logs = []
+                for log in receipt.logs:
+                    logs.append({
+                        "address": log.address.lower(),
+                        "topics": [topic.hex() if hasattr(topic, 'hex') else str(topic) for topic in log.topics],
+                        "data": log.data.hex() if hasattr(log.data, 'hex') else log.data
+                    })
+                return tx_hash, logs
+            except Exception as e:
+                logger.error(f"Failed to fetch RPC logs for {tx_hash[:10]}: {e}")
+                return tx_hash, []
+
+        logger.info(f"⚡ Batch fetching RPC logs for {len(tx_hashes)} transactions...")
+        start_time = time.time()
+
+        # Run all RPC calls in parallel using thread pool
+        results = await asyncio.gather(*[
+            asyncio.to_thread(_sync_fetch, tx_hash) for tx_hash in tx_hashes
+        ])
+
+        # Convert results to dict
+        logs_cache = {tx_hash: logs for tx_hash, logs in results}
+
+        elapsed = time.time() - start_time
+        logger.info(f"⚡ Batch fetched {len(tx_hashes)} RPC receipts in {elapsed:.2f}s ({elapsed/len(tx_hashes):.2f}s avg)")
+
+        return logs_cache
+
+    async def _fetch_rpc_logs(self, tx_hash: str, logs_cache: Optional[Dict[str, List[Dict]]] = None) -> List[Dict]:
         """Fetch transaction logs directly from RPC when CDP data is incomplete."""
+        # Check cache first if provided
+        if logs_cache and tx_hash in logs_cache:
+            logger.debug(f"Using cached RPC logs for {tx_hash[:10]}...")
+            return logs_cache[tx_hash]
+
         try:
             from web3 import Web3
-            w3 = Web3(Web3.HTTPProvider(settings.rpc_url))
+            import asyncio
+
+            def _sync_fetch():
+                w3 = Web3(Web3.HTTPProvider(settings.rpc_url))
+                return w3.eth.get_transaction_receipt(tx_hash)
 
             logger.info(f"Fetching RPC logs for tx {tx_hash[:10]}...")
-            receipt = w3.eth.get_transaction_receipt(tx_hash)
+            # Run sync web3 call in thread pool to avoid blocking event loop
+            receipt = await asyncio.to_thread(_sync_fetch)
 
             # Convert logs to dict format similar to CDP traces
             logs = []
@@ -547,7 +599,8 @@ class WalletTransactionService:
         traces: List[Dict],
         cdp_wallet: str,
         owner_wallet: str = None,
-        tx_hash: str = None
+        tx_hash: str = None,
+        logs_cache: Optional[Dict[str, List[Dict]]] = None
     ) -> Optional[Dict[str, Any]]:
         """Analyze traces to detect PositionCreated or PositionClosed events from LiquidityManager.
 
@@ -710,8 +763,9 @@ class WalletTransactionService:
 
         # If not found in CDP logs and we have a tx_hash, check RPC logs as fallback
         if not position_event and tx_hash:
-            logger.info(f"No position event in CDP data for {tx_hash[:10]}..., fetching from RPC")
-            rpc_logs = await self._fetch_rpc_logs(tx_hash)
+            if not logs_cache:
+                logger.info(f"No position event in CDP data for {tx_hash[:10]}..., fetching from RPC")
+            rpc_logs = await self._fetch_rpc_logs(tx_hash, logs_cache)
 
             rpc_position_created = None
             rpc_position_closed = None
@@ -854,7 +908,8 @@ class WalletTransactionService:
         self,
         tx_data: Dict,
         owner_wallet: str,
-        cdp_wallet: str
+        cdp_wallet: str,
+        logs_cache: Optional[Dict[str, List[Dict]]] = None
     ) -> Tuple[TransactionType, Dict[str, Any]]:
         # Log STAKING transaction structure for debugging
         if tx_data.get("hash") and "c033aabc" in tx_data.get("hash", ""):
@@ -904,7 +959,7 @@ class WalletTransactionService:
         # Check for position events first (highest priority)
         # Extract tx_hash from details for RPC fallback
         tx_hash = details.get("tx_hash")
-        position_event = await self._analyze_position_event(traces, cdp_wallet, owner_wallet, tx_hash)
+        position_event = await self._analyze_position_event(traces, cdp_wallet, owner_wallet, tx_hash, logs_cache)
 
         # Debug logging for transactions that might be position events but weren't detected
         if not position_event:
@@ -1110,15 +1165,20 @@ class WalletTransactionService:
             TransactionType.POSITION_CLOSED: [],
             TransactionType.UNKNOWN: []
         }
-        
+
         total_deposited = Decimal(0)
         total_withdrawn = Decimal(0)
-        
+
+        # Batch fetch RPC logs for all transactions to avoid sequential RPC calls
+        tx_hashes = [tx.get("hash") for tx in transactions if tx.get("hash")]
+        logs_cache = await self._batch_fetch_rpc_logs(tx_hashes) if tx_hashes else {}
+
         for tx in transactions:
             tx_type, details = await self._categorize_transaction(
                 tx,
                 user_id,
-                cdp_wallet_address
+                cdp_wallet_address,
+                logs_cache
             )
 
             if details:
