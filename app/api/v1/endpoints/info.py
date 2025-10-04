@@ -7,12 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, List
 from decimal import Decimal
 from loguru import logger
-import httpx
 
 from app.database.session import get_db
 from app.services.user_service import UserService
 from app.core.pools_service import pools_service
-from app.core.config import settings
+from app.core.positions_service import positions_service
 from app.core.auth import get_authenticated_wallet, verify_bearer_token
 from app.schemas.users import (
     UserListResponse,
@@ -37,40 +36,35 @@ router = APIRouter(prefix="/users")
 
 
 async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = None) -> dict:
-    """Enrich position with pool information, PNL, APR, and calculated values from blockchain using internal API endpoints."""
-    # Convert position to dict
+    """Enrich position with pool information, PNL, APR, and calculated values from blockchain."""
+    # Convert position to dict, excluding token addresses and liquidity
     position_dict = PositionResponse.model_validate(position).model_dump()
 
     # Get the net entry amount from the POSITION_CREATED transaction if db is provided
     net_entry_amount = position.entry_amount_usdc or Decimal(0)
     hedge_info = None
 
-    # Fetch live hedge info via internal API endpoint
+    # Fetch live hedge info from LiquidityManager contract
     live_hedge_data = None
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            # Call internal hedge endpoint
-            response = await client.get(
-                f"http://localhost:{settings.port}/api/v1/blockchain/hedge",
-                params={"token_id": position.nft_token_id}
-            )
-            if response.status_code == 200:
-                hedge_response = response.json()
-                if hedge_response.get('positions') and len(hedge_response['positions']) > 0:
-                    live_hedge = hedge_response['positions'][0]
-                    live_hedge_data = {
-                        'is_hedged': live_hedge.get('is_hedged'),
-                        'collateral': Decimal(str(live_hedge.get('collateral_usdc', 0))),
-                        'debt_asset': live_hedge.get('hedged_asset_symbol'),
-                        'debt_amount': Decimal(str(live_hedge.get('debt_amount', 0))),
-                        'debt_value_usd': Decimal(str(live_hedge.get('debt_usd', 0))),
-                        'hedged_asset': live_hedge.get('hedged_asset'),
-                        'collateral_supply_apy': Decimal(str(live_hedge.get('collateral_supply_apy', 0))),
-                        'hedged_asset_borrow_apy': Decimal(str(live_hedge.get('hedged_asset_borrow_apy', 0)))
-                    }
-                    logger.info(f"Position {position.nft_token_id} - Live hedge info from API: {live_hedge_data}")
+        from app.core.hedge_service import hedge_service
+        hedge_response = await hedge_service.get_hedge_position_by_token_id(position.nft_token_id)
+
+        if hedge_response.positions and len(hedge_response.positions) > 0:
+            live_hedge = hedge_response.positions[0]
+            live_hedge_data = {
+                'is_hedged': live_hedge.is_hedged,
+                'collateral': live_hedge.collateral_usdc,
+                'debt_asset': live_hedge.hedged_asset_symbol,
+                'debt_amount': live_hedge.debt_amount,
+                'debt_value_usd': live_hedge.debt_usd,
+                'hedged_asset': live_hedge.hedged_asset,
+                'collateral_supply_apy': live_hedge.collateral_supply_apy,
+                'hedged_asset_borrow_apy': live_hedge.hedged_asset_borrow_apy
+            }
+            logger.info(f"Position {position.nft_token_id} - Live hedge info: {live_hedge_data}")
     except Exception as e:
-        logger.warning(f"Could not fetch hedge info via API for position {position.nft_token_id}: {e}")
+        logger.warning(f"Could not fetch live hedge info for position {position.nft_token_id}: {e}")
 
     if db:
         from sqlalchemy import select, and_
@@ -199,38 +193,19 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
 
         return position_dict
 
-    # For active positions, fetch blockchain data via internal API
+    # For active positions, fetch blockchain data
     position_data = None
-    pool_data = None
-
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            # Fetch position data from blockchain endpoint
-            pos_response = await client.get(
-                f"http://localhost:{settings.port}/api/v1/blockchain/positions",
-                params={"position_id": position.nft_token_id}
-            )
-            if pos_response.status_code == 200:
-                position_data = pos_response.json().get('position')
-                logger.info(f"Position {position.nft_token_id} - Fetched from blockchain API")
-
-            # Fetch pool data if we have a pool address
-            if position.pool_address:
-                pool_response = await client.get(
-                    f"http://localhost:{settings.port}/api/v1/blockchain/pools/{position.pool_address}"
-                )
-                if pool_response.status_code == 200:
-                    pool_data = pool_response.json()
-                    logger.info(f"Position {position.nft_token_id} - Fetched pool data for {position.pool_address}")
+        position_data = await positions_service.get_position_by_id(position.nft_token_id)
     except Exception as e:
-        logger.error(f"Failed to fetch blockchain data via API for position {position.nft_token_id}: {e!r}")
+        logger.error(f"Failed to fetch blockchain data for position {position.nft_token_id}: {e!r}")
         position_data = None
-        pool_data = None
 
     try:
         if position_data:
-            # Update with blockchain data from API response (JSON dict)
-            blockchain_value = Decimal(str(position_data.get('current_value_usd') or 0))
+            # Update with blockchain data
+            # position_data is a PositionInfo object, use attributes not .get()
+            blockchain_value = Decimal(str(getattr(position_data, 'current_value_usd', 0)))
 
             # Calculate net hedge value (collateral - debt) if position is hedged
             net_hedge_value = Decimal(0)
@@ -241,53 +216,51 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
 
                 # Enrich hedge_info with LP position data
                 hedge_info['lp_current_value_usd'] = blockchain_value
-                hedge_info['unclaimed_fees_usd'] = position_data.get('unclaimed_fees_usd')
-                hedge_info['unclaimed_rewards_aero'] = position_data.get('unclaimed_rewards_aero')
+                hedge_info['unclaimed_fees_usd'] = getattr(position_data, 'unclaimed_fees_usd', None)
+                hedge_info['unclaimed_rewards_aero'] = getattr(position_data, 'unclaimed_rewards_aero', None)
 
             position_dict['current_value_usdc'] = blockchain_value + net_hedge_value
             position_dict['current_total_value'] = blockchain_value + net_hedge_value
-            position_dict['pool_name'] = position_data.get('pool_name', 'Unknown/Unknown')
-            position_dict['in_range'] = position_data.get('in_range', False)
+            position_dict['pool_name'] = getattr(position_data, 'pool_name', 'Unknown/Unknown')
+            position_dict['in_range'] = getattr(position_data, 'in_range', False)
 
             # Add token information from blockchain
-            position_dict['token0'] = position_data.get('token0')
-            position_dict['token1'] = position_data.get('token1')
-            position_dict['token0_amount'] = position_data.get('token0_amount')
-            position_dict['token1_amount'] = position_data.get('token1_amount')
+            position_dict['token0'] = getattr(position_data, 'token0', None)
+            position_dict['token1'] = getattr(position_data, 'token1', None)
+            position_dict['token0_amount'] = getattr(position_data, 'token0_amount', None)
+            position_dict['token1_amount'] = getattr(position_data, 'token1_amount', None)
 
             # Add tick information from blockchain
-            position_dict['tick_lower'] = position_data.get('tick_lower')
-            position_dict['tick_upper'] = position_data.get('tick_upper')
-            position_dict['current_tick'] = position_data.get('current_tick')
+            position_dict['tick_lower'] = getattr(position_data, 'tick_lower', None)
+            position_dict['tick_upper'] = getattr(position_data, 'tick_upper', None)
+            position_dict['current_tick'] = getattr(position_data, 'current_tick', None)
 
             # Add unclaimed fees and rewards from blockchain (also at top level)
-            position_dict['unclaimed_fees_usd'] = position_data.get('unclaimed_fees_usd')
-            position_dict['unclaimed_rewards_aero'] = position_data.get('unclaimed_rewards_aero')
+            position_dict['unclaimed_fees_usd'] = getattr(position_data, 'unclaimed_fees_usd', None)
+            position_dict['unclaimed_rewards_aero'] = getattr(position_data, 'unclaimed_rewards_aero', None)
 
             # Update staked status from blockchain (overrides database value)
-            position_dict['staked'] = position_data.get('staked', False)
+            position_dict['staked'] = getattr(position_data, 'staked', False)
             # Update gauge_address if available
-            if position_data.get('gauge_address'):
-                position_dict['gauge_address'] = position_data.get('gauge_address')
+            if hasattr(position_data, 'gauge_address') and position_data.gauge_address:
+                position_dict['gauge_address'] = position_data.gauge_address
 
-            # Get pool APR data from pool API response
-            if pool_data:
+            # Get pool APR data from pools service
+            if position.pool_address:
                 try:
-                    base_apr = pool_data.get('apr') or 0
+                    pool_info = await pools_service.get_pool(position.pool_address, include_effective_apr=True)
+                    base_apr = pool_info.get('apr') or 0
                     # Get standard effective APR from the range options
-                    effective_apr_range = pool_data.get('effective_apr_range')
+                    effective_apr_range = pool_info.get('effective_apr_range')
                     standard_apr = effective_apr_range.get('standard', 0) if effective_apr_range else 0
 
                     position_dict['pool_base_apr'] = Decimal(str(base_apr))
                     position_dict['effective_apr'] = Decimal(str(standard_apr))
                     logger.debug(f"Position {position.nft_token_id} - Base APR: {base_apr}, Effective APR: {standard_apr}")
                 except Exception as e:
-                    logger.warning(f"Could not extract pool APR from API response: {e}")
+                    logger.warning(f"Could not fetch pool APR for {position.pool_address}: {e}")
                     position_dict['pool_base_apr'] = Decimal(0)
                     position_dict['effective_apr'] = Decimal(0)
-            else:
-                position_dict['pool_base_apr'] = Decimal(0)
-                position_dict['effective_apr'] = Decimal(0)
 
             # Calculate neutral_ratio for hedged positions
             # Formula: debt_amount / relevant_token_amount (token0 for WETH, token1 for cbBTC)
