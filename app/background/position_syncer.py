@@ -2,8 +2,6 @@
 
 import asyncio
 from loguru import logger
-from app.database.session import async_session_maker
-from app.services.user_service import UserService
 
 
 async def sync_active_users():
@@ -13,8 +11,24 @@ async def sync_active_users():
     This keeps the cache warm so that most user requests can skip the sync entirely,
     resulting in much faster response times.
     """
+    # Import here to avoid circular dependencies and ensure init happens first
+    from app.database.session import async_session_maker
+    from app.services.user_service import UserService
+
+    # Wait for database initialization
+    await asyncio.sleep(5)
+
     while True:
         try:
+            # Import fresh each time to get current session maker
+            from app.database.session import async_session_maker
+
+            # Check if session maker is initialized
+            if async_session_maker is None:
+                logger.warning("Database not initialized, skipping background sync")
+                await asyncio.sleep(30)
+                continue
+
             async with async_session_maker() as db:
                 service = UserService(db)
                 users = await service.list_all_users()
