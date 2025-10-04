@@ -400,21 +400,11 @@ async def batch_enrich_positions(positions: List, db: AsyncSession) -> List[dict
         if p.pool_address
     ))
 
-    # Batch fetch ALL pool data at once
+    # Fetch pool data with effective APR for all unique pools
+    # We need effective_apr for position enrichment, so we fetch individually with include_effective_apr=True
     pool_data_map = {}
     if pool_addresses:
-        try:
-            # Use get_pools_batch which is optimized for batch fetching
-            pools = await pools_service.get_pools_batch(pool_addresses)
-            # Create a map keyed by lowercase pool address
-            pool_data_map = {p['address'].lower(): p for p in pools}
-            logger.info(f"Batch fetched {len(pool_data_map)} pools for {len(positions)} positions")
-        except Exception as e:
-            logger.warning(f"Failed to batch fetch pools: {e}")
-
-    # Fetch pool data with effective APR for any missing pools
-    for addr in pool_addresses:
-        if addr.lower() not in pool_data_map:
+        for addr in pool_addresses:
             try:
                 pool_info = await pools_service.get_pool(addr, include_effective_apr=True)
                 pool_data_map[addr.lower()] = pool_info

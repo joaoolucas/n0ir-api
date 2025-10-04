@@ -553,16 +553,25 @@ class PoolsService:
         return apr  # Return actual APR without cap for accurate agent decision-making
     
     async def get_pool(self, address: str, include_effective_apr: bool = True) -> Dict:
-        """Get single pool by address"""
-        # Don't use cache for single pool fetches to ensure fresh data
+        """Get single pool by address with caching"""
+        # Check cache first
+        cache_key = f"{address.lower()}:effective_apr" if include_effective_apr else address.lower()
+        cached_pool = await cache_manager.get_pool(cache_key)
+        if cached_pool:
+            logger.debug(f"Cache hit for pool {address} (effective_apr={include_effective_apr})")
+            return cached_pool
+
         try:
             pool_data = self.sugar.functions.byAddress(
                 Web3.to_checksum_address(address)
             ).call()
-            
+
             # Convert to dict with effective APR
             result = await self._convert_sugar_to_pool_data(pool_data, include_effective_apr=include_effective_apr)
-            
+
+            # Cache the result
+            await cache_manager.set_pool(cache_key, result)
+
             return result
         except Exception as e:
             logger.error(f"Failed to fetch pool {address}: {e}")
