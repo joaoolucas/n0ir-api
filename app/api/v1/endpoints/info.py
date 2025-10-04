@@ -118,7 +118,12 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
                 # Convert from wei if values are large
                 lp_amount = Decimal(usdc_invested) / Decimal(1_000_000) if usdc_invested > 1000 else Decimal(usdc_invested)
                 collateral = Decimal(hedge_collateral) / Decimal(1_000_000) if hedge_collateral > 1000 else Decimal(hedge_collateral)
-                debt_value_usd = Decimal(hedge_debt_usd) if isinstance(hedge_debt_usd, (int, float)) else Decimal(str(hedge_debt_usd))
+                # Safely convert debt_value_usd to Decimal
+                try:
+                    debt_value_usd = Decimal(str(hedge_debt_usd)) if hedge_debt_usd else Decimal(0)
+                except Exception as dec_err:
+                    logger.warning(f"Could not convert hedge_debt_usd to Decimal for position {position.nft_token_id}: {hedge_debt_usd} - {dec_err}")
+                    debt_value_usd = Decimal(0)
 
                 # Calculate debt amount in asset (divide by decimals)
                 decimals = 18 if debt_asset == 'WETH' else 8
@@ -189,9 +194,14 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
         return position_dict
 
     # For active positions, fetch blockchain data
+    position_data = None
     try:
         position_data = await positions_service.get_position_by_id(position.nft_token_id)
+    except Exception as e:
+        logger.error(f"Failed to fetch blockchain data for position {position.nft_token_id}: {e!r}")
+        position_data = None
 
+    try:
         if position_data:
             # Update with blockchain data
             # position_data is a PositionInfo object, use attributes not .get()
