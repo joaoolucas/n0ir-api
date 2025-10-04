@@ -456,9 +456,12 @@ class PositionsService:
             cdp_wallet = None
             try:
                 position_details = liquidity_manager.functions.getPositionDetails(token_id).call()
-                cdp_wallet = position_details[0]  # owner
-                if cdp_wallet and cdp_wallet != "0x0000000000000000000000000000000000000000":
+                potential_owner = position_details[0]  # owner
+                if potential_owner and potential_owner != "0x0000000000000000000000000000000000000000":
+                    cdp_wallet = potential_owner
                     logger.info(f"Position {token_id} CDP wallet from LiquidityManager.getPositionDetails: {cdp_wallet}")
+                else:
+                    logger.debug(f"Position {token_id} returned zero address from LiquidityManager")
             except Exception as e:
                 logger.debug(f"Position {token_id} not in LiquidityManager: {e}")
 
