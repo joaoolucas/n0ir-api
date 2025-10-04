@@ -152,7 +152,7 @@ class PositionsService:
             },
             {
                 "inputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
-                "name": "positionOwners",
+                "name": "positionOwner",
                 "outputs": [{"internalType": "address", "name": "", "type": "address"}],
                 "stateMutability": "view",
                 "type": "function"
@@ -455,15 +455,15 @@ class PositionsService:
             # Always try to get owner from LiquidityManager first (CDP wallet address)
             cdp_wallet = None
             try:
-                position_details = liquidity_manager.functions.getPositionDetails(token_id).call()
-                potential_owner = position_details[0]  # owner
+                # Try positionOwner mapping first (simpler and more reliable)
+                potential_owner = liquidity_manager.functions.positionOwner(token_id).call()
                 if potential_owner and potential_owner != "0x0000000000000000000000000000000000000000":
                     cdp_wallet = potential_owner
-                    logger.info(f"Position {token_id} CDP wallet from LiquidityManager.getPositionDetails: {cdp_wallet}")
+                    logger.info(f"Position {token_id} CDP wallet from LiquidityManager.positionOwner: {cdp_wallet}")
                 else:
-                    logger.debug(f"Position {token_id} returned zero address from LiquidityManager")
+                    logger.debug(f"Position {token_id} returned zero address from LiquidityManager.positionOwner")
             except Exception as e:
-                logger.debug(f"Position {token_id} not in LiquidityManager: {e}")
+                logger.debug(f"Position {token_id} not in LiquidityManager.positionOwner: {e}")
 
             # Get NFT owner to determine staking status
             nft_owner = None
