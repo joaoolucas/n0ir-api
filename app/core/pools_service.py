@@ -814,11 +814,28 @@ class PoolsService:
         token0_info = await self._get_or_fetch_token_info(token0_addr, pool_data[SugarFields.SYMBOL])
         token1_info = await self._get_or_fetch_token_info(token1_addr, pool_data[SugarFields.SYMBOL])
         
-        # Fetch token prices
-        prices = await self._fetch_token_prices_from_dexscreener([token0_addr, token1_addr, settings.aero_token_address])
+        # Fetch token prices (use get_token_prices which checks cache first)
+        prices = await self.get_token_prices([token0_addr, token1_addr, settings.aero_token_address])
         token0_price = prices.get(token0_addr.lower(), 0)
         token1_price = prices.get(token1_addr.lower(), 0)
-        aero_price = prices.get(settings.aero_token_address.lower(), 50)  # Default to $50 if not found
+        aero_price = prices.get(settings.aero_token_address.lower(), 0)
+
+        # Use fallback cache if prices are 0 (API failure)
+        if token0_price == 0:
+            fallback_price = await cache_manager.get_token_price_fallback(token0_addr)
+            if fallback_price:
+                token0_price = fallback_price
+                logger.debug(f"Using fallback price for {token0_addr}: ${fallback_price}")
+
+        if token1_price == 0:
+            fallback_price = await cache_manager.get_token_price_fallback(token1_addr)
+            if fallback_price:
+                token1_price = fallback_price
+                logger.debug(f"Using fallback price for {token1_addr}: ${fallback_price}")
+
+        if aero_price == 0:
+            fallback_price = await cache_manager.get_token_price_fallback(settings.aero_token_address)
+            aero_price = fallback_price if fallback_price else 50  # Default to $50 if no fallback
         
         # Calculate TVL
         token0_decimals = token0_info.get("decimals", 18)
