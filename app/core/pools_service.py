@@ -554,11 +554,11 @@ class PoolsService:
     
     async def get_pool(self, address: str, include_effective_apr: bool = True) -> Dict:
         """Get single pool by address with caching"""
-        # Check cache first
-        cache_key = f"{address.lower()}:effective_apr" if include_effective_apr else address.lower()
+        # Always use same cache key and always include effective_apr for consistency
+        cache_key = address.lower()
         cached_pool = await cache_manager.get_pool(cache_key)
         if cached_pool:
-            logger.debug(f"Cache hit for pool {address} (effective_apr={include_effective_apr})")
+            logger.debug(f"Cache hit for pool {address}")
             return cached_pool
 
         try:
@@ -566,8 +566,8 @@ class PoolsService:
                 Web3.to_checksum_address(address)
             ).call()
 
-            # Convert to dict with effective APR
-            result = await self._convert_sugar_to_pool_data(pool_data, include_effective_apr=include_effective_apr)
+            # Always include effective APR for caching (ignore parameter for now)
+            result = await self._convert_sugar_to_pool_data(pool_data, include_effective_apr=True)
 
             # Cache the result
             await cache_manager.set_pool(cache_key, result)
