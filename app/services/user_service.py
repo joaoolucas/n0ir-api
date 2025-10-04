@@ -1316,12 +1316,34 @@ class UserService:
 
         This should be called by all endpoints to ensure DB is up-to-date with onchain state.
 
+        Uses smart rate limiting: skips sync if user was synced within the last 15 seconds.
+
         Args:
             user_id: User identifier
 
         Returns:
             Dict with sync results (transactions_synced, positions_created, etc.)
         """
+        from app.core.cache import cache_manager
+
+        # Check if we should skip sync due to rate limiting
+        if await cache_manager.should_skip_sync(user_id):
+            # Return cached result if available
+            cached_result = await cache_manager.get_cached_sync_result(user_id)
+            if cached_result:
+                logger.debug(f"Skipping sync for {user_id} - synced {cached_result.get('seconds_ago', '?')}s ago")
+                return cached_result
+
+            # If no cached result, return minimal success result
+            logger.debug(f"Skipping sync for {user_id} - recently synced")
+            return {
+                "transactions_synced": 0,
+                "positions_created": 0,
+                "positions_updated": 0,
+                "success": True,
+                "skipped": True
+            }
+
         sync_result = {
             "transactions_synced": 0,
             "positions_created": 0,
@@ -1383,6 +1405,10 @@ class UserService:
 
             sync_result["positions_updated"] = positions_updated
             sync_result["success"] = True
+
+            # Mark sync as completed and cache the result
+            await cache_manager.mark_sync_completed(user_id)
+            await cache_manager.cache_sync_result(user_id, sync_result)
 
             logger.info(f"Blockchain sync for {user_id}: {sync_result}")
 

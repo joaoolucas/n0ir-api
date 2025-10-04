@@ -10,6 +10,7 @@ from app.core.logger import logger
 from app.services.agent_management_service import get_agent_service
 from app.services.blockchain_event_consumer import blockchain_consumer
 from app.services.position_sync_service import run_position_sync_task
+from app.background.position_syncer import sync_active_users
 
 # Initialize Sentry
 if settings.sentry_dsn:
@@ -94,18 +95,30 @@ async def lifespan(app: FastAPI):
     logger.info("Starting position sync background task...")
     position_sync_task = asyncio.create_task(run_position_sync_task())
 
+    # Start background user syncer to keep cache warm
+    logger.info("Starting background user syncer (30s interval)...")
+    user_sync_task = asyncio.create_task(sync_active_users())
+
     yield
     
     # Shutdown
     logger.info("Shutting down services...")
 
-    # Cancel position sync task
+    # Cancel background tasks
     position_sync_task.cancel()
+    user_sync_task.cancel()
+
     try:
         await position_sync_task
     except asyncio.CancelledError:
         pass
     logger.info("Position sync task stopped")
+
+    try:
+        await user_sync_task
+    except asyncio.CancelledError:
+        pass
+    logger.info("Background user syncer stopped")
 
     # Stop blockchain event consumer
     await blockchain_consumer.stop()

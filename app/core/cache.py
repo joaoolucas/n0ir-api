@@ -66,6 +66,7 @@ class CacheManager:
         # User-specific cache TTLs
         self.USER_CONTEXT_TTL = 10  # 10 seconds for user context
         self.USER_ANALYSIS_TTL = 5   # 5 seconds for analysis results
+        self.SYNC_RATE_LIMIT = 15  # Skip sync if last sync was <15 seconds ago
 
     # Generic cache methods for CDP and other services
     async def get(self, key: str) -> Optional[Any]:
@@ -173,6 +174,41 @@ class CacheManager:
     async def set_custom(self, key: str, data: Any, ttl: int = 300) -> None:
         """Set a custom cache entry with specified TTL."""
         await self.cache.set(key, data, ttl)
+
+    # Sync rate limiting methods
+    async def should_skip_sync(self, user_id: str) -> bool:
+        """
+        Check if we should skip syncing for this user based on rate limiting.
+        Returns True if user was synced within the last SYNC_RATE_LIMIT seconds.
+        """
+        key = f"sync:timestamp:{user_id.lower()}"
+        last_sync = await self.cache.get(key)
+
+        if last_sync is None:
+            return False
+
+        # Check if last sync was recent enough to skip
+        time_since_sync = time.time() - last_sync
+        return time_since_sync < self.SYNC_RATE_LIMIT
+
+    async def mark_sync_completed(self, user_id: str) -> None:
+        """
+        Mark that a sync has been completed for this user.
+        Stores timestamp to enable rate limiting.
+        """
+        key = f"sync:timestamp:{user_id.lower()}"
+        # Store with longer TTL than rate limit to maintain history
+        await self.cache.set(key, time.time(), ttl=60)
+
+    async def get_cached_sync_result(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Get cached sync result if available."""
+        key = f"sync:result:{user_id.lower()}"
+        return await self.cache.get(key)
+
+    async def cache_sync_result(self, user_id: str, result: Dict[str, Any]) -> None:
+        """Cache sync result for quick retrieval."""
+        key = f"sync:result:{user_id.lower()}"
+        await self.cache.set(key, result, ttl=self.SYNC_RATE_LIMIT)
 
 
 # Create singleton instance

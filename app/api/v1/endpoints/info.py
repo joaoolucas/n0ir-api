@@ -35,8 +35,18 @@ DBPositionStatus = PositionStatus
 router = APIRouter(prefix="/users")
 
 
-async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = None) -> dict:
-    """Enrich position with pool information, PNL, APR, and calculated values from blockchain."""
+async def enrich_position_with_pool_data(
+    position,
+    db: Optional[AsyncSession] = None,
+    pool_data_cache: Optional[dict] = None
+) -> dict:
+    """Enrich position with pool information, PNL, APR, and calculated values from blockchain.
+
+    Args:
+        position: Position object to enrich
+        db: Database session (optional)
+        pool_data_cache: Pre-fetched pool data dict keyed by pool address (optional, for batch operations)
+    """
     # Convert position to dict, excluding token addresses and liquidity
     position_dict = PositionResponse.model_validate(position).model_dump()
 
@@ -161,20 +171,8 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
     # Skip blockchain fetch for closed positions - they don't exist on-chain anymore
     if position.status == DBPositionStatus.CLOSED:
         # For closed positions, use database values and calculate final PNL
-        try:
-            # Get token info for pool name, only if addresses are available
-            if position.token0_address and position.token1_address:
-                token0_info = await pools_service.get_token_info(position.token0_address)
-                token1_info = await pools_service.get_token_info(position.token1_address)
-
-                # Create pool name from token symbols
-                token0_symbol = token0_info.get('symbol', '???')
-                token1_symbol = token1_info.get('symbol', '???')
-                position_dict['pool_name'] = f"{token0_symbol}/{token1_symbol}"
-            else:
-                position_dict['pool_name'] = position.pool_name or "Unknown/Unknown"
-        except:
-            position_dict['pool_name'] = "Unknown/Unknown"
+        # Use stored pool_name directly - no need for any external calls
+        position_dict['pool_name'] = position.pool_name or "Unknown/Unknown"
 
         # Use stored values for closed positions
         position_dict['current_value_usdc'] = position.current_value_usdc or Decimal(0)
@@ -245,10 +243,16 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
             if hasattr(position_data, 'gauge_address') and position_data.gauge_address:
                 position_dict['gauge_address'] = position_data.gauge_address
 
-            # Get pool APR data from pools service
+            # Get pool APR data from pools service (use cache if available)
             if position.pool_address:
                 try:
-                    pool_info = await pools_service.get_pool(position.pool_address, include_effective_apr=True)
+                    # Use cached pool data if provided, otherwise fetch
+                    if pool_data_cache and position.pool_address.lower() in pool_data_cache:
+                        pool_info = pool_data_cache[position.pool_address.lower()]
+                        logger.debug(f"Using cached pool data for {position.pool_address}")
+                    else:
+                        pool_info = await pools_service.get_pool(position.pool_address, include_effective_apr=True)
+
                     base_apr = pool_info.get('apr') or 0
                     # Get standard effective APR from the range options
                     effective_apr_range = pool_info.get('effective_apr_range')
@@ -374,6 +378,64 @@ async def enrich_position_with_pool_data(position, db: Optional[AsyncSession] = 
     return position_dict
 
 
+async def batch_enrich_positions(positions: List, db: AsyncSession) -> List[dict]:
+    """
+    Batch enrich multiple positions with pool data to avoid N+1 queries.
+
+    Fetches all unique pool data in one batch, then enriches all positions using cached data.
+
+    Args:
+        positions: List of Position objects to enrich
+        db: Database session
+
+    Returns:
+        List of enriched position dicts
+    """
+    if not positions:
+        return []
+
+    # Collect unique pool addresses from all positions
+    pool_addresses = list(set(
+        p.pool_address for p in positions
+        if p.pool_address
+    ))
+
+    # Batch fetch ALL pool data at once
+    pool_data_map = {}
+    if pool_addresses:
+        try:
+            # Use get_pools_batch which is optimized for batch fetching
+            pools = await pools_service.get_pools_batch(pool_addresses)
+            # Create a map keyed by lowercase pool address
+            pool_data_map = {p['address'].lower(): p for p in pools}
+            logger.info(f"Batch fetched {len(pool_data_map)} pools for {len(positions)} positions")
+        except Exception as e:
+            logger.warning(f"Failed to batch fetch pools: {e}")
+
+    # Fetch pool data with effective APR for any missing pools
+    for addr in pool_addresses:
+        if addr.lower() not in pool_data_map:
+            try:
+                pool_info = await pools_service.get_pool(addr, include_effective_apr=True)
+                pool_data_map[addr.lower()] = pool_info
+            except Exception as e:
+                logger.warning(f"Failed to fetch pool {addr}: {e}")
+
+    # Enrich all positions using the cached pool data
+    enriched = []
+    for position in positions:
+        try:
+            enriched_pos = await enrich_position_with_pool_data(
+                position, db, pool_data_cache=pool_data_map
+            )
+            enriched.append(enriched_pos)
+        except Exception as e:
+            logger.warning(f"Failed to enrich position {position.token_id}: {e}")
+            continue
+
+    return enriched
+
+
 @router.get("", response_model=List[UserListResponse])
 async def list_users(
     request: Request,
@@ -433,15 +495,12 @@ async def list_users(
             active_positions = [p for p in positions if p.status == 'ACTIVE']
             closed_positions = [p for p in positions if p.status == 'CLOSED']
 
-            # Enrich active positions with blockchain data (same as performance endpoint)
-            enriched_active_positions = []
-            for position in active_positions:
-                try:
-                    enriched = await enrich_position_with_pool_data(position, db)
-                    enriched_active_positions.append(enriched)
-                except Exception as e:
-                    logger.warning(f"Could not enrich position {position.nft_token_id} for user {user.user_id}: {e}")
-                    continue
+            # Batch enrich active positions with blockchain data (avoids N+1 pool queries)
+            try:
+                enriched_active_positions = await batch_enrich_positions(active_positions, db)
+            except Exception as e:
+                logger.warning(f"Could not batch enrich positions for user {user.user_id}: {e}")
+                enriched_active_positions = []
 
             # Calculate positions value from enriched blockchain data
             positions_value = sum(
@@ -673,11 +732,8 @@ async def get_positions(
 
     positions = await service.get_user_positions(user_id=user_id, status=status)
 
-    # Enrich positions with pool data
-    enriched_positions = []
-    for position in positions:
-        enriched = await enrich_position_with_pool_data(position, db)
-        enriched_positions.append(enriched)
+    # Batch enrich positions with pool data (avoids N+1 pool queries)
+    enriched_positions = await batch_enrich_positions(positions, db)
 
     # Sort by status (active first) then by created_at (newest first)
     enriched_positions.sort(
@@ -770,16 +826,13 @@ async def get_performance(
     # Get positions for metrics calculation
     positions = await service.get_user_positions(user_id)
 
-    # Enrich active positions with blockchain data to get accurate current values
+    # Batch enrich active positions with blockchain data (avoids N+1 pool queries)
     active_positions = [p for p in positions if p.status == 'ACTIVE']
-    enriched_active_positions = []
-    for position in active_positions:
-        try:
-            enriched = await enrich_position_with_pool_data(position, db)
-            enriched_active_positions.append(enriched)
-        except Exception as e:
-            logger.warning(f"Could not enrich position {position.nft_token_id}: {e}")
-            continue
+    try:
+        enriched_active_positions = await batch_enrich_positions(active_positions, db)
+    except Exception as e:
+        logger.warning(f"Could not batch enrich positions for user {user_id}: {e}")
+        enriched_active_positions = []
 
     # Calculate current positions value using enriched blockchain data
     current_positions_value = sum(
