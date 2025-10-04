@@ -1680,6 +1680,7 @@ class WalletTransactionService:
         """Ensure all POSITION_CREATED transactions have corresponding Position records."""
         from app.database.models import Transaction, Position
         from sqlalchemy import select, and_
+        from sqlalchemy.exc import IntegrityError
 
         try:
             # Get all POSITION_CREATED transactions for user
@@ -1739,8 +1740,14 @@ class WalletTransactionService:
                                 amount_usdc=amount_usdc
                             )
                             positions_created += 1
+                        except IntegrityError as ie:
+                            # Race condition - another process created this position
+                            logger.info(f"Position {position_id} created by concurrent process, skipping")
+                            await self.db.rollback()  # Rollback to clear the error
+                            continue
                         except Exception as e:
                             logger.error(f"Failed to create position {position_id}: {e}")
+                            await self.db.rollback()  # Rollback to clear the error
                             continue
                 else:
                     logger.warning(f"POSITION_CREATED transaction {tx.tx_hash[:10]}... has no position_id")
@@ -1887,9 +1894,10 @@ class WalletTransactionService:
             logger.info(f"Added position {position_id} to session for user {user_id} in pool {pool_name or pool_address}")
 
         except IntegrityError as e:
-            # Position might already exist (race condition)
-            logger.warning(f"Position {position_id} already exists (integrity error): {e}")
-            await self.db.rollback()
+            # Position might already exist (race condition from concurrent syncs)
+            # Re-raise so the caller can handle it appropriately
+            logger.debug(f"IntegrityError creating position {position_id} - likely concurrent creation")
+            raise
         except ValueError as e:
             logger.error(f"Invalid position_id format {position_id}: {e}")
             raise
