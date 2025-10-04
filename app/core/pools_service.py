@@ -638,25 +638,48 @@ class PoolsService:
         return self._serialize_token(result)
     
     async def _fetch_token_prices_from_dexscreener(self, addresses: List[str]) -> Dict[str, float]:
-        """Fetch token prices from DexScreener API"""
+        """Fetch token prices from DexScreener API with CoinGecko fallback"""
         import aiohttp
         import asyncio
-        
+
         prices = {}
-        
-        # Known stablecoins (lowercase addresses)
-        stablecoins = {
-            "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913".lower(): 1.0,  # USDC on Base
-            "0x50c5725949a6f0c72e6c4a641f24049a917db0cb".lower(): 1.0,  # DAI on Base
-            "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca".lower(): 1.0,  # USDbC on Base
+
+        # Known tokens with fixed prices or CoinGecko IDs (lowercase addresses)
+        known_tokens = {
+            # Stablecoins
+            "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913".lower(): {"type": "stable", "price": 1.0},  # USDC on Base
+            "0x50c5725949a6f0c72e6c4a641f24049a917db0cb".lower(): {"type": "stable", "price": 1.0},  # DAI on Base
+            "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca".lower(): {"type": "stable", "price": 1.0},  # USDbC on Base
+            # Major tokens with CoinGecko IDs
+            "0x4200000000000000000000000000000000000006".lower(): {"type": "coingecko", "id": "weth"},  # WETH on Base
+            "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf".lower(): {"type": "coingecko", "id": "coinbase-wrapped-btc"},  # cbBTC on Base
+            "0x940181a94a35a4569e4529a3cdfb74e38fd98631".lower(): {"type": "coingecko", "id": "aerodrome-finance"},  # AERO on Base
         }
         
         async def fetch_single_token_price(session: aiohttp.ClientSession, address: str) -> tuple[str, float]:
-            """Fetch price for a single token"""
-            # Check if it's a stablecoin
-            if address.lower() in stablecoins:
-                return (address.lower(), stablecoins[address.lower()])
-            
+            """Fetch price for a single token from DexScreener or CoinGecko"""
+            addr_lower = address.lower()
+
+            # Check if it's a known token
+            if addr_lower in known_tokens:
+                token_info = known_tokens[addr_lower]
+                if token_info["type"] == "stable":
+                    return (addr_lower, token_info["price"])
+                elif token_info["type"] == "coingecko":
+                    # Try CoinGecko for major tokens
+                    try:
+                        url = f"https://api.coingecko.com/api/v3/simple/price?ids={token_info['id']}&vs_currencies=usd"
+                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                            if response.status == 200:
+                                data = await response.json()
+                                if token_info['id'] in data and 'usd' in data[token_info['id']]:
+                                    price = float(data[token_info['id']]['usd'])
+                                    logger.debug(f"Fetched price for {address} from CoinGecko: ${price}")
+                                    return (addr_lower, price)
+                    except Exception as e:
+                        logger.warning(f"CoinGecko API failed for {address}: {str(e)}")
+
+            # Try DexScreener
             try:
                 url = f"{DEXSCREENER_API_BASE}/tokens/{address}"
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as response:
@@ -669,11 +692,16 @@ class PoolsService:
                                 # Sort by liquidity and get the highest
                                 base_pairs.sort(key=lambda x: float(x.get('liquidity', {}).get('usd', 0)), reverse=True)
                                 price = float(base_pairs[0].get('priceUsd', 0))
-                                return (address.lower(), price)
+                                if price > 0:
+                                    logger.debug(f"Fetched price for {address} from DexScreener: ${price}")
+                                    return (addr_lower, price)
+                    elif response.status == 429:
+                        logger.warning(f"DexScreener rate limited for {address}")
             except Exception as e:
-                logger.warning(f"Failed to fetch price for {address}: {str(e)}")
-            
-            return (address.lower(), 0.0)
+                logger.warning(f"DexScreener failed for {address}: {str(e)}")
+
+            logger.warning(f"Could not fetch price for {address}, returning 0")
+            return (addr_lower, 0.0)
         
         # Fetch prices concurrently
         async with aiohttp.ClientSession() as session:
