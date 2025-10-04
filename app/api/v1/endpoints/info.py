@@ -38,7 +38,8 @@ router = APIRouter(prefix="/users")
 async def enrich_position_with_pool_data(
     position,
     db: Optional[AsyncSession] = None,
-    pool_data_cache: Optional[dict] = None
+    pool_data_cache: Optional[dict] = None,
+    tx_cache: Optional[dict] = None
 ) -> dict:
     """Enrich position with pool information, PNL, APR, and calculated values from blockchain.
 
@@ -46,6 +47,7 @@ async def enrich_position_with_pool_data(
         position: Position object to enrich
         db: Database session (optional)
         pool_data_cache: Pre-fetched pool data dict keyed by pool address (optional, for batch operations)
+        tx_cache: Pre-fetched transaction data dict keyed by token_id (optional, for batch operations)
     """
     # Convert position to dict, excluding token addresses and liquidity
     position_dict = PositionResponse.model_validate(position).model_dump()
@@ -76,7 +78,11 @@ async def enrich_position_with_pool_data(
     except Exception as e:
         logger.warning(f"Could not fetch live hedge info for position {position.nft_token_id}: {e}")
 
-    if db:
+    # Get transaction from cache if available, otherwise query database
+    position_created_tx = None
+    if tx_cache and str(position.nft_token_id) in tx_cache:
+        position_created_tx = tx_cache[str(position.nft_token_id)]
+    elif db:
         from sqlalchemy import select, and_
         from app.database.models import Transaction
 
@@ -90,79 +96,79 @@ async def enrich_position_with_pool_data(
         result = await db.execute(stmt)
         position_created_tx = result.scalar_one_or_none()
 
-        if position_created_tx and position_created_tx.event_data:
-            # Prefer explicit amount_usdc if present, otherwise fall back to usdcIn
-            amt_field = position_created_tx.event_data.get('amount_usdc')
-            if amt_field is None:
-                # usdcIn may be raw base units, convert when needed
-                raw_in = position_created_tx.event_data.get('usdcIn', 0)
-                try:
-                    raw_in = Decimal(str(raw_in))
-                except Exception:
-                    raw_in = Decimal(0)
-                # Heuristic: if very large, divide by 1e6
-                amount = raw_in / Decimal(1_000_000) if raw_in > 1000 else raw_in
+    if position_created_tx and position_created_tx.event_data:
+        # Prefer explicit amount_usdc if present, otherwise fall back to usdcIn
+        amt_field = position_created_tx.event_data.get('amount_usdc')
+        if amt_field is None:
+            # usdcIn may be raw base units, convert when needed
+            raw_in = position_created_tx.event_data.get('usdcIn', 0)
+            try:
+                raw_in = Decimal(str(raw_in))
+            except Exception:
+                raw_in = Decimal(0)
+            # Heuristic: if very large, divide by 1e6
+            amount = raw_in / Decimal(1_000_000) if raw_in > 1000 else raw_in
+        else:
+            amount = Decimal(str(amt_field))
+        usdc_returned_wei = position_created_tx.event_data.get('usdc_returned', 0)
+        usdc_returned = Decimal(str(usdc_returned_wei)) / Decimal(1_000_000) if usdc_returned_wei else Decimal(0)
+        net_entry_amount = amount - usdc_returned
+
+        # Build hedge info from event_data (as fallback for missing fields)
+        is_hedged = position_created_tx.event_data.get('is_hedged', False)
+        if is_hedged or live_hedge_data:
+            # Get token symbol from address
+            hedged_asset = position_created_tx.event_data.get('hedged_asset', '0x0')
+            if hedged_asset and hedged_asset != '0x0':
+                # Simple mapping for known assets
+                debt_asset = 'WETH' if '0x42000000' in hedged_asset else 'cbBTC'
             else:
-                amount = Decimal(str(amt_field))
-            usdc_returned_wei = position_created_tx.event_data.get('usdc_returned', 0)
-            usdc_returned = Decimal(str(usdc_returned_wei)) / Decimal(1_000_000) if usdc_returned_wei else Decimal(0)
-            net_entry_amount = amount - usdc_returned
+                debt_asset = None
 
-            # Build hedge info from event_data (as fallback for missing fields)
-            is_hedged = position_created_tx.event_data.get('is_hedged', False)
-            if is_hedged or live_hedge_data:
-                # Get token symbol from address
-                hedged_asset = position_created_tx.event_data.get('hedged_asset', '0x0')
-                if hedged_asset and hedged_asset != '0x0':
-                    # Simple mapping for known assets
-                    debt_asset = 'WETH' if '0x42000000' in hedged_asset else 'cbBTC'
-                else:
-                    debt_asset = None
+            # Extract hedge values from event_data (convert from wei if needed)
+            usdc_invested = position_created_tx.event_data.get('usdc_invested', 0)
+            hedge_collateral = position_created_tx.event_data.get('hedge_collateral', 0)
+            hedge_debt = position_created_tx.event_data.get('hedge_debt', 0)
+            hedge_debt_usd = position_created_tx.event_data.get('hedge_debt_usd', 0)
 
-                # Extract hedge values from event_data (convert from wei if needed)
-                usdc_invested = position_created_tx.event_data.get('usdc_invested', 0)
-                hedge_collateral = position_created_tx.event_data.get('hedge_collateral', 0)
-                hedge_debt = position_created_tx.event_data.get('hedge_debt', 0)
-                hedge_debt_usd = position_created_tx.event_data.get('hedge_debt_usd', 0)
+            # Convert from wei if values are large
+            lp_amount = Decimal(usdc_invested) / Decimal(1_000_000) if usdc_invested > 1000 else Decimal(usdc_invested)
+            collateral = Decimal(hedge_collateral) / Decimal(1_000_000) if hedge_collateral > 1000 else Decimal(hedge_collateral)
+            # Safely convert debt_value_usd to Decimal
+            try:
+                debt_value_usd = Decimal(str(hedge_debt_usd)) if hedge_debt_usd else Decimal(0)
+            except Exception as dec_err:
+                logger.warning(f"Could not convert hedge_debt_usd to Decimal for position {position.nft_token_id}: {hedge_debt_usd} - {dec_err}")
+                debt_value_usd = Decimal(0)
 
-                # Convert from wei if values are large
-                lp_amount = Decimal(usdc_invested) / Decimal(1_000_000) if usdc_invested > 1000 else Decimal(usdc_invested)
-                collateral = Decimal(hedge_collateral) / Decimal(1_000_000) if hedge_collateral > 1000 else Decimal(hedge_collateral)
-                # Safely convert debt_value_usd to Decimal
-                try:
-                    debt_value_usd = Decimal(str(hedge_debt_usd)) if hedge_debt_usd else Decimal(0)
-                except Exception as dec_err:
-                    logger.warning(f"Could not convert hedge_debt_usd to Decimal for position {position.nft_token_id}: {hedge_debt_usd} - {dec_err}")
-                    debt_value_usd = Decimal(0)
+            # Calculate debt amount in asset (divide by decimals)
+            decimals = 18 if debt_asset == 'WETH' else 8
+            debt_amount = Decimal(hedge_debt) / Decimal(10 ** decimals) if hedge_debt > 0 else Decimal(0)
 
-                # Calculate debt amount in asset (divide by decimals)
-                decimals = 18 if debt_asset == 'WETH' else 8
-                debt_amount = Decimal(hedge_debt) / Decimal(10 ** decimals) if hedge_debt > 0 else Decimal(0)
+            hedge_info = {
+                'is_hedged': True,
+                'lp_amount': lp_amount,
+                'collateral': collateral,
+                'debt_asset': debt_asset,
+                'debt_amount': debt_amount,
+                'debt_value_usd': debt_value_usd,
+                'tick_lower': position_created_tx.event_data.get('tick_lower'),
+                'tick_upper': position_created_tx.event_data.get('tick_upper')
+            }
 
-                hedge_info = {
-                    'is_hedged': True,
-                    'lp_amount': lp_amount,
-                    'collateral': collateral,
-                    'debt_asset': debt_asset,
-                    'debt_amount': debt_amount,
-                    'debt_value_usd': debt_value_usd,
-                    'tick_lower': position_created_tx.event_data.get('tick_lower'),
-                    'tick_upper': position_created_tx.event_data.get('tick_upper')
-                }
-
-                # Override with live data if available
-                if live_hedge_data:
-                    hedge_info['is_hedged'] = live_hedge_data['is_hedged']
-                    hedge_info['collateral'] = live_hedge_data['collateral']
-                    hedge_info['debt_asset'] = live_hedge_data['debt_asset']
-                    hedge_info['debt_amount'] = live_hedge_data['debt_amount']
-                    hedge_info['debt_value_usd'] = live_hedge_data['debt_value_usd']
-                    if 'hedged_asset' in live_hedge_data:
-                        hedge_info['hedged_asset'] = live_hedge_data['hedged_asset']
-                    if 'collateral_supply_apy' in live_hedge_data:
-                        hedge_info['collateral_supply_apy'] = live_hedge_data['collateral_supply_apy']
-                    if 'hedged_asset_borrow_apy' in live_hedge_data:
-                        hedge_info['hedged_asset_borrow_apy'] = live_hedge_data['hedged_asset_borrow_apy']
+            # Override with live data if available
+            if live_hedge_data:
+                hedge_info['is_hedged'] = live_hedge_data['is_hedged']
+                hedge_info['collateral'] = live_hedge_data['collateral']
+                hedge_info['debt_asset'] = live_hedge_data['debt_asset']
+                hedge_info['debt_amount'] = live_hedge_data['debt_amount']
+                hedge_info['debt_value_usd'] = live_hedge_data['debt_value_usd']
+                if 'hedged_asset' in live_hedge_data:
+                    hedge_info['hedged_asset'] = live_hedge_data['hedged_asset']
+                if 'collateral_supply_apy' in live_hedge_data:
+                    hedge_info['collateral_supply_apy'] = live_hedge_data['collateral_supply_apy']
+                if 'hedged_asset_borrow_apy' in live_hedge_data:
+                    hedge_info['hedged_asset_borrow_apy'] = live_hedge_data['hedged_asset_borrow_apy']
 
     # Override the entry_amount_usdc with the net amount
     position_dict['entry_amount_usdc'] = net_entry_amount
@@ -394,29 +400,64 @@ async def batch_enrich_positions(positions: List, db: AsyncSession) -> List[dict
     if not positions:
         return []
 
-    # Collect unique pool addresses from all positions
+    # Collect unique pool addresses and token IDs from all positions
     pool_addresses = list(set(
         p.pool_address for p in positions
         if p.pool_address
     ))
+    token_ids = [str(p.nft_token_id) for p in positions]
 
-    # Fetch pool data with effective APR for all unique pools
+    # Batch fetch all POSITION_CREATED transactions for these positions
+    from app.database.models import Transaction
+    from sqlalchemy import select, and_
+    tx_map = {}
+    if positions and db and token_ids:
+        try:
+            user_id = positions[0].user_id  # All positions should be same user
+            stmt = select(Transaction).where(
+                and_(
+                    Transaction.user_id == user_id,
+                    Transaction.tx_type == 'POSITION_CREATED',
+                    Transaction.event_data['tokenId'].astext.in_(token_ids)
+                )
+            )
+            result = await db.execute(stmt)
+            transactions = result.scalars().all()
+
+            # Create map of token_id -> transaction
+            for tx in transactions:
+                if tx.event_data and 'tokenId' in tx.event_data:
+                    tx_map[str(tx.event_data['tokenId'])] = tx
+
+            logger.info(f"Batch fetched {len(tx_map)} transactions for {len(positions)} positions")
+        except Exception as e:
+            logger.warning(f"Failed to batch fetch transactions: {e}")
+
+    # Fetch pool data with effective APR for all unique pools IN PARALLEL
     # We need effective_apr for position enrichment, so we fetch individually with include_effective_apr=True
     pool_data_map = {}
     if pool_addresses:
-        for addr in pool_addresses:
-            try:
-                pool_info = await pools_service.get_pool(addr, include_effective_apr=True)
-                pool_data_map[addr.lower()] = pool_info
-            except Exception as e:
-                logger.warning(f"Failed to fetch pool {addr}: {e}")
+        import asyncio
+        # Create tasks for parallel fetching
+        tasks = [pools_service.get_pool(addr, include_effective_apr=True) for addr in pool_addresses]
+        # Fetch all pools in parallel, catching exceptions
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    # Enrich all positions using the cached pool data
+        # Build pool data map from results
+        for addr, result in zip(pool_addresses, results):
+            if isinstance(result, Exception):
+                logger.warning(f"Failed to fetch pool {addr}: {result}")
+            else:
+                pool_data_map[addr.lower()] = result
+
+        logger.info(f"Fetched {len(pool_data_map)} pools in parallel for {len(positions)} positions")
+
+    # Enrich all positions using the cached pool and transaction data
     enriched = []
     for position in positions:
         try:
             enriched_pos = await enrich_position_with_pool_data(
-                position, db, pool_data_cache=pool_data_map
+                position, db, pool_data_cache=pool_data_map, tx_cache=tx_map
             )
             enriched.append(enriched_pos)
         except Exception as e:
