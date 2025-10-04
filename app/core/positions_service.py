@@ -14,11 +14,10 @@ from app.core.pool_constants import SUGAR_ABI
 
 class PositionsService:
     """Service for fetching and analyzing positions."""
-    
+
     # Contract addresses
     POSITION_MANAGER_ADDRESS = "0x827922686190790b37229fd06084350E74485b72"
     POOL_FACTORY_ADDRESS = "0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A"
-    LIQUIDITY_MANAGER_ADDRESS = "0x8123F467Fa2C53a31D8738D5FAa0DFd881F5DF8A"  # Our LiquidityManager contract
     SUGAR_ADDRESS = "0x27fc745390d1f4BaF8D184FBd97748340f786634"
 
     # Known legacy position IDs that should be ignored (deprecated contracts)
@@ -301,7 +300,7 @@ class PositionsService:
         if self._liquidity_manager is None:
             w3 = self._get_w3()
             self._liquidity_manager = w3.eth.contract(
-                address=Web3.to_checksum_address(self.LIQUIDITY_MANAGER_ADDRESS),
+                address=Web3.to_checksum_address(settings.liquidity_manager_address),
                 abi=self._get_liquidity_manager_abi()
             )
         return self._liquidity_manager
@@ -529,7 +528,7 @@ class PositionsService:
             # The NFT is held by the gauge when staked, so we need to query Sugar with LiquidityManager address
             # For legacy positions, use the actual NFT owner
             if staked:
-                sugar_owner = self.LIQUIDITY_MANAGER_ADDRESS
+                sugar_owner = settings.liquidity_manager_address
             else:
                 sugar_owner = owner
 
