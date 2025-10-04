@@ -752,6 +752,9 @@ async def get_positions(
     - Range status
     - Fees and rewards earned
     """
+    import time
+    start_time = time.time()
+
     # Verify user can only access their own positions
     if authenticated_wallet.lower() != user_id.lower():
         raise HTTPException(
@@ -762,12 +765,18 @@ async def get_positions(
     service = UserService(db)
 
     # Sync blockchain data to get latest positions
+    sync_start = time.time()
     await service.sync_blockchain_data(user_id)
+    logger.info(f"⏱️ Sync took {time.time() - sync_start:.2f}s")
 
+    positions_start = time.time()
     positions = await service.get_user_positions(user_id=user_id, status=status)
+    logger.info(f"⏱️ Get positions took {time.time() - positions_start:.2f}s")
 
     # Batch enrich positions with pool data (avoids N+1 pool queries)
+    enrich_start = time.time()
     enriched_positions = await batch_enrich_positions(positions, db)
+    logger.info(f"⏱️ Enrich positions took {time.time() - enrich_start:.2f}s")
 
     # Sort by status (active first) then by created_at (newest first)
     enriched_positions.sort(
@@ -776,6 +785,8 @@ async def get_positions(
             -(p.get('created_at').timestamp() if p.get('created_at') else 0)
         )
     )
+
+    logger.info(f"⏱️ Total request took {time.time() - start_time:.2f}s")
 
     return PositionListResponse(
         positions=enriched_positions,
