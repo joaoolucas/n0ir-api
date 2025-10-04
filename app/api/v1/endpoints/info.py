@@ -39,7 +39,8 @@ async def enrich_position_with_pool_data(
     position,
     db: Optional[AsyncSession] = None,
     pool_data_cache: Optional[dict] = None,
-    tx_cache: Optional[dict] = None
+    tx_cache: Optional[dict] = None,
+    skip_live_hedge: bool = True
 ) -> dict:
     """Enrich position with pool information, PNL, APR, and calculated values from blockchain.
 
@@ -48,6 +49,7 @@ async def enrich_position_with_pool_data(
         db: Database session (optional)
         pool_data_cache: Pre-fetched pool data dict keyed by pool address (optional, for batch operations)
         tx_cache: Pre-fetched transaction data dict keyed by token_id (optional, for batch operations)
+        skip_live_hedge: Skip live hedge data fetching for performance (default: True)
     """
     # Convert position to dict, excluding token addresses and liquidity
     position_dict = PositionResponse.model_validate(position).model_dump()
@@ -56,27 +58,28 @@ async def enrich_position_with_pool_data(
     net_entry_amount = position.entry_amount_usdc or Decimal(0)
     hedge_info = None
 
-    # Fetch live hedge info from LiquidityManager contract
+    # Fetch live hedge info from LiquidityManager contract (optional for performance)
     live_hedge_data = None
-    try:
-        from app.core.hedge_service import hedge_service
-        hedge_response = await hedge_service.get_hedge_position_by_token_id(position.nft_token_id)
+    if not skip_live_hedge:
+        try:
+            from app.core.hedge_service import hedge_service
+            hedge_response = await hedge_service.get_hedge_position_by_token_id(position.nft_token_id)
 
-        if hedge_response.positions and len(hedge_response.positions) > 0:
-            live_hedge = hedge_response.positions[0]
-            live_hedge_data = {
-                'is_hedged': live_hedge.is_hedged,
-                'collateral': live_hedge.collateral_usdc,
-                'debt_asset': live_hedge.hedged_asset_symbol,
-                'debt_amount': live_hedge.debt_amount,
-                'debt_value_usd': live_hedge.debt_usd,
-                'hedged_asset': live_hedge.hedged_asset,
-                'collateral_supply_apy': live_hedge.collateral_supply_apy,
-                'hedged_asset_borrow_apy': live_hedge.hedged_asset_borrow_apy
-            }
-            logger.info(f"Position {position.nft_token_id} - Live hedge info: {live_hedge_data}")
-    except Exception as e:
-        logger.warning(f"Could not fetch live hedge info for position {position.nft_token_id}: {e}")
+            if hedge_response.positions and len(hedge_response.positions) > 0:
+                live_hedge = hedge_response.positions[0]
+                live_hedge_data = {
+                    'is_hedged': live_hedge.is_hedged,
+                    'collateral': live_hedge.collateral_usdc,
+                    'debt_asset': live_hedge.hedged_asset_symbol,
+                    'debt_amount': live_hedge.debt_amount,
+                    'debt_value_usd': live_hedge.debt_usd,
+                    'hedged_asset': live_hedge.hedged_asset,
+                    'collateral_supply_apy': live_hedge.collateral_supply_apy,
+                    'hedged_asset_borrow_apy': live_hedge.hedged_asset_borrow_apy
+                }
+                logger.info(f"Position {position.nft_token_id} - Live hedge info: {live_hedge_data}")
+        except Exception as e:
+            logger.warning(f"Could not fetch live hedge info for position {position.nft_token_id}: {e}")
 
     # Get transaction from cache if available, otherwise query database
     position_created_tx = None
