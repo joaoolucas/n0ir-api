@@ -455,15 +455,18 @@ class PositionsService:
             # Always try to get owner from LiquidityManager first (CDP wallet address)
             cdp_wallet = None
             try:
-                # Try positionOwner mapping first (simpler and more reliable)
-                potential_owner = liquidity_manager.functions.positionOwner(token_id).call()
+                # Use getPositionDetails to get the owner (same as hedge service does)
+                position_details = liquidity_manager.functions.getPositionDetails(token_id).call()
+                potential_owner = position_details[0]  # owner is first element
+                logger.info(f"Position {token_id} - getPositionDetails returned owner: {potential_owner}")
+
                 if potential_owner and potential_owner != "0x0000000000000000000000000000000000000000":
                     cdp_wallet = potential_owner
-                    logger.info(f"Position {token_id} CDP wallet from LiquidityManager.positionOwner: {cdp_wallet}")
+                    logger.info(f"Position {token_id} CDP wallet from LiquidityManager: {cdp_wallet}")
                 else:
-                    logger.debug(f"Position {token_id} returned zero address from LiquidityManager.positionOwner")
+                    logger.warning(f"Position {token_id} returned zero address from LiquidityManager.getPositionDetails")
             except Exception as e:
-                logger.debug(f"Position {token_id} not in LiquidityManager.positionOwner: {e}")
+                logger.warning(f"Position {token_id} not in LiquidityManager: {e!r}")
 
             # Get NFT owner to determine staking status
             nft_owner = None
@@ -522,9 +525,15 @@ class PositionsService:
             token0_amount = None
             token1_amount = None
 
-            # For LiquidityManager positions, use the LiquidityManager contract address for Sugar lookups
-            # For legacy positions, use the NFT owner
-            sugar_owner = self.LIQUIDITY_MANAGER_ADDRESS if cdp_wallet else owner
+            # For LiquidityManager positions (staked), use the LiquidityManager contract address for Sugar lookups
+            # The NFT is held by the gauge when staked, so we need to query Sugar with LiquidityManager address
+            # For legacy positions, use the actual NFT owner
+            if staked:
+                sugar_owner = self.LIQUIDITY_MANAGER_ADDRESS
+            else:
+                sugar_owner = owner
+
+            logger.info(f"Position {token_id} - Using Sugar owner: {sugar_owner}, staked: {staked}, cdp_wallet: {cdp_wallet}")
             sugar_position = await self._fetch_position_from_sugar(token_id, sugar_owner, is_unstaked=not staked)
 
             logger.info(f"Position {token_id} - Sugar data: {sugar_position}")
