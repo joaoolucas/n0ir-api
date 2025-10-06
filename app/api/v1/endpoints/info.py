@@ -77,7 +77,6 @@ async def enrich_position_with_pool_data(
                     'collateral_supply_apy': live_hedge.collateral_supply_apy,
                     'hedged_asset_borrow_apy': live_hedge.hedged_asset_borrow_apy
                 }
-                logger.info(f"Position {position.nft_token_id} - Live hedge info: {live_hedge_data}")
         except Exception as e:
             logger.warning(f"Could not fetch live hedge info for position {position.nft_token_id}: {e}")
 
@@ -453,8 +452,6 @@ async def batch_enrich_positions(positions: List, db: AsyncSession) -> List[dict
             else:
                 pool_data_map[addr.lower()] = result
 
-        logger.info(f"Fetched {len(pool_data_map)} pools in parallel for {len(positions)} positions")
-
     # Enrich all positions using the cached pool and transaction data
     enriched = []
     for position in positions:
@@ -647,8 +644,6 @@ async def get_transactions(
     service = UserService(db)
     sync_result = await service.sync_blockchain_data(user_id)
 
-    if sync_result.get('success'):
-        logger.info(f"Synced {sync_result.get('transactions_synced', 0)} transactions for user {user_id}")
     transactions = await service.get_user_transactions(
         user_id=user_id,
         limit=limit,
@@ -859,7 +854,6 @@ async def get_performance(
                         event_type="BALANCE_CHECK",
                         has_deposited_50_usdc=has_deposited_50
                     )
-                    logger.info(f"Published balance check event for {user_id}: {wallet_balance} USDC")
                 except Exception as e:
                     logger.warning(f"Could not publish balance event: {e}")
                     # Continue even if event publishing fails
@@ -933,7 +927,6 @@ async def get_performance(
 
         if total_value > 0:
             apr = weighted_apr_sum / total_value
-            logger.info(f"Calculated weighted APR: {apr} from {len(enriched_active_positions)} positions")
 
     # Return performance data
     return PerformanceResponse(
@@ -992,29 +985,6 @@ async def get_vault_strategy(
             db=db,
             pool_address=pool_address
         )
-
-        # Log strategy details
-        logger.info(f"Vault strategy for user {user_id}:")
-        logger.info(f"  Action: {strategy.action}")
-        logger.info(f"  Total capital: ${strategy.capital.total_usd}")
-
-        if strategy.action == "no_action":
-            # Log performance data for no_action
-            if strategy.performance:
-                logger.info(f"  Wallet balance: ${strategy.performance.wallet_balance}")
-                logger.info(f"  Positions value: ${strategy.performance.positions_value}")
-                logger.info(f"  Total balance: ${strategy.performance.total_balance}")
-                logger.info(f"  Active positions: {strategy.performance.active_positions}")
-                logger.info(f"  Realized PnL: ${strategy.performance.realized_pnl_usdc}")
-                logger.info(f"  Total PnL: ${strategy.performance.pnl_usdc}")
-        elif strategy.simulation:
-            # Log simulation data for actionable strategies
-            logger.info(f"  Collateral: ${strategy.simulation.collateral_amount}")
-            logger.info(f"  Borrow: ${strategy.simulation.borrow_amount_usd}")
-            logger.info(f"  Delta-neutral score: {strategy.simulation.delta_neutral_score:.4f}")
-            logger.info(f"  Health factor: ${strategy.simulation.expected_health_factor:.2f}")
-            if strategy.aerodrome_pool:
-                logger.info(f"  Aerodrome LP: ${strategy.aerodrome_pool.amount_usdc}")
 
         if strategy.monitoring and strategy.monitoring.alerts:
             logger.warning(f"  ⚠️ {len(strategy.monitoring.alerts)} position(s) need attention")

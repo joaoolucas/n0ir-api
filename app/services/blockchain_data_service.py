@@ -199,18 +199,14 @@ class BlockchainDataService:
                 'eth_wallet',
                 {'wallet': wallet_address, 'start': start_time.isoformat()}
             )
-            
-            logger.info(f"Fetching ETH transactions for wallet {wallet_address}")
-            
+
             # Execute ETH query
             eth_result = await self.cdp_client.execute_query(
                 eth_query,
                 cache_key=eth_cache_key,
                 cache_ttl=60
             )
-            
-            logger.info(f"Found {len(eth_result.result)} ETH transactions")
-            
+
             # Add ETH transactions
             for row in eth_result.result:
                 row['tx_type'] = 'eth_transaction'
@@ -235,18 +231,14 @@ class BlockchainDataService:
                     'usdc_wallet',
                     {'wallet': wallet_address, 'start': start_time.isoformat()}
                 )
-                
-                logger.info(f"Fetching USDC transfers for wallet {wallet_address}")
-                
+
                 # Execute USDC query
                 usdc_result = await self.cdp_client.execute_query(
                     usdc_query,
                     cache_key=usdc_cache_key,
                     cache_ttl=60
                 )
-                
-                logger.info(f"Found {len(usdc_result.result)} USDC transfer events")
-                
+
                 # Parse USDC transfers
                 for row in usdc_result.result:
                     # Extract addresses from topics

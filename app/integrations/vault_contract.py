@@ -327,7 +327,6 @@ class VaultContract:
                 logger.error(f"  Sample errors: {errors[:3]}")
             raise ValueError("Could not find a viable hedge strategy - all simulations failed or returned unhealthy positions")
 
-        logger.info(f"Found optimal strategy with delta-neutral score: {best_score:.4f}")
         return best_strategy
 
     def get_user_positions(self, wallet_address: str) -> list:

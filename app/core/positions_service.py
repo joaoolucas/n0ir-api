@@ -331,9 +331,7 @@ class PositionsService:
                 return fallback_price
             else:
                 logger.warning(f"Could not determine price for token {token_address} and no fallback available")
-        else:
-            logger.info(f"Got price for {token_address}: ${price}")
-        
+
         return price
     
     async def _get_token_decimals(self, token_address: str) -> int:
@@ -400,8 +398,6 @@ class PositionsService:
             # Find the position with matching ID
             for position in positions_data:
                 if position[0] == position_id:  # First element is position ID
-                    logger.info(f"Found position {position_id} in Sugar data")
-                    
                     if is_unstaked:
                         # For unstaked positions, we use amount0 and amount1 which represent the token amounts
                         # positionsUnstakedConcentrated returns same structure as positions

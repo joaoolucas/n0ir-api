@@ -164,7 +164,6 @@ class UserService:
             user.updated_at = datetime.utcnow()
             await self.db.commit()
             await self.db.refresh(user)
-            logger.info(f"Successfully updated wallet for user {user_id}")
         else:
             logger.warning(f"User {user_id} already has wallet {user.cdp_wallet_address}, not updating to {wallet_address}")
         
@@ -864,8 +863,7 @@ class UserService:
             # For now, skip blockchain fetch and use database values
             # The blockchain fetch might be failing or returning None
             final_value_usdc = position.current_value_usdc or position.entry_amount_usdc
-            logger.info(f"Using database value for position {nft_token_id}: current={position.current_value_usdc}, entry={position.entry_amount_usdc}, using={final_value_usdc}")
-        
+
         # Calculate realized P&L if not provided
         if realized_pnl_usdc is None:
             realized_pnl_usdc = final_value_usdc - position.entry_amount_usdc
@@ -923,11 +921,7 @@ class UserService:
         
         # Log the transaction details for debugging
         logger.info(f"Created POSITION_CLOSED transaction: id={transaction.id}, amount={float(amount_returned)}, status={transaction.status}")
-        
-        # Double-check the balance immediately after
-        test_balance = await self.get_user_balance(user_id)
-        logger.info(f"Balance after closing position {nft_token_id}: {test_balance} USDC (should be {amount_returned})")
-        
+
         logger.info(f"Closed position {nft_token_id} for user {user_id}, returned {amount_returned} USDC")
         return position
     

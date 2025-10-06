@@ -158,8 +158,6 @@ class WalletTransactionService:
             success = False
             
             while retry_count < max_retries and not success:
-                logger.info(f"Fetching page {page_count + 1} for wallet {wallet_address}...")
-                
                 params = {"limit": min(batch_size, max_transactions - len(all_transactions))}
                 if page:
                     params["page"] = page
@@ -177,9 +175,7 @@ class WalletTransactionService:
                         all_transactions.extend(transactions)
                         page_count += 1
                         success = True
-                        
-                        logger.info(f"  Found {len(transactions)} transactions (total: {len(all_transactions)})")
-                        
+
                         # Check if there are more pages
                         has_more = data.get("has_more", False)
                         next_page = data.get("next_page")
@@ -431,7 +427,6 @@ class WalletTransactionService:
                 w3 = Web3(Web3.HTTPProvider(settings.rpc_url))
                 return w3.eth.get_transaction_receipt(tx_hash)
 
-            logger.info(f"Fetching RPC logs for tx {tx_hash[:10]}...")
             # Run sync web3 call in thread pool to avoid blocking event loop
             receipt = await asyncio.to_thread(_sync_fetch)
 
@@ -444,7 +439,6 @@ class WalletTransactionService:
                     "data": log.data.hex() if hasattr(log.data, 'hex') else log.data
                 })
 
-            logger.info(f"Found {len(logs)} logs from RPC for {tx_hash[:10]}...")
             return logs
         except Exception as e:
             logger.error(f"Failed to fetch RPC logs for {tx_hash}: {e}")
@@ -509,7 +503,6 @@ class WalletTransactionService:
                                     if len(data) >= 64:
                                         amount = int(data[0:64], 16)
                                         usdc_returned += amount
-                                        logger.info(f"Found USDC return: {amount/1e6:.6f} USDC from LiquidityManager to CDP wallet")
                             except Exception as e:
                                 logger.warning(f"Failed to parse USDC Transfer event: {e}")
 
@@ -801,10 +794,6 @@ class WalletTransactionService:
                                 # Use shared parsing method with RPC logs
                                 event_data, usdc_amount, hedge_debt_usd_value = await self._parse_position_created_data(data, traces_from_rpc, cdp_wallet)
 
-                                logger.info(f"✅ Found PositionCreated in RPC logs: position {position_id} in pool {pool_addr}, Net USDC: {usdc_amount/1e6:.2f}")
-                                if event_data:
-                                    logger.info(f"   LP: {event_data.get('usdc_invested', 0)/1e6:.2f}, Collateral: {event_data.get('hedge_collateral', 0)/1e6:.2f}, Debt: ${hedge_debt_usd_value:.2f}")
-
                                 rpc_position_created = {
                                     "method_name": "openPosition",
                                     "nft_token_id": position_id,
@@ -860,7 +849,6 @@ class WalletTransactionService:
                                     except Exception as e:
                                         logger.warning(f"Failed to parse RPC PositionClosed data: {e}")
 
-                                logger.info(f"✅ Found PositionClosed in RPC logs: position {position_id} in pool {pool_addr}, USDC returned: {usdc_amount/1e6:.2f}")
                                 rpc_position_closed = {
                                     "method_name": "closePosition",
                                     "nft_token_id": position_id,
@@ -1115,13 +1103,11 @@ class WalletTransactionService:
                                 if from_addr_log == owner_wallet and to_addr_log == cdp_wallet and amount > 0:
                                     found_deposit = True
                                     deposit_amount += amount
-                                    logger.info(f"Found deposit in logs: {amount / 1_000_000:.2f} USDC from owner to CDP")
 
                                 # Check for withdrawal: CDP wallet -> owner
                                 elif from_addr_log == cdp_wallet and to_addr_log == owner_wallet and amount > 0:
                                     found_withdrawal = True
                                     withdrawal_amount += amount
-                                    logger.info(f"Found withdrawal in logs: {amount / 1_000_000:.2f} USDC from CDP to owner")
                             except Exception as e:
                                 logger.warning(f"Failed to parse USDC transfer amount: {e}")
 
@@ -1432,14 +1418,12 @@ class WalletTransactionService:
             # If this is a POSITION_CLOSED transaction, update the position status
             elif tx_type == "POSITION_CLOSED":
                 if position_id_value:
-                    logger.info(f"Closing position {position_id_value} for tx {details['tx_hash'][:10]}...")
                     await self._close_position_if_needed(user_id, position_id_value, details["tx_hash"], amount_usdc)
                 else:
                     # Try to find the position to close based on transaction timing and amount
                     logger.warning(f"POSITION_CLOSED detected without NFT ID, attempting to find position...")
                     found_position_id = await self._find_position_to_close(user_id, amount_usdc, details)
                     if found_position_id:
-                        logger.info(f"Found position {found_position_id} to close for tx {details['tx_hash'][:10]}...")
                         await self._close_position_if_needed(user_id, found_position_id, details["tx_hash"], amount_usdc)
                         # Update the transaction with the found position_id
                         transaction.position_id = found_position_id
@@ -1707,7 +1691,6 @@ class WalletTransactionService:
 
             if len(positions) == 1:
                 # If there's only one active position, it must be the one being closed
-                logger.info(f"Found single active position {positions[0].token_id} to close")
                 return positions[0].token_id
 
             elif len(positions) > 1:
@@ -1725,7 +1708,6 @@ class WalletTransactionService:
                         best_match = position
 
                 if best_match and best_diff < float(amount_usdc) * 0.5:  # Within 50% of return amount
-                    logger.info(f"Found best matching position {best_match.token_id} with entry {best_match.entry_amount_usdc} USDC")
                     return best_match.token_id
                 else:
                     logger.warning(f"Could not confidently match position. Found {len(positions)} active positions")

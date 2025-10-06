@@ -104,8 +104,7 @@ class BlockchainService:
             
             # Cache the result
             self._balance_cache[address] = (balance, time.time())
-            
-            logger.info(f"Fetched USDC balance for {address}: ${balance:.6f}")
+
             return balance
             
         except Exception as e:
@@ -137,8 +136,7 @@ class BlockchainService:
             
             # Convert to ETH
             balance = float(balance_wei) / 1e18
-            
-            logger.info(f"ETH balance for {address}: {balance:.6f} ETH")
+
             return balance
             
         except Exception as e:

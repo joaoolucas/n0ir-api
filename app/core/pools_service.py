@@ -76,15 +76,13 @@ class PoolsService:
             return cached_result
         
         logger.debug(f"Cache miss for pools list, fetching from blockchain")
-        
+
         # For fast initial loading, skip expensive operations
         # We'll fetch basic pool data without individual price lookups
-        
+
         # Directly fetch from Sugar contract
-        logger.info(f"Fetching pools: type={pool_type}, filters applied")
         pools_raw = await self._fetch_pools_fast(pool_type, blacklist)
-        logger.debug(f"Fetched {len(pools_raw)} raw pools from Sugar contract")
-        
+
         # Quick filtering without price fetches
         filtered_pools = []
         for pool_data in pools_raw:
@@ -102,11 +100,10 @@ class PoolsService:
         start = offset or 0
         end = start + (limit or 100)
         paginated_pools = filtered_pools[start:end]
-        
+
         # Convert to response format with minimal processing
         pools = await self._process_pools_minimal(paginated_pools)
-        logger.info(f"Processed {len(pools)} pools for response")
-        
+
         result = {
             "pools": pools,
             "pagination": {

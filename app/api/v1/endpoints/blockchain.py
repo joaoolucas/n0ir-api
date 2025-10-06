@@ -64,10 +64,8 @@ async def get_pool(
 
     Returns comprehensive data about a single concentrated liquidity pool.
     """
-    logger.info(f"GET /pools/{address} - IP: {request.client.host}")
     try:
         pool = await pools_service.get_pool(address)
-        logger.info(f"Successfully fetched pool {address}")
         return pool
 
     except Exception as e:
@@ -138,8 +136,6 @@ async def get_positions(
 
     At least one parameter must be provided.
     """
-    logger.info(f"GET /positions - IP: {request.client.host} - position_id={position_id}, owner={owner}, pool={pool}, in_range={in_range}, all_active={all_active}")
-
     # Handle single position request by ID
     if position_id is not None:
         try:
@@ -159,7 +155,6 @@ async def get_positions(
                 else:
                     pool_name = symbol
                 pool_apr = pool_data.get('apr', 0)  # Get APR from pool data
-                logger.info(f"Found pool name {pool_name} with APR {pool_apr}% for pool {position.pool_address}")
             except Exception as e:
                 logger.warning(f"Could not fetch pool info for {position.pool_address}: {e}")
 
@@ -167,7 +162,6 @@ async def get_positions(
             position_dict['pool_name'] = pool_name
             position_dict['apr'] = pool_apr
 
-            logger.info(f"Successfully fetched position {position_id} via unified endpoint")
             return PositionDetailResponse(position=PositionInfo(**position_dict))
 
         except ValueError as e:
@@ -238,7 +232,6 @@ async def get_positions(
                 )
                 positions.append(position_info)
 
-            logger.info(f"Successfully fetched {len(positions)} active positions for agent-manager")
             return PositionListResponse(
                 positions=positions,
                 total=len(positions)
@@ -274,7 +267,6 @@ async def get_positions(
         # Currently only owner filter is implemented
         if owner:
             positions = await positions_service.get_positions_by_owner(owner)
-            logger.info(f"Successfully fetched {len(positions)} positions for owner {owner}")
 
             # Apply additional filters if provided (future enhancement)
             # if pool:
@@ -349,10 +341,8 @@ async def get_token_info(
 
     Returns token metadata including symbol, decimals, name, and current price.
     """
-    logger.info(f"GET /tokens/{address} - IP: {request.client.host}")
     try:
         token_info = await pools_service.get_token_info(address)
-        logger.info(f"Successfully fetched token info for {address}")
         return token_info
 
     except Exception as e:
@@ -425,8 +415,6 @@ async def get_hedge_position(
 
     At least one parameter (token_id or wallet) must be provided.
     """
-    logger.info(f"GET /hedge - IP: {request.client.host} - token_id={token_id}, wallet={wallet}")
-
     # Validate that at least one parameter is provided
     if token_id is None and wallet is None:
         raise HTTPException(
@@ -463,16 +451,8 @@ async def get_hedge_position(
 
         # Check if wallet has any positions
         if not position.positions:
-            logger.info(f"No hedge positions found for token_id={token_id}, wallet={wallet}")
             # Still return the response with empty positions
             return position
-
-        logger.info(f"Successfully fetched hedge position for token_id={token_id}, wallet={wallet}")
-        logger.info(f"  Total positions: {len(position.positions)}")
-        logger.info(f"  Total collateral: ${position.total_collateral_usd}")
-        logger.info(f"  Total debt: ${position.total_debt_usd}")
-        logger.info(f"  Global health factor: {position.global_health.health_factor}")
-        logger.info(f"  Protocol at risk: {position.global_health.is_at_risk}")
 
         return position
 

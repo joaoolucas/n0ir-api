@@ -59,7 +59,6 @@ class VaultStrategyService:
 
             # Get wallet balance
             balance = await blockchain_service.get_usdc_balance(user.cdp_wallet_address)
-            logger.info(f"User {user_id} balance: ${balance:.2f}")
 
             # Minimum amount required to enter a position
             MIN_POSITION_AMOUNT = Decimal("40")
@@ -119,7 +118,6 @@ class VaultStrategyService:
                     'current_tick': pool_data.get('current_tick', 0),
                     'tick_spacing': pool_data.get('tick_spacing', 100)
                 }
-                logger.info(f"Using pool {pool_metrics['symbol']} with APR {pool_metrics['apr']:.2f}%")
             except Exception as e:
                 logger.warning(f"Could not fetch pool data for {pool_address}: {e}")
                 pool_metrics = {

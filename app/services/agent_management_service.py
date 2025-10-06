@@ -36,8 +36,7 @@ class AgentManagementService:
         try:
             # Handle Railway template variable format
             redis_url = self.redis_url
-            logger.info(f"Attempting Redis connection with URL: {redis_url[:30] if redis_url else 'None'}...")
-            
+
             # Check if it's a template variable that wasn't expanded
             if redis_url and redis_url.startswith('${{'):
                 logger.error(f"Redis URL appears to be an unexpanded template variable: {redis_url}")
@@ -45,9 +44,8 @@ class AgentManagementService:
             elif redis_url and not redis_url.startswith(('redis://', 'rediss://')):
                 logger.warning(f"Invalid Redis URL format (should start with redis:// or rediss://): {redis_url[:30]}...")
                 redis_url = None
-            
+
             if redis_url:
-                logger.info(f"Creating async Redis client with URL: {redis_url[:30]}...")
                 # Create both sync (for publishing) and async (for subscribing) clients
                 self.redis_client = redis.from_url(
                     redis_url,
@@ -60,7 +58,6 @@ class AgentManagementService:
                 )
                 # Test connection
                 await self.async_redis_client.ping()
-                logger.info(f"Async Redis connection established successfully to {redis_url[:30]}")
                 self._initialized = True
             else:
                 logger.warning("Redis URL not configured, running without Redis (agent features disabled)")
@@ -77,8 +74,7 @@ class AgentManagementService:
         await self._ensure_initialized()
         if self.async_redis_client and self._listener_task is None:
             self._listener_task = asyncio.create_task(self._listen_for_wallet_creation())
-            logger.info("Started wallet creation listener task")
-    
+
     async def _listen_for_wallet_creation(self):
         """Listen for wallet creation events from agent manager."""
         if not self.async_redis_client:
@@ -90,24 +86,20 @@ class AgentManagementService:
             self._pubsub = self.async_redis_client.pubsub()
             # Listen for wallet_created, wallet_ready, agent_responses, transaction_complete, and position:created
             await self._pubsub.subscribe('wallet_created', 'wallet_ready', 'agent_responses', 'transaction_complete', 'position:created')
-            logger.info("Subscribed to channels: wallet_created, wallet_ready, agent_responses, transaction_complete, position:created")
-            
+
             # Use async iterator for messages
             async for message in self._pubsub.listen():
                 try:
                     logger.debug(f"Received pubsub message: type={message.get('type')}, channel={message.get('channel')}")
-                    
+
                     if message and message['type'] == 'message':
-                        logger.info(f"Processing message from channel {message['channel']}: {message['data'][:100]}")
                         data = json.loads(message['data'])
                         user_id = data.get('user_id')
-                        logger.info(f"Message for user_id: {user_id}, channel: {message['channel']}")
-                        
+
                         # Handle wallet_ready or wallet_created events to update database
                         if message['channel'] in ['wallet_ready', 'wallet_created']:
                             wallet_address = data.get('wallet_address')
                             if user_id and wallet_address:
-                                logger.info(f"Received {message['channel']} for user {user_id}: {wallet_address}")
                                 # Update the user's wallet address in the database
                                 try:
                                     from app.services.user_service import UserService
@@ -116,7 +108,6 @@ class AgentManagementService:
                                         user_service = UserService(db)
                                         await user_service.update_user_wallet(user_id, wallet_address)
                                         break
-                                    logger.info(f"Successfully updated wallet address in database for user {user_id}")
                                 except Exception as e:
                                     logger.error(f"Failed to update wallet address for user {user_id}: {e}")
                         
@@ -130,8 +121,7 @@ class AgentManagementService:
                                     if not future.done():
                                         future.set_result(data)
                                     del self.wallet_callbacks[callback_key]
-                                    logger.info(f"Processed withdrawal callback for user {user_id}")
-                        
+
                         # Handle position:created events
                         elif message['channel'] == 'position:created':
                             await self._handle_position_created(data)
@@ -149,7 +139,6 @@ class AgentManagementService:
                             if not future.done():
                                 future.set_result(data)
                             del self.wallet_callbacks[user_id]
-                            logger.info(f"Processed callback for user {user_id}")
                 except Exception as e:
                     logger.error(f"Error processing wallet creation message: {e}")
                     

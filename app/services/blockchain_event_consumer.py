@@ -214,11 +214,10 @@ class BlockchainEventConsumer:
                 from decimal import Decimal
                 
                 service = UserService(db)
-                
+
                 if event_type == "position.created":
                     nft_token_id = data.get('nft_token_id')
-                    logger.info(f"Processing position.created event: user={user_id}, token_id={nft_token_id}")
-                    
+
                     # Update user metrics
                     user = await service.get_user(user_id)
                     if user:
@@ -229,11 +228,10 @@ class BlockchainEventConsumer:
                         logger.success(
                             f"Position {nft_token_id} created for user {user_id} - confirmed on blockchain"
                         )
-                        
+
                 elif event_type == "position.updated":
                     nft_token_id = data.get('nft_token_id')
-                    logger.info(f"Processing position.updated event: user={user_id}, token_id={nft_token_id}")
-                    
+
                     # Recalculate user PnL with updated position values
                     await service.recalculate_user_pnl(user_id)
                     

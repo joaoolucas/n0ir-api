@@ -50,8 +50,6 @@ class PositionSyncService:
             logger.debug("No unsynced POSITION_CREATED transactions found")
             return {"synced": 0, "failed": 0, "skipped": 0}
 
-        logger.info(f"Found {len(unsynced_transactions)} unsynced POSITION_CREATED transactions")
-
         synced = 0
         failed = 0
         skipped = 0
@@ -207,7 +205,6 @@ class PositionSyncService:
                         if topic0 == increase_liquidity_topic and len(log.topics) >= 2:
                             # tokenId is the first indexed parameter (topic[1])
                             token_id = int(log.topics[1].hex(), 16)
-                            logger.info(f"Found token_id {token_id} from IncreaseLiquidity event")
                             return token_id
 
                         # Transfer event (NFT mint)
@@ -217,7 +214,6 @@ class PositionSyncService:
                             from_address = log.topics[1].hex()
                             if from_address == "0" * 64:  # Mint from zero address (no 0x)
                                 token_id = int(log.topics[3].hex(), 16)
-                                logger.info(f"Found token_id {token_id} from Transfer (mint) event")
                                 return token_id
 
             # Alternative: Look for any Transfer event to the user's CDP wallet
@@ -234,7 +230,6 @@ class PositionSyncService:
                         if topic0 == transfer_topic and len(log.topics) >= 4:
                             # Extract the token_id regardless of from/to addresses
                             token_id = int(log.topics[3].hex(), 16)
-                            logger.info(f"Found token_id {token_id} from Transfer event (alternative method)")
                             return token_id
 
             logger.warning(f"No token_id found in events for tx {tx_hash}")
