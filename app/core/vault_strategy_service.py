@@ -446,23 +446,23 @@ class VaultStrategyService:
         """
         logger.info(f"Generating no_action strategy for {user_id}: {reason}")
 
-        # Get performance data from the performance endpoint
-        from app.api.v1.endpoints.info import get_performance
+        # Get performance data from user service
+        from app.services.user_service import UserService
 
         try:
-            # Call the performance endpoint to get accurate APR and PnL data
-            performance_response = await get_performance(user_id=user_id, period=None, db=db)
+            service = UserService(db)
+            perf_data = await service.calculate_user_performance(user_id)
 
             performance = PerformanceData(
-                apr=performance_response.apr,
-                wallet_balance=performance_response.wallet_balance,
-                positions_value=performance_response.positions_value,
-                total_balance=performance_response.total_balance,
-                active_positions=performance_response.active_positions,
-                realized_pnl_usdc=performance_response.realized_pnl_usdc,
-                realized_pnl_pct=performance_response.realized_pnl_pct,
-                pnl_usdc=performance_response.pnl_usdc,
-                pnl_pct=performance_response.pnl_pct
+                apr=perf_data.get('apr'),
+                wallet_balance=Decimal(str(perf_data.get('wallet_balance', balance))),
+                positions_value=Decimal(str(perf_data.get('positions_value', 0))),
+                total_balance=Decimal(str(perf_data.get('total_balance', balance))),
+                active_positions=perf_data.get('active_positions', 0),
+                realized_pnl_usdc=Decimal(str(perf_data.get('realized_pnl_usdc', 0))),
+                realized_pnl_pct=perf_data.get('realized_pnl_pct'),
+                pnl_usdc=Decimal(str(perf_data.get('pnl_usdc', 0))),
+                pnl_pct=perf_data.get('pnl_pct')
             )
         except Exception as e:
             logger.error(f"Error fetching performance data for {user_id}: {e}")
