@@ -642,7 +642,101 @@ class PoolsService:
         result["price_usd"] = price_usd
         
         return self._serialize_token(result)
-    
+
+    async def _get_price_from_aerodrome_pool(self, token_address: str, pool_address: str, is_token0: bool) -> Optional[float]:
+        """
+        Calculate token price from Aerodrome pool using slot0.
+
+        Args:
+            token_address: Address of token to price
+            pool_address: Address of Aerodrome pool
+            is_token0: Whether token is token0 in the pool
+
+        Returns:
+            Token price in USD, or None if calculation fails
+        """
+        try:
+            # Get pool contract
+            pool_abi = [
+                {
+                    "name": "slot0",
+                    "type": "function",
+                    "stateMutability": "view",
+                    "inputs": [],
+                    "outputs": [
+                        {"name": "sqrtPriceX96", "type": "uint160"},
+                        {"name": "tick", "type": "int24"},
+                        {"name": "observationIndex", "type": "uint16"},
+                        {"name": "observationCardinality", "type": "uint16"},
+                        {"name": "observationCardinalityNext", "type": "uint16"},
+                        {"name": "unlocked", "type": "bool"}
+                    ]
+                },
+                {
+                    "name": "token0",
+                    "type": "function",
+                    "stateMutability": "view",
+                    "inputs": [],
+                    "outputs": [{"type": "address"}]
+                },
+                {
+                    "name": "token1",
+                    "type": "function",
+                    "stateMutability": "view",
+                    "inputs": [],
+                    "outputs": [{"type": "address"}]
+                }
+            ]
+
+            pool_contract = self.w3.eth.contract(
+                address=Web3.to_checksum_address(pool_address),
+                abi=pool_abi
+            )
+
+            # Get slot0 data and tokens
+            slot0_data = pool_contract.functions.slot0().call()
+            sqrt_price_x96 = slot0_data[0]
+
+            # Get token contracts to fetch decimals
+            token_contract = self.w3.eth.contract(
+                address=Web3.to_checksum_address(token_address),
+                abi=TOKEN_ABI
+            )
+            token_decimals = token_contract.functions.decimals().call()
+
+            # Convert sqrtPriceX96 to price
+            # sqrtPrice = sqrt(token1/token0) * 2^96
+            # price = (sqrtPrice / 2^96)^2
+            price = (sqrt_price_x96 / (2**96)) ** 2
+
+            # Adjust for decimals
+            # If token is token0, price is in token1 per token0, so we want token0/token1 = 1/price
+            # If token is token1, price is in token0 per token1, so we want token1/token0 = price
+
+            # USDC has 6 decimals, WETH/cbBTC have 18 decimals
+            # For WETH/USDC pool: if WETH is token0, price gives USDC/WETH, we want WETH/USDC
+            # For cbBTC/USDC pool: if cbBTC is token0, price gives USDC/cbBTC, we want cbBTC/USDC
+
+            if is_token0:
+                # Token is token0, price is token1/token0
+                # We want token0 price in token1, so invert
+                # Adjust for decimal difference: multiply by 10^(token1_decimals - token0_decimals)
+                # For WETH (18 decimals) / USDC (6 decimals): multiply by 10^(6-18) = 10^-12
+                adjusted_price = (1 / price) * (10 ** (6 - token_decimals))
+            else:
+                # Token is token1, price is token1/token0
+                # We want token1 price in token0
+                # Adjust for decimal difference: multiply by 10^(token0_decimals - token1_decimals)
+                # For USDC (6 decimals) / WETH (18 decimals): multiply by 10^(18-6) = 10^12
+                adjusted_price = price * (10 ** (token_decimals - 6))
+
+            logger.debug(f"Calculated price for {token_address} from pool {pool_address}: ${adjusted_price:.2f}")
+            return adjusted_price
+
+        except Exception as e:
+            logger.warning(f"Failed to get price from Aerodrome pool {pool_address} for {token_address}: {e}")
+            return None
+
     async def _fetch_token_prices_from_dexscreener(self, addresses: List[str]) -> Dict[str, float]:
         """Fetch token prices from DexScreener API with CoinGecko fallback"""
         import aiohttp
@@ -650,16 +744,24 @@ class PoolsService:
 
         prices = {}
 
-        # Known tokens with fixed prices or CoinGecko IDs (lowercase addresses)
+        # Known tokens with fixed prices or Aerodrome pool mappings (lowercase addresses)
         known_tokens = {
             # Stablecoins
             "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913".lower(): {"type": "stable", "price": 1.0},  # USDC on Base
             "0x50c5725949a6f0c72e6c4a641f24049a917db0cb".lower(): {"type": "stable", "price": 1.0},  # DAI on Base
             "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca".lower(): {"type": "stable", "price": 1.0},  # USDbC on Base
-            # Major tokens with CoinGecko IDs
-            "0x4200000000000000000000000000000000000006".lower(): {"type": "coingecko", "id": "weth"},  # WETH on Base
-            "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf".lower(): {"type": "coingecko", "id": "coinbase-wrapped-btc"},  # cbBTC on Base
-            "0x940181a94a35a4569e4529a3cdfb74e38fd98631".lower(): {"type": "coingecko", "id": "aerodrome-finance"},  # AERO on Base
+            # Major tokens with Aerodrome pools
+            "0x4200000000000000000000000000000000000006".lower(): {  # WETH on Base
+                "type": "aerodrome",
+                "pool": "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59",  # WETH/USDC pool
+                "is_token0": True
+            },
+            "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf".lower(): {  # cbBTC on Base
+                "type": "aerodrome",
+                "pool": "0x44ecc644449fc3a9858d2007ab5cd6645f22851f",  # cbBTC/USDC pool
+                "is_token0": True
+            },
+            "0x940181a94a35a4569e4529a3cdfb74e38fd98631".lower(): {"type": "coingecko", "id": "aerodrome-finance"},  # AERO on Base (keep CoinGecko fallback)
         }
         
         async def fetch_single_token_price(session: aiohttp.ClientSession, address: str) -> tuple[str, float]:
@@ -671,6 +773,19 @@ class PoolsService:
                 token_info = known_tokens[addr_lower]
                 if token_info["type"] == "stable":
                     return (addr_lower, token_info["price"])
+                elif token_info["type"] == "aerodrome":
+                    # Try Aerodrome pool first
+                    try:
+                        price = await self._get_price_from_aerodrome_pool(
+                            address,
+                            token_info["pool"],
+                            token_info["is_token0"]
+                        )
+                        if price and price > 0:
+                            logger.debug(f"Fetched price for {address} from Aerodrome pool: ${price}")
+                            return (addr_lower, price)
+                    except Exception as e:
+                        logger.warning(f"Aerodrome pool pricing failed for {address}: {str(e)}, falling back to DexScreener")
                 elif token_info["type"] == "coingecko":
                     # Try CoinGecko for major tokens
                     try:
