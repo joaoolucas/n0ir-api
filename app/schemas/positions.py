@@ -118,7 +118,7 @@ class HedgedPositionCreate(BaseModel):
     usdc_amount: int = Field(..., description="Amount of USDC to invest")
     range_percentage: int = Field(500, description="Range percentage (500 = 5%)")
     enable_hedge: bool = Field(True, description="Whether to enable hedge")
-    slippage_bps: int = Field(30, description="Slippage tolerance in basis points")
+    slippage_bps: int = Field(10, description="Slippage tolerance in basis points")
     
     class Config:
         json_schema_extra = {
@@ -127,7 +127,7 @@ class HedgedPositionCreate(BaseModel):
                 "usdc_amount": 100000000,
                 "range_percentage": 500,
                 "enable_hedge": True,
-                "slippage_bps": 30
+                "slippage_bps": 10
             }
         }
 
