@@ -396,9 +396,6 @@ class WalletTransactionService:
                 logger.error(f"Failed to fetch RPC logs for {tx_hash[:10]}: {e}")
                 return tx_hash, []
 
-        logger.info(f"⚡ Batch fetching RPC logs for {len(tx_hashes)} transactions...")
-        start_time = time.time()
-
         # Run all RPC calls in parallel using thread pool
         results = await asyncio.gather(*[
             asyncio.to_thread(_sync_fetch, tx_hash) for tx_hash in tx_hashes
@@ -407,16 +404,12 @@ class WalletTransactionService:
         # Convert results to dict
         logs_cache = {tx_hash: logs for tx_hash, logs in results}
 
-        elapsed = time.time() - start_time
-        logger.info(f"⚡ Batch fetched {len(tx_hashes)} RPC receipts in {elapsed:.2f}s ({elapsed/len(tx_hashes):.2f}s avg)")
-
         return logs_cache
 
     async def _fetch_rpc_logs(self, tx_hash: str, logs_cache: Optional[Dict[str, List[Dict]]] = None) -> List[Dict]:
         """Fetch transaction logs directly from RPC when CDP data is incomplete."""
         # Check cache first if provided
         if logs_cache and tx_hash in logs_cache:
-            logger.debug(f"Using cached RPC logs for {tx_hash[:10]}...")
             return logs_cache[tx_hash]
 
         try:
@@ -663,10 +656,6 @@ class WalletTransactionService:
                                     # Use shared parsing method with traces to calculate USDC returned
                                     event_data, usdc_amount, hedge_debt_usd_value = await self._parse_position_created_data(data, traces, cdp_wallet)
 
-                                    logger.info(f"✅ Detected PositionCreated: position {position_id} in pool {pool_addr}, Net USDC: {usdc_amount/1e6:.2f}")
-                                    if event_data:
-                                        logger.info(f"   LP: {event_data.get('usdc_invested', 0)/1e6:.2f}, Collateral: {event_data.get('hedge_collateral', 0)/1e6:.2f}, Debt: ${hedge_debt_usd_value:.2f}")
-
                                     position_created_event = {
                                         "method_name": "openPosition",
                                         "nft_token_id": position_id,
@@ -733,7 +722,6 @@ class WalletTransactionService:
                                         except Exception as e:
                                             logger.warning(f"Failed to parse PositionClosed data field: {e}")
 
-                                    logger.info(f"✅ Detected PositionClosed: position {position_id} in pool {pool_addr}, USDC returned: {usdc_amount/1e6:.2f}")
                                     position_closed_event = {
                                         "method_name": "closePosition",
                                         "nft_token_id": position_id,
@@ -756,8 +744,6 @@ class WalletTransactionService:
 
         # If not found in CDP logs and we have a tx_hash, check RPC logs as fallback
         if not position_event and tx_hash:
-            if not logs_cache:
-                logger.info(f"No position event in CDP data for {tx_hash[:10]}..., fetching from RPC")
             rpc_logs = await self._fetch_rpc_logs(tx_hash, logs_cache)
 
             rpc_position_created = None
@@ -886,8 +872,6 @@ class WalletTransactionService:
             # AERO flows not tracked in new events, set to 0
             position_event["aero_in"] = 0
             position_event["aero_out"] = 0
-
-            logger.info(f"✅ Position event: method={position_event['method_name']}, nft_id={position_event.get('nft_token_id')}, USDC amount={usdc_amount/1e6:.2f}")
             return position_event
 
         return None
@@ -1168,8 +1152,6 @@ class WalletTransactionService:
             )
 
             if details:
-                # Log what we found
-                logger.info(f"Categorized tx {details.get('tx_hash', 'unknown')[:20]}... as {tx_type.value}")
                 categorized[tx_type].append(details)
                 
                 # Track totals
@@ -1186,8 +1168,6 @@ class WalletTransactionService:
                         tx_type=tx_type.value,
                         details=details
                     )
-                else:
-                    logger.info(f"Not saving {tx_type.value} transaction: {details.get('tx_hash', '')[:20]}...")
         
         # Commit all database changes
         await self.db.commit()
@@ -1278,7 +1258,6 @@ class WalletTransactionService:
                     event_data["nft_token_id"] = details["nft_token_id"]
                     event_data["tokenId"] = str(details["nft_token_id"])  # Also store as string with tokenId key
                     event_data["token_id"] = details["nft_token_id"]  # Also store with underscore
-                    logger.info(f"Storing position ID in event_data: nft_token_id={details['nft_token_id']}")
                 if details.get("pool_name"):
                     event_data["pool_name"] = details["pool_name"]
                 if details.get("pool"):
@@ -1311,7 +1290,6 @@ class WalletTransactionService:
             )
 
             self.db.add(transaction)
-            logger.info(f"Saved {tx_type} transaction: {details['tx_hash'][:10]}... Amount: {amount_usdc} USDC, position_id: {position_id_value}")
 
             # If this is a DEPOSIT transaction, publish balance change event for agent manager
             # NOTE: Only update balance if it hasn't been recently synced to avoid duplicates
@@ -1365,7 +1343,6 @@ class WalletTransactionService:
                                         event_type='DEPOSIT',
                                         has_deposited_50_usdc=user.has_deposited_50_usdc
                                     )
-                                    logger.info(f"Published DEPOSIT event for {user_id}: {old_balance} -> {new_balance} USDC")
                                 except Exception as e:
                                     logger.error(f"Failed to publish deposit event: {e}")
 
@@ -1379,12 +1356,8 @@ class WalletTransactionService:
                                         event_type='DEPOSIT',
                                         has_deposited_50_usdc=user.has_deposited_50_usdc
                                     )
-                                    logger.info(f"Published DEPOSIT event to stream for {user_id}")
                                 except Exception as e:
                                     logger.error(f"Failed to publish deposit event to stream: {e}")
-                            else:
-                                logger.info(f"Skipping duplicate deposit event for {user_id} - balance already synced: {db_balance} USDC")
-
                         except Exception as e:
                             logger.warning(f"Failed to check on-chain balance for deduplication: {e}")
                             # Fall back to not publishing to avoid duplicates
@@ -1456,8 +1429,6 @@ class WalletTransactionService:
                     amount_usdc = Decimal(details["amount"]) / Decimal(1_000_000)
                     existing_tx.event_data["amount_usdc"] = float(amount_usdc)
 
-                logger.info(f"Recategorized transaction {details['tx_hash'][:10]}... as {tx_type}")
-
             # IMPORTANT: Check if this is a POSITION_CREATED transaction that hasn't created its position yet
             if existing_tx.tx_type == "POSITION_CREATED":
                 # Get position_id from either the column or event_data
@@ -1488,7 +1459,6 @@ class WalletTransactionService:
                     position = result.scalar_one_or_none()
 
                     if not position:
-                        logger.warning(f"Found POSITION_CREATED transaction without position {position_id}, creating it now...")
                         # Get data from event_data
                         amount_usdc = Decimal(str(existing_tx.event_data.get('amount_usdc', 0))) if existing_tx.event_data else Decimal(0)
                         pool_address = existing_tx.event_data.get('pool') if existing_tx.event_data else None
@@ -1533,7 +1503,6 @@ class WalletTransactionService:
                     position = result.scalar_one_or_none()
 
                     if position and not position.staked:
-                        logger.warning(f"Found STAKING transaction for unstaked position {position_id}, updating it now...")
                         gauge_address = existing_tx.event_data.get('gauge_address') if existing_tx.event_data else None
 
                         await self._update_position_staking(
@@ -1559,7 +1528,6 @@ class WalletTransactionService:
                 active_position = result.scalar_one_or_none()
 
                 if active_position:
-                    logger.warning(f"Found POSITION_CLOSED transaction with ACTIVE position {existing_tx.position_id}, closing it now...")
                     # Use the amount from event_data
                     amount_usdc = Decimal(str(existing_tx.event_data.get('amount_usdc', 0))) if existing_tx.event_data else Decimal(0)
                     await self._close_position_if_needed(
@@ -1870,7 +1838,6 @@ class WalletTransactionService:
                 position.staked = True
                 position.gauge_address = gauge_address
                 # Don't commit here - let the caller handle the commit
-                logger.info(f"Updated position {position_id} as staked to gauge {gauge_address}")
             else:
                 logger.warning(f"Position {position_id} not found when trying to update staking status")
 
@@ -1907,7 +1874,6 @@ class WalletTransactionService:
             existing_position = result.scalar_one_or_none()
 
             if existing_position:
-                logger.info(f"Position {position_id} already exists for user {user_id}")
                 return
 
             # Create new position
@@ -1933,7 +1899,6 @@ class WalletTransactionService:
             self.db.add(new_position)
             # Don't commit here - let the caller handle the commit
             # This ensures all operations happen in the same transaction
-            logger.info(f"Added position {position_id} to session for user {user_id} in pool {pool_name or pool_address}")
 
         except IntegrityError as e:
             # Position might already exist (race condition from concurrent syncs)
@@ -1983,8 +1948,6 @@ class WalletTransactionService:
                 position.realized_pnl_usdc = realized_pnl
                 position.current_value_usdc = final_value_usdc
                 # unrealized_pnl_usdc is a computed property, not a column
-
-                logger.info(f"Closed position {nft_token_id} for user {user_id} with realized PnL: {realized_pnl} USDC")
             else:
                 logger.warning(f"Position {nft_token_id} not found or already closed for user {user_id}")
         except Exception as e:

@@ -47,7 +47,6 @@ class PositionSyncService:
         unsynced_transactions = result.scalars().all()
 
         if not unsynced_transactions:
-            logger.debug("No unsynced POSITION_CREATED transactions found")
             return {"synced": 0, "failed": 0, "skipped": 0}
 
         synced = 0
@@ -91,14 +90,11 @@ class PositionSyncService:
             token_id = await self._extract_token_id_from_tx(tx.tx_hash)
 
             if not token_id:
-                logger.warning(f"Could not extract token_id from tx {tx.tx_hash}")
                 # Mark transaction to avoid repeated attempts
                 if not tx.event_data:
                     tx.event_data = {}
                 tx.event_data["sync_failed"] = "no_token_id_found"
                 return "failed"
-
-            logger.info(f"Extracted token_id {token_id} from tx {tx.tx_hash}")
 
             # Check if position already exists
             existing_position_stmt = select(Position).where(Position.token_id == token_id)
@@ -108,7 +104,6 @@ class PositionSyncService:
             if existing_position:
                 # Link transaction to existing position
                 tx.position_id = token_id
-                logger.info(f"Linked tx {tx.tx_hash} to existing position {token_id}")
                 return "skipped"
 
             # Get position details from blockchain
@@ -166,8 +161,6 @@ class PositionSyncService:
             tx.event_data["token_id"] = token_id
 
             await self.db.flush()  # Flush to get the position ID without committing
-
-            logger.info(f"Created position {token_id} from tx {tx.tx_hash} for user {tx.user_id}")
             return "synced"
 
         except Exception as e:

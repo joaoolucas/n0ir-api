@@ -573,8 +573,6 @@ class BlockchainDataService:
             
             # Combine transactions and transfers
             all_txs = transactions + transfers
-            logger.info(f"Saving {len(all_txs)} transactions to database ({len(transactions)} ETH, {len(transfers)} USDC)")
-            
             saved_count = 0
             for tx_data in all_txs:
                 # Check if transaction already exists
@@ -630,9 +628,8 @@ class BlockchainDataService:
                 )
                 db_session.add(wallet_tx)
                 saved_count += 1
-            
+
             await db_session.commit()
-            logger.info(f"Saved {saved_count} new wallet transactions to database")
             
         except Exception as e:
             logger.error(f"Error saving wallet data to database: {e}")
@@ -706,9 +703,8 @@ class BlockchainDataService:
                     }
                 )
                 db_session.add(event)
-            
+
             await db_session.commit()
-            logger.info(f"Saved {len(events)} liquidity events to database")
             
         except Exception as e:
             logger.error(f"Error saving liquidity events to database: {e}")
