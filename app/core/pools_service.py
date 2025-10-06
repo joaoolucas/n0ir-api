@@ -634,7 +634,7 @@ class PoolsService:
                 raise
         
         # Always fetch fresh price (cache is short TTL)
-        prices = await self._fetch_token_prices_from_dexscreener([address])
+        prices = await self._fetch_token_prices([address])
         price_usd = prices.get(address.lower(), 0)
         
         # Update cached info with price
@@ -748,8 +748,14 @@ class PoolsService:
             logger.warning(f"Failed to get price from Aerodrome pool {pool_address} for {token_address}: {e}")
             return None
 
-    async def _fetch_token_prices_from_dexscreener(self, addresses: List[str]) -> Dict[str, float]:
-        """Fetch token prices from DexScreener API with CoinGecko fallback"""
+    async def _fetch_token_prices(self, addresses: List[str]) -> Dict[str, float]:
+        """
+        Fetch token prices using multiple sources (priority order):
+        1. Aerodrome pool slot0 for WETH/cbBTC
+        2. Fixed prices for stablecoins
+        3. CoinGecko for major tokens
+        4. DexScreener as fallback
+        """
         import aiohttp
         import asyncio
 
@@ -776,7 +782,7 @@ class PoolsService:
         }
         
         async def fetch_single_token_price(session: aiohttp.ClientSession, address: str) -> tuple[str, float]:
-            """Fetch price for a single token from DexScreener or CoinGecko"""
+            """Fetch price for a single token using Aerodrome, stablecoins, CoinGecko, or DexScreener"""
             addr_lower = address.lower()
 
             # Check if it's a known token
@@ -860,7 +866,7 @@ class PoolsService:
         
         # Fetch missing prices
         if addresses_to_fetch:
-            fetched_prices = await self._fetch_token_prices_from_dexscreener(addresses_to_fetch)
+            fetched_prices = await self._fetch_token_prices(addresses_to_fetch)
             prices.update(fetched_prices)
             
             # Cache the fetched prices
