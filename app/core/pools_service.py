@@ -714,14 +714,15 @@ class PoolsService:
             decimals1 = token1_contract.functions.decimals().call()
 
             # Convert sqrtPriceX96 to price
-            # sqrtPriceX96 = sqrt(price) * 2^96, where price = (amount of token1) / (amount of token0)
-            # price = (sqrtPriceX96 / 2^96)^2
-            # Then adjust for decimals: actual_price = price * 10^(decimals1 - decimals0)
+            # sqrtPriceX96 = sqrt(reserve1/reserve0) * 2^96
+            # price = (sqrtPriceX96 / 2^96)^2 gives reserve1/reserve0 in smallest units
+            # To get human-readable: multiply by 10^(decimals0 - decimals1)
+            # This converts from (wei1/wei0) to (token1/token0)
 
             price = (sqrt_price_x96 / (2**96)) ** 2
-            # This gives us token1/token0 in terms of smallest units
-            # Adjust for decimals to get human-readable price
-            price_token1_per_token0 = price * (10 ** (decimals1 - decimals0))
+            # This gives us reserve1/reserve0 in terms of smallest units (wei)
+            # Adjust for decimals to get human-readable price (tokens)
+            price_token1_per_token0 = price * (10 ** (decimals0 - decimals1))
 
             # Now convert to USD
             # For WETH/USDC pool: token0=WETH (18 decimals), token1=USDC (6 decimals)
