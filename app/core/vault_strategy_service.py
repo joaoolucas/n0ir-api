@@ -579,41 +579,23 @@ class VaultStrategyService:
         balance: float
     ) -> MoonwellStrategyResponse:
         """
-        Generate dual position strategy for balances > $500.
-        Allocates based on APR: higher APR pool gets 70%, lower gets 30%
+        Generate dual position strategy for balances >= $500.
+        Fixed allocation: WETH/USDC 70%, USDC/cbBTC 30%
         """
         # Pool addresses
         WETH_USDC_POOL = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59"
         USDC_CBBTC_POOL = "0x4e962BB3889Bf030368F56810A9c96B83CB3E778"
 
-        # Fetch pool data to compare APRs
-        try:
-            weth_pool_data = await pools_service.get_pool(WETH_USDC_POOL)
-            cbbtc_pool_data = await pools_service.get_pool(USDC_CBBTC_POOL)
-
-            weth_apr = weth_pool_data.get('apr', 0) or 0
-            cbbtc_apr = cbbtc_pool_data.get('apr', 0) or 0
-
-            # Allocate more to higher APR pool
-            if weth_apr > cbbtc_apr:
-                WETH_ALLOCATION_PCT = 70
-                CBBTC_ALLOCATION_PCT = 30
-                primary_pool = "WETH/USDC"
-            else:
-                WETH_ALLOCATION_PCT = 30
-                CBBTC_ALLOCATION_PCT = 70
-                primary_pool = "USDC/cbBTC"
-
-            logger.debug(f"APR comparison: WETH/USDC {weth_apr:.2f}% vs USDC/cbBTC {cbbtc_apr:.2f}% - prioritizing {primary_pool}")
-        except Exception as e:
-            logger.warning(f"Failed to fetch pool APRs, using default 70/30 allocation: {e}")
-            WETH_ALLOCATION_PCT = 70
-            CBBTC_ALLOCATION_PCT = 30
+        # Fixed allocation: WETH/USDC gets 70%, USDC/cbBTC gets 30%
+        WETH_ALLOCATION_PCT = 70
+        CBBTC_ALLOCATION_PCT = 30
 
         # Calculate allocations
         total_balance = Decimal(str(balance))
         weth_allocation = total_balance * Decimal(str(WETH_ALLOCATION_PCT)) / Decimal("100")
         cbbtc_allocation = total_balance * Decimal(str(CBBTC_ALLOCATION_PCT)) / Decimal("100")
+
+        logger.info(f"Dual position allocation: WETH/USDC {WETH_ALLOCATION_PCT}% (${weth_allocation}), USDC/cbBTC {CBBTC_ALLOCATION_PCT}% (${cbbtc_allocation})")
 
         # Build position params (order by allocation percentage - highest first)
         positions_data = [
