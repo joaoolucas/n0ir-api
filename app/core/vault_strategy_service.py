@@ -111,14 +111,14 @@ class VaultStrategyService:
                         db=db
                     )
 
-                if balance > DUAL_POSITION_THRESHOLD:
-                    logger.info(f"User {user_id} balance ${balance:.2f} > ${DUAL_POSITION_THRESHOLD} - recommending dual positions")
+                if balance >= DUAL_POSITION_THRESHOLD:
+                    logger.info(f"User {user_id} balance ${balance:.2f} >= ${DUAL_POSITION_THRESHOLD} - recommending dual positions")
                     return await self._generate_dual_position_strategy(
                         user_id=user_id,
                         balance=balance
                     )
 
-                # Single position for balance between $40-$500
+                # Single position for balance between $40-$499
                 logger.info(f"User {user_id} opening single position with ${balance:.2f}")
                 return await self._generate_single_position_strategy(
                     user_id=user_id,
