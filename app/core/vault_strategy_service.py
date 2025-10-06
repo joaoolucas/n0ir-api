@@ -63,6 +63,15 @@ class VaultStrategyService:
 
             # Minimum amount required to enter a position
             MIN_POSITION_AMOUNT = Decimal("40")
+            DUAL_POSITION_THRESHOLD = Decimal("500")
+            WETH_USDC_POOL = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59"
+            USDC_CBBTC_POOL = "0x4e962BB3889Bf030368F56810A9c96B83CB3E778"
+
+            # Get active positions count and pools
+            active_positions, position_pools = await self._get_active_positions_info(user_id, db)
+            position_count = len(active_positions)
+
+            logger.info(f"User {user_id} has {position_count} active positions in pools: {position_pools}")
 
             # Check active positions for monitoring alerts FIRST
             monitoring_info = await self._check_positions_monitoring(user_id, db)
@@ -78,161 +87,148 @@ class VaultStrategyService:
                     monitoring_info=monitoring_info
                 )
 
-            # No alerts - check if balance is sufficient for opening new position
-            if balance <= 0:
-                logger.warning(f"User {user_id} has insufficient balance: ${balance:.2f}")
-                raise ValueError(f"Insufficient USDC balance. Please deposit USDC to your CDP wallet first.")
+            # STRATEGY LOGIC BASED ON POSITION COUNT
 
-            if balance < MIN_POSITION_AMOUNT:
-                logger.warning(f"User {user_id} balance ${balance:.2f} below minimum ${MIN_POSITION_AMOUNT} - returning no_action strategy")
-                return await self._generate_no_action_strategy(
+            # Case: 0 active positions
+            if position_count == 0:
+                if balance <= 0:
+                    logger.warning(f"User {user_id} has no positions and insufficient balance: ${balance:.2f}")
+                    return await self._generate_no_action_strategy(
+                        user_id=user_id,
+                        balance=balance,
+                        pool_address=pool_address,
+                        reason=f"No active positions. Deposit USDC to start earning.",
+                        db=db
+                    )
+
+                if balance < MIN_POSITION_AMOUNT:
+                    logger.warning(f"User {user_id} balance ${balance:.2f} below minimum ${MIN_POSITION_AMOUNT}")
+                    return await self._generate_no_action_strategy(
+                        user_id=user_id,
+                        balance=balance,
+                        pool_address=pool_address,
+                        reason=f"Insufficient balance for new position. Minimum: {MIN_POSITION_AMOUNT} USDC, Current: {balance:.2f} USDC",
+                        db=db
+                    )
+
+                if balance > DUAL_POSITION_THRESHOLD:
+                    logger.info(f"User {user_id} balance ${balance:.2f} > ${DUAL_POSITION_THRESHOLD} - recommending dual positions")
+                    return await self._generate_dual_position_strategy(
+                        user_id=user_id,
+                        balance=balance
+                    )
+
+                # Single position for balance between $40-$500
+                logger.info(f"User {user_id} opening single position with ${balance:.2f}")
+                return await self._generate_single_position_strategy(
                     user_id=user_id,
                     balance=balance,
                     pool_address=pool_address,
-                    reason=f"Insufficient balance for new position. Minimum: {MIN_POSITION_AMOUNT} USDC, Current: {balance:.2f} USDC",
                     db=db
                 )
 
-            # No alerts and sufficient balance - determine strategy type
-            DUAL_POSITION_THRESHOLD = Decimal("500")
+            # Case: 1 active position
+            elif position_count == 1:
+                if balance >= MIN_POSITION_AMOUNT:
+                    # Open second position in the OTHER pool
+                    existing_pool = position_pools[0]
+                    other_pool = USDC_CBBTC_POOL if existing_pool.lower() == WETH_USDC_POOL.lower() else WETH_USDC_POOL
+                    logger.info(f"User {user_id} has 1 position in {existing_pool}, opening second in {other_pool}")
+                    return await self._generate_single_position_strategy(
+                        user_id=user_id,
+                        balance=balance,
+                        pool_address=other_pool,
+                        db=db
+                    )
+                else:
+                    logger.info(f"User {user_id} has 1 position but insufficient balance for second: ${balance:.2f}")
+                    return await self._generate_no_action_strategy(
+                        user_id=user_id,
+                        balance=balance,
+                        pool_address=pool_address,
+                        reason=f"Insufficient balance for second position. Minimum: {MIN_POSITION_AMOUNT} USDC, Current: {balance:.2f} USDC",
+                        db=db
+                    )
 
-            # Check if balance qualifies for dual position strategy
-            if balance > DUAL_POSITION_THRESHOLD:
-                logger.info(f"User {user_id} balance ${balance:.2f} > ${DUAL_POSITION_THRESHOLD} - recommending dual positions")
-                return await self._generate_dual_position_strategy(
+            # Case: 2 active positions
+            elif position_count == 2:
+                # Check if both positions are in different pools
+                if len(set(p.lower() for p in position_pools)) == 1:
+                    # Both positions in same pool - violation!
+                    logger.error(f"User {user_id} has 2 positions in same pool {position_pools[0]} - must close one")
+                    violation_alerts = [
+                        PositionAlert(
+                            position_id=pos.nft_token_id,
+                            pool_address=pos.pool_address,
+                            reason="duplicate_pool_violation",
+                            suggested_action="close",
+                            current_in_range=True,
+                            current_neutral_ratio=None
+                        )
+                        for pos in active_positions
+                    ]
+                    monitoring_info = MonitoringInfo(alerts=violation_alerts)
+                    return await self._generate_monitoring_only_strategy(
+                        user_id=user_id,
+                        balance=balance,
+                        pool_address=pool_address,
+                        monitoring_info=monitoring_info
+                    )
+
+                # Check if we should rebalance with new capital
+                if balance >= MIN_POSITION_AMOUNT:
+                    logger.info(f"User {user_id} has 2 positions + ${balance:.2f} available - recommending rebalance")
+                    rebalance_alerts = [
+                        PositionAlert(
+                            position_id=pos.nft_token_id,
+                            pool_address=pos.pool_address,
+                            reason="rebalance_with_new_capital",
+                            suggested_action="close",
+                            current_in_range=True,
+                            current_neutral_ratio=None
+                        )
+                        for pos in active_positions
+                    ]
+                    monitoring_info = MonitoringInfo(alerts=rebalance_alerts)
+                    return await self._generate_monitoring_only_strategy(
+                        user_id=user_id,
+                        balance=balance,
+                        pool_address=pool_address,
+                        monitoring_info=monitoring_info
+                    )
+                else:
+                    # Max positions reached, capital fully deployed
+                    logger.info(f"User {user_id} has 2 positions, capital fully deployed")
+                    return await self._generate_no_action_strategy(
+                        user_id=user_id,
+                        balance=balance,
+                        pool_address=pool_address,
+                        reason=f"Maximum positions reached (2/2). Capital efficiently deployed.",
+                        db=db
+                    )
+
+            # Case: More than 2 positions (shouldn't happen, but handle it)
+            else:
+                logger.error(f"User {user_id} has {position_count} positions - exceeds maximum of 2")
+                excess_alerts = [
+                    PositionAlert(
+                        position_id=pos.nft_token_id,
+                        pool_address=pos.pool_address,
+                        reason="exceeds_max_positions",
+                        suggested_action="close",
+                        current_in_range=True,
+                        current_neutral_ratio=None
+                    )
+                    for pos in active_positions[2:]  # Alert for positions beyond first 2
+                ]
+                monitoring_info = MonitoringInfo(alerts=excess_alerts)
+                return await self._generate_monitoring_only_strategy(
                     user_id=user_id,
-                    balance=balance
-                )
-
-            # Single position strategy for balance <= $500
-            action = "open"
-
-            # Get pool data
-            try:
-                pool_data = await pools_service.get_pool(pool_address)
-                pool_metrics = {
-                    'apr': pool_data.get('apr', 20),
-                    'volume_24h': pool_data.get('volume_24h', 0),
-                    'tvl_usd': pool_data.get('tvl_usd', 0),
-                    'is_stable': pool_data.get('is_stable', False),
-                    'symbol': pool_data.get('symbol', 'WETH-USDC'),
-                    'current_tick': pool_data.get('current_tick', 0),
-                    'tick_spacing': pool_data.get('tick_spacing', 100)
-                }
-            except Exception as e:
-                logger.warning(f"Could not fetch pool data for {pool_address}: {e}")
-                pool_metrics = {
-                    'apr': 20,
-                    'symbol': 'WETH-USDC',
-                    'current_tick': 0,
-                    'tick_spacing': 100
-                }
-
-            # Calculate suggested range based on pool metrics
-            range_percentage = self._calculate_optimal_range(pool_metrics)
-
-            # Find optimal strategy using vault contract
-            try:
-                optimal_strategy = vault_contract.find_optimal_strategy(
-                    usdc_amount=float(balance),
+                    balance=balance,
                     pool_address=pool_address,
-                    range_percentage=range_percentage
+                    monitoring_info=monitoring_info
                 )
 
-                if not optimal_strategy or 'simulation' not in optimal_strategy:
-                    raise ValueError("Invalid optimal strategy returned from vault contract")
-
-                sim = optimal_strategy['simulation']
-
-                if not sim:
-                    raise ValueError("Simulation data is None")
-
-                # Calculate deadline (15 minutes from now)
-                deadline = int(datetime.utcnow().timestamp()) + 900
-
-                # Build contract parameters
-                contract_params = ContractParameters(
-                    pool=pool_address,
-                    range_percentage=range_percentage,
-                    deadline=deadline,
-                    usdc_amount=Decimal(str(balance)),
-                    slippage_bps=50,  # 0.5% slippage
-                    hedge_ratio=optimal_strategy['hedge_ratio'],
-                    collateral_ratio_bps=optimal_strategy['collateral_ratio_bps']
-                )
-
-                # Build simulation results
-                simulation = VaultHedgeSimulation(
-                    hedge_asset=sim['hedge_asset'],
-                    collateral_amount=Decimal(str(sim['collateral_amount'])),
-                    borrow_amount_usd=Decimal(str(sim['borrow_amount_usd'])),
-                    borrow_amount_asset=Decimal(str(sim['borrow_amount_asset'])),
-                    total_lp_amount=Decimal(str(sim['total_lp_amount'])),
-                    asset_exposure_usd=Decimal(str(optimal_strategy['exposure_usd'])),
-                    net_delta_usd=Decimal(str(optimal_strategy['net_delta_usd'])),
-                    expected_health_factor=Decimal(str(sim['expected_health_factor'])),
-                    liquidation_price=Decimal(str(sim['liquidation_price'])),
-                    delta_neutral_score=Decimal(str(optimal_strategy['delta_neutral_score']))
-                )
-
-                effective_apr = self._calculate_effective_apr(pool_metrics['apr'], range_percentage)
-
-            except Exception as e:
-                logger.error(f"Error finding optimal strategy: {e}")
-                logger.warning("Vault contract simulations failed - using default strategy estimation")
-
-                # Fallback parameters
-                collateral_amount = float(balance) * 0.65
-                borrow_amount = collateral_amount * 0.45
-                lp_amount = collateral_amount + borrow_amount
-
-                deadline = int(datetime.utcnow().timestamp()) + 900
-
-                contract_params = ContractParameters(
-                    pool=pool_address,
-                    range_percentage=range_percentage,
-                    deadline=deadline,
-                    usdc_amount=Decimal(str(balance)),
-                    slippage_bps=50,
-                    hedge_ratio=9500,
-                    collateral_ratio_bps=6500
-                )
-
-                simulation = VaultHedgeSimulation(
-                    hedge_asset=settings.weth_address,
-                    collateral_amount=Decimal(str(collateral_amount)),
-                    borrow_amount_usd=Decimal(str(borrow_amount)),
-                    borrow_amount_asset=Decimal(str(borrow_amount / 4000)),
-                    total_lp_amount=Decimal(str(lp_amount)),
-                    asset_exposure_usd=Decimal(str(lp_amount * 0.5)),
-                    net_delta_usd=Decimal(str(abs(borrow_amount - lp_amount * 0.5))),
-                    expected_health_factor=Decimal("2.0"),
-                    liquidation_price=Decimal("2400"),
-                    delta_neutral_score=Decimal("0.95")
-                )
-                effective_apr = self._calculate_effective_apr(pool_metrics['apr'], range_percentage)
-
-            # Build response
-            response = MoonwellStrategyResponse(
-                user_id=user_id,
-                strategy_type="delta_neutral",
-                timestamp=datetime.utcnow().isoformat() + "Z",
-                action=action,
-                capital=CapitalInfo(
-                    total_usd=Decimal(str(balance)),
-                    base_asset="USDC"
-                ),
-                contract_params=contract_params,
-                monitoring=monitoring_info,
-                performance=None
-            )
-
-            logger.info(f"Generated vault strategy for user {user_id}")
-            logger.info(f"  Delta-neutral score: {simulation.delta_neutral_score:.4f}")
-            logger.info(f"  Health factor: {simulation.expected_health_factor:.2f}")
-            logger.info(f"  Net delta: ${simulation.net_delta_usd:.2f}")
-
-            return response
 
         except Exception as e:
             logger.error(f"Error generating strategy for user {user_id}: {e}")
@@ -281,6 +277,30 @@ class VaultStrategyService:
             )
         )
         return result.scalar_one_or_none()
+
+    async def _get_active_positions_info(self, user_id: str, db: AsyncSession) -> tuple:
+        """
+        Get active positions and their pool addresses.
+
+        Returns:
+            Tuple of (active_positions_list, pool_addresses_list)
+        """
+        from app.services.user_service import UserService
+
+        try:
+            service = UserService(db)
+            positions = await service.get_user_positions(user_id=user_id, status='ACTIVE')
+
+            if not positions:
+                return ([], [])
+
+            pool_addresses = [pos.pool_address for pos in positions if pos.pool_address]
+
+            return (positions, pool_addresses)
+
+        except Exception as e:
+            logger.error(f"Error getting active positions info for user {user_id}: {e}")
+            return ([], [])
 
     async def _check_positions_monitoring(self, user_id: str, db: AsyncSession) -> Optional[MonitoringInfo]:
         """
@@ -473,6 +493,107 @@ class VaultStrategyService:
             aerodrome_pool=None,
             monitoring=None,
             performance=performance
+        )
+
+    async def _generate_single_position_strategy(
+        self,
+        user_id: str,
+        balance: float,
+        pool_address: str,
+        db: AsyncSession
+    ) -> MoonwellStrategyResponse:
+        """
+        Generate single position strategy.
+
+        Args:
+            user_id: User ID
+            balance: Available USDC balance
+            pool_address: Pool address to open position in
+            db: Database session
+
+        Returns:
+            Strategy response for single position
+        """
+        # Get pool data
+        try:
+            pool_data = await pools_service.get_pool(pool_address)
+            pool_metrics = {
+                'apr': pool_data.get('apr', 20),
+                'volume_24h': pool_data.get('volume_24h', 0),
+                'tvl_usd': pool_data.get('tvl_usd', 0),
+                'is_stable': pool_data.get('is_stable', False),
+                'symbol': pool_data.get('symbol', 'WETH-USDC'),
+                'current_tick': pool_data.get('current_tick', 0),
+                'tick_spacing': pool_data.get('tick_spacing', 100)
+            }
+        except Exception as e:
+            logger.warning(f"Could not fetch pool data for {pool_address}: {e}")
+            pool_metrics = {
+                'apr': 20,
+                'symbol': 'WETH-USDC',
+                'current_tick': 0,
+                'tick_spacing': 100
+            }
+
+        # Calculate suggested range based on pool metrics
+        range_percentage = self._calculate_optimal_range(pool_metrics)
+
+        # Find optimal strategy using vault contract
+        try:
+            optimal_strategy = vault_contract.find_optimal_strategy(
+                usdc_amount=float(balance),
+                pool_address=pool_address,
+                range_percentage=range_percentage
+            )
+
+            if not optimal_strategy or 'simulation' not in optimal_strategy:
+                raise ValueError("Invalid optimal strategy returned from vault contract")
+
+            # Calculate deadline (15 minutes from now)
+            deadline = int(datetime.utcnow().timestamp()) + 900
+
+            # Build contract parameters
+            contract_params = ContractParameters(
+                pool=pool_address,
+                range_percentage=range_percentage,
+                deadline=deadline,
+                usdc_amount=Decimal(str(balance)),
+                slippage_bps=50,  # 0.5% slippage
+                hedge_ratio=optimal_strategy['hedge_ratio'],
+                collateral_ratio_bps=optimal_strategy['collateral_ratio_bps']
+            )
+
+            logger.info(f"Generated single position strategy for {user_id}: pool={pool_address}, amount=${balance}")
+
+        except Exception as e:
+            logger.error(f"Error finding optimal strategy: {e}")
+            logger.warning("Vault contract simulations failed - using default strategy estimation")
+
+            deadline = int(datetime.utcnow().timestamp()) + 900
+
+            contract_params = ContractParameters(
+                pool=pool_address,
+                range_percentage=range_percentage,
+                deadline=deadline,
+                usdc_amount=Decimal(str(balance)),
+                slippage_bps=50,
+                hedge_ratio=9500,
+                collateral_ratio_bps=6500
+            )
+
+        # Build response
+        return MoonwellStrategyResponse(
+            user_id=user_id,
+            strategy_type="delta_neutral",
+            timestamp=datetime.utcnow().isoformat(),
+            action="open",
+            capital=CapitalInfo(
+                total_usd=Decimal(str(balance)),
+                base_asset="USDC"
+            ),
+            contract_params=contract_params,
+            monitoring=None,
+            performance=None
         )
 
     async def _generate_dual_position_strategy(
