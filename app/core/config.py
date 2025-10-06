@@ -62,6 +62,10 @@ class Settings(BaseSettings):
         default="0x4200000000000000000000000000000000000006",
         env="WETH_ADDRESS"
     )
+    cbbtc_address: str = Field(
+        default="0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf",
+        env="CBBTC_ADDRESS"
+    )
     
     # Gas Configuration
     max_gas_price_gwei: int = Field(default=50, env="MAX_GAS_PRICE_GWEI")

@@ -290,14 +290,14 @@ async def enrich_position_with_pool_data(
                     # For USDC/cbBTC: use token1_amount (cbBTC is typically token1)
                     from app.core.config import settings
                     weth_address = settings.weth_address.lower()
-                    cbbtc_address = settings.cbbtc_address.lower() if hasattr(settings, 'cbbtc_address') else None
+                    cbbtc_address = settings.cbbtc_address.lower()
 
                     if debt_amount and debt_amount > 0:
                         if token0 == weth_address and token0_amount and token0_amount > 0:
                             # WETH/USDC pool - use token0_amount (WETH)
                             neutral_ratio = Decimal(str(debt_amount)) / Decimal(str(token0_amount))
                             logger.debug(f"Position {position.nft_token_id} - WETH pool neutral_ratio: {neutral_ratio}")
-                        elif cbbtc_address and token1 == cbbtc_address and token1_amount and token1_amount > 0:
+                        elif token1 == cbbtc_address and token1_amount and token1_amount > 0:
                             # USDC/cbBTC pool - use token1_amount (cbBTC)
                             neutral_ratio = Decimal(str(debt_amount)) / Decimal(str(token1_amount))
                             logger.debug(f"Position {position.nft_token_id} - cbBTC pool neutral_ratio: {neutral_ratio}")
