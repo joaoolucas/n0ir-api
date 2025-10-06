@@ -499,53 +499,76 @@ class VaultStrategyService:
     ) -> MoonwellStrategyResponse:
         """
         Generate dual position strategy for balances > $2000.
-        70% WETH/USDC + 30% USDC/cbBTC
+        Allocates based on APR: higher APR pool gets 70%, lower gets 30%
         """
         # Pool addresses
         WETH_USDC_POOL = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59"
-        CBBTC_USDC_POOL = "0x9b2d25297db97d5c8a4e1e65dfb6e5a4c42e5c07"  # TODO: Verify this address
+        USDC_CBBTC_POOL = "0x4e962BB3889Bf030368F56810A9c96B83CB3E778"
 
-        # Allocation percentages
-        WETH_ALLOCATION_PCT = 70
-        CBBTC_ALLOCATION_PCT = 30
+        # Fetch pool data to compare APRs
+        try:
+            weth_pool_data = await pools_service.get_pool(WETH_USDC_POOL)
+            cbbtc_pool_data = await pools_service.get_pool(USDC_CBBTC_POOL)
+
+            weth_apr = weth_pool_data.get('apr', 0) or 0
+            cbbtc_apr = cbbtc_pool_data.get('apr', 0) or 0
+
+            # Allocate more to higher APR pool
+            if weth_apr > cbbtc_apr:
+                WETH_ALLOCATION_PCT = 70
+                CBBTC_ALLOCATION_PCT = 30
+                primary_pool = "WETH/USDC"
+            else:
+                WETH_ALLOCATION_PCT = 30
+                CBBTC_ALLOCATION_PCT = 70
+                primary_pool = "USDC/cbBTC"
+
+            logger.debug(f"APR comparison: WETH/USDC {weth_apr:.2f}% vs USDC/cbBTC {cbbtc_apr:.2f}% - prioritizing {primary_pool}")
+        except Exception as e:
+            logger.warning(f"Failed to fetch pool APRs, using default 70/30 allocation: {e}")
+            WETH_ALLOCATION_PCT = 70
+            CBBTC_ALLOCATION_PCT = 30
 
         # Calculate allocations
         total_balance = Decimal(str(balance))
         weth_allocation = total_balance * Decimal(str(WETH_ALLOCATION_PCT)) / Decimal("100")
         cbbtc_allocation = total_balance * Decimal(str(CBBTC_ALLOCATION_PCT)) / Decimal("100")
 
-        logger.info(f"Dual position strategy: ${weth_allocation:.2f} WETH/USDC + ${cbbtc_allocation:.2f} USDC/cbBTC")
+        # Build recommended positions (order by allocation percentage - highest first)
+        positions_data = [
+            ("WETH/USDC", WETH_USDC_POOL, WETH_ALLOCATION_PCT, weth_allocation),
+            ("USDC/cbBTC", USDC_CBBTC_POOL, CBBTC_ALLOCATION_PCT, cbbtc_allocation)
+        ]
+        positions_data.sort(key=lambda x: x[2], reverse=True)  # Sort by allocation % descending
 
-        # Build recommended positions
         recommended_positions = [
             RecommendedPosition(
-                pool_name="WETH/USDC",
-                pool_address=WETH_USDC_POOL,
-                allocation_percentage=WETH_ALLOCATION_PCT,
-                allocation_usdc=weth_allocation
-            ),
-            RecommendedPosition(
-                pool_name="USDC/cbBTC",
-                pool_address=CBBTC_USDC_POOL,
-                allocation_percentage=CBBTC_ALLOCATION_PCT,
-                allocation_usdc=cbbtc_allocation
+                pool_name=name,
+                pool_address=pool,
+                allocation_percentage=pct,
+                allocation_usdc=amount
             )
+            for name, pool, pct, amount in positions_data
         ]
 
-        # Get pool data for the primary (WETH) pool
-        try:
-            pool_data = await pools_service.get_pool(WETH_USDC_POOL)
-            pool_symbol = pool_data.get('symbol', 'WETH/USDC')
-        except:
-            pool_symbol = 'WETH/USDC'
+        # Get primary pool (highest allocation) for contract params
+        primary_position = recommended_positions[0]  # Already sorted by allocation
+        primary_pool_address = primary_position.pool_address
+        primary_allocation = primary_position.allocation_usdc
 
-        # Create contract params for first position (WETH/USDC with 70%)
+        try:
+            pool_data = await pools_service.get_pool(primary_pool_address)
+            pool_symbol = pool_data.get('symbol', primary_position.pool_name)
+        except:
+            pool_symbol = primary_position.pool_name
+
+        # Create contract params for primary position (highest allocation)
         deadline = int(datetime.utcnow().timestamp()) + 900
         contract_params = ContractParameters(
-            pool=WETH_USDC_POOL,
+            pool=primary_pool_address,
             range_percentage=10,
             deadline=deadline,
-            usdc_amount=weth_allocation,
+            usdc_amount=primary_allocation,
             slippage_bps=50,
             hedge_ratio=9500,
             collateral_ratio_bps=6500
