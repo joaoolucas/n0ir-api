@@ -524,13 +524,19 @@ class VaultStrategyService:
         ]
         positions_data.sort(key=lambda x: x[2], reverse=True)  # Sort by allocation % descending
 
+        # Create contract params with both positions
+        deadline = int(datetime.utcnow().timestamp()) + 900
+
         # Create position params for both positions
         position_1 = PositionParams(
             pool=positions_data[0][1],
             pool_name=positions_data[0][0],
             usdc_amount=positions_data[0][3],
             range_percentage=10,
-            slippage_bps=50
+            deadline=deadline,
+            slippage_bps=50,
+            hedge_ratio=9500,
+            collateral_ratio_bps=6500
         )
 
         position_2 = PositionParams(
@@ -538,19 +544,13 @@ class VaultStrategyService:
             pool_name=positions_data[1][0],
             usdc_amount=positions_data[1][3],
             range_percentage=10,
-            slippage_bps=50
-        )
-
-        # Create contract params with both positions
-        deadline = int(datetime.utcnow().timestamp()) + 900
-        contract_params = ContractParameters(
-            pool=position_1.pool,
-            range_percentage=10,
             deadline=deadline,
-            usdc_amount=total_balance,
             slippage_bps=50,
             hedge_ratio=9500,
-            collateral_ratio_bps=6500,
+            collateral_ratio_bps=6500
+        )
+
+        contract_params = ContractParameters(
             position_1=position_1,
             position_2=position_2
         )
