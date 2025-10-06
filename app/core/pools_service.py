@@ -693,42 +693,52 @@ class PoolsService:
                 abi=pool_abi
             )
 
-            # Get slot0 data and tokens
+            # Get slot0 data
             slot0_data = pool_contract.functions.slot0().call()
             sqrt_price_x96 = slot0_data[0]
 
-            # Get token contracts to fetch decimals
-            token_contract = self.w3.eth.contract(
-                address=Web3.to_checksum_address(token_address),
+            # Get token0 and token1 addresses to fetch decimals
+            token0_addr = pool_contract.functions.token0().call()
+            token1_addr = pool_contract.functions.token1().call()
+
+            token0_contract = self.w3.eth.contract(
+                address=Web3.to_checksum_address(token0_addr),
                 abi=TOKEN_ABI
             )
-            token_decimals = token_contract.functions.decimals().call()
+            token1_contract = self.w3.eth.contract(
+                address=Web3.to_checksum_address(token1_addr),
+                abi=TOKEN_ABI
+            )
+
+            decimals0 = token0_contract.functions.decimals().call()
+            decimals1 = token1_contract.functions.decimals().call()
 
             # Convert sqrtPriceX96 to price
-            # sqrtPrice = sqrt(token1/token0) * 2^96
-            # price = (sqrtPrice / 2^96)^2
+            # sqrtPriceX96 = sqrt(price) * 2^96, where price = (amount of token1) / (amount of token0)
+            # price = (sqrtPriceX96 / 2^96)^2
+            # Then adjust for decimals: actual_price = price * 10^(decimals1 - decimals0)
+
             price = (sqrt_price_x96 / (2**96)) ** 2
+            # This gives us token1/token0 in terms of smallest units
+            # Adjust for decimals to get human-readable price
+            price_token1_per_token0 = price * (10 ** (decimals1 - decimals0))
 
-            # Adjust for decimals
-            # If token is token0, price is in token1 per token0, so we want token0/token1 = 1/price
-            # If token is token1, price is in token0 per token1, so we want token1/token0 = price
-
-            # USDC has 6 decimals, WETH/cbBTC have 18 decimals
-            # For WETH/USDC pool: if WETH is token0, price gives USDC/WETH, we want WETH/USDC
-            # For cbBTC/USDC pool: if cbBTC is token0, price gives USDC/cbBTC, we want cbBTC/USDC
+            # Now convert to USD
+            # For WETH/USDC pool: token0=WETH (18 decimals), token1=USDC (6 decimals)
+            #   price_token1_per_token0 = USDC per WETH = WETH price in USD ✓
+            # For USDC/cbBTC pool: token0=USDC (6 decimals), token1=cbBTC (18 decimals)
+            #   price_token1_per_token0 = cbBTC per USDC, so cbBTC price = 1 / price_token1_per_token0
 
             if is_token0:
-                # Token is token0, price is token1/token0
-                # We want token0 price in token1, so invert
-                # Adjust for decimal difference: multiply by 10^(token1_decimals - token0_decimals)
-                # For WETH (18 decimals) / USDC (6 decimals): multiply by 10^(6-18) = 10^-12
-                adjusted_price = (1 / price) * (10 ** (6 - token_decimals))
+                # Token we're pricing is token0
+                # price_token1_per_token0 tells us how much token1 per 1 token0
+                # Since token1 is USDC (=$1), this is the USD price of token0
+                adjusted_price = price_token1_per_token0
             else:
-                # Token is token1, price is token1/token0
-                # We want token1 price in token0
-                # Adjust for decimal difference: multiply by 10^(token0_decimals - token1_decimals)
-                # For USDC (6 decimals) / WETH (18 decimals): multiply by 10^(18-6) = 10^12
-                adjusted_price = price * (10 ** (token_decimals - 6))
+                # Token we're pricing is token1
+                # price_token1_per_token0 tells us how much token1 per 1 token0
+                # Since token0 is USDC (=$1), invert to get USD price of token1
+                adjusted_price = 1 / price_token1_per_token0 if price_token1_per_token0 > 0 else 0
 
             logger.debug(f"Calculated price for {token_address} from pool {pool_address}: ${adjusted_price:.2f}")
             return adjusted_price
