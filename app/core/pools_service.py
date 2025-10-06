@@ -775,7 +775,7 @@ class PoolsService:
             },
             "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf".lower(): {  # cbBTC on Base
                 "type": "aerodrome",
-                "pool": "0x44ecc644449fc3a9858d2007ab5cd6645f22851f",  # USDC/cbBTC pool
+                "pool": "0x4e962BB3889Bf030368F56810A9c96B83CB3E778",  # USDC/cbBTC-5% pool
                 "is_token0": False  # cbBTC is token1
             },
             "0x940181a94a35a4569e4529a3cdfb74e38fd98631".lower(): {"type": "coingecko", "id": "aerodrome-finance"},  # AERO on Base (keep CoinGecko fallback)
