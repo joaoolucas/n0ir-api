@@ -975,10 +975,27 @@ async def get_vault_strategy(
     - monitoring: Range break alerts if applicable
     """
     from app.core.vault_strategy_service import vault_strategy_service
+    from app.core.pools_service import pools_service
 
     try:
-        # Default to WETH/USDC pool
-        pool_address = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59"  # WETH/USDC pool
+        # Select pool with highest APR from supported pools
+        WETH_USDC_POOL = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59"
+        CBBTC_USDC_POOL = "0x4e962BB3889Bf030368F56810A9c96B83CB3E778"
+
+        # Fetch APR for both pools
+        weth_pool_data = await pools_service.get_pool(WETH_USDC_POOL)
+        cbbtc_pool_data = await pools_service.get_pool(CBBTC_USDC_POOL)
+
+        weth_apr = weth_pool_data.get('apr', 0) or 0
+        cbbtc_apr = cbbtc_pool_data.get('apr', 0) or 0
+
+        # Select pool with higher APR
+        if cbbtc_apr > weth_apr:
+            pool_address = CBBTC_USDC_POOL
+            logger.debug(f"Selected cbBTC/USDC pool with APR {cbbtc_apr:.2f}% (vs WETH {weth_apr:.2f}%)")
+        else:
+            pool_address = WETH_USDC_POOL
+            logger.debug(f"Selected WETH/USDC pool with APR {weth_apr:.2f}% (vs cbBTC {cbbtc_apr:.2f}%)")
 
         strategy = await vault_strategy_service.generate_strategy(
             user_id=user_id,
