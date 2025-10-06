@@ -524,30 +524,60 @@ class VaultStrategyService:
         ]
         positions_data.sort(key=lambda x: x[2], reverse=True)  # Sort by allocation % descending
 
-        # Create contract params with both positions
         deadline = int(datetime.utcnow().timestamp()) + 900
+        range_percentage = 10
 
-        # Create position params for both positions
+        # Calculate optimal strategy for position 1
+        try:
+            optimal_strategy_1 = vault_contract.find_optimal_strategy(
+                usdc_amount=float(positions_data[0][3]),
+                pool_address=positions_data[0][1],
+                range_percentage=range_percentage
+            )
+            hedge_ratio_1 = optimal_strategy_1['hedge_ratio']
+            collateral_ratio_1 = optimal_strategy_1['collateral_ratio_bps']
+            logger.info(f"Position 1 optimal ratios: hedge={hedge_ratio_1}, collateral={collateral_ratio_1}")
+        except Exception as e:
+            logger.warning(f"Failed to find optimal strategy for position 1: {e}, using defaults")
+            hedge_ratio_1 = 9500
+            collateral_ratio_1 = 6500
+
+        # Calculate optimal strategy for position 2
+        try:
+            optimal_strategy_2 = vault_contract.find_optimal_strategy(
+                usdc_amount=float(positions_data[1][3]),
+                pool_address=positions_data[1][1],
+                range_percentage=range_percentage
+            )
+            hedge_ratio_2 = optimal_strategy_2['hedge_ratio']
+            collateral_ratio_2 = optimal_strategy_2['collateral_ratio_bps']
+            logger.info(f"Position 2 optimal ratios: hedge={hedge_ratio_2}, collateral={collateral_ratio_2}")
+        except Exception as e:
+            logger.warning(f"Failed to find optimal strategy for position 2: {e}, using defaults")
+            hedge_ratio_2 = 9500
+            collateral_ratio_2 = 6500
+
+        # Create position params with optimal ratios
         position_1 = PositionParams(
             pool=positions_data[0][1],
             pool_name=positions_data[0][0],
             usdc_amount=positions_data[0][3],
-            range_percentage=10,
+            range_percentage=range_percentage,
             deadline=deadline,
             slippage_bps=50,
-            hedge_ratio=9500,
-            collateral_ratio_bps=6500
+            hedge_ratio=hedge_ratio_1,
+            collateral_ratio_bps=collateral_ratio_1
         )
 
         position_2 = PositionParams(
             pool=positions_data[1][1],
             pool_name=positions_data[1][0],
             usdc_amount=positions_data[1][3],
-            range_percentage=10,
+            range_percentage=range_percentage,
             deadline=deadline,
             slippage_bps=50,
-            hedge_ratio=9500,
-            collateral_ratio_bps=6500
+            hedge_ratio=hedge_ratio_2,
+            collateral_ratio_bps=collateral_ratio_2
         )
 
         contract_params = ContractParameters(
