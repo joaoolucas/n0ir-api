@@ -93,7 +93,7 @@ class VaultStrategyService:
                 )
 
             # No alerts and sufficient balance - determine strategy type
-            DUAL_POSITION_THRESHOLD = Decimal("2000")
+            DUAL_POSITION_THRESHOLD = Decimal("500")
 
             # Check if balance qualifies for dual position strategy
             if balance > DUAL_POSITION_THRESHOLD:
@@ -103,7 +103,7 @@ class VaultStrategyService:
                     balance=balance
                 )
 
-            # Single position strategy for balance <= $2000
+            # Single position strategy for balance <= $500
             action = "open"
 
             # Get pool data
@@ -498,7 +498,7 @@ class VaultStrategyService:
         balance: float
     ) -> MoonwellStrategyResponse:
         """
-        Generate dual position strategy for balances > $2000.
+        Generate dual position strategy for balances > $500.
         Allocates based on APR: higher APR pool gets 70%, lower gets 30%
         """
         # Pool addresses
