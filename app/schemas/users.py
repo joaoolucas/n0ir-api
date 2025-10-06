@@ -96,13 +96,14 @@ class ContractParameters(BaseModel):
     """Parameters for calling createPosition on the vault contract"""
     pool: Optional[str] = Field(None, description="Aerodrome pool address (only for single position)")
     range_percentage: Optional[int] = Field(None, description="Range percentage for the position (only for single position)")
-    deadline: Optional[int] = Field(None, description="Unix timestamp deadline for transaction (only for single position)")
+    deadline: Optional[int] = Field(None, description="Unix timestamp deadline for transaction")
     usdc_amount: Optional[Decimal] = Field(None, description="USDC amount to deploy (only for single position)")
     slippage_bps: Optional[int] = Field(None, description="Slippage tolerance in basis points (only for single position)")
     hedge_ratio: Optional[int] = Field(None, description="Hedge ratio in basis points (only for single position)")
     collateral_ratio_bps: Optional[int] = Field(None, description="Collateral ratio in basis points (only for single position)")
     position_1: Optional['PositionParams'] = Field(None, description="First position params (for open_dual)")
     position_2: Optional['PositionParams'] = Field(None, description="Second position params (for open_dual)")
+    positions_to_close: Optional[List[int]] = Field(None, description="NFT token IDs to close (for action='close')")
 
 
 class VaultHedgeSimulation(BaseModel):

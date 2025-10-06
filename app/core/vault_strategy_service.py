@@ -391,37 +391,14 @@ class VaultStrategyService:
         Generate a monitoring-only strategy response when positions need attention.
         This returns alerts without requiring minimum balance.
         """
-        # Get basic pool data for context
-        try:
-            pool_data = await pools_service.get_pool(pool_address)
-            pool_symbol = pool_data.get('symbol', 'WETH-USDC')
-        except:
-            pool_symbol = 'WETH-USDC'
+        # Extract position IDs from alerts
+        positions_to_close = [alert.position_id for alert in monitoring_info.alerts]
 
-        # Create minimal contract params (won't be used, but required by schema)
+        # Create contract params with positions to close
         deadline = int(datetime.utcnow().timestamp()) + 900
         contract_params = ContractParameters(
-            pool=pool_address,
-            range_percentage=10,  # Default
             deadline=deadline,
-            usdc_amount=Decimal(str(balance)),
-            slippage_bps=50,
-            hedge_ratio=9500,
-            collateral_ratio_bps=6500
-        )
-
-        # Create minimal simulation (won't be used)
-        simulation = VaultHedgeSimulation(
-            hedge_asset="WETH",
-            collateral_amount=Decimal(0),
-            borrow_amount_usd=Decimal(0),
-            borrow_amount_asset=Decimal(0),
-            total_lp_amount=Decimal(0),
-            asset_exposure_usd=Decimal(0),
-            net_delta_usd=Decimal(0),
-            expected_health_factor=Decimal(0),
-            liquidation_price=Decimal(0),
-            delta_neutral_score=Decimal(0)
+            positions_to_close=positions_to_close
         )
 
         return MoonwellStrategyResponse(
