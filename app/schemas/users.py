@@ -80,6 +80,15 @@ class RecommendedPosition(BaseModel):
     allocation_usdc: Decimal = Field(..., description="USDC amount for this position")
 
 
+class PositionParams(BaseModel):
+    """Parameters for a single position"""
+    pool: str = Field(..., description="Pool address")
+    pool_name: str = Field(..., description="Pool name (e.g., 'WETH/USDC')")
+    usdc_amount: Decimal = Field(..., description="USDC amount to deploy")
+    range_percentage: int = Field(..., description="Range percentage for the position (e.g., 10 = ±5%)")
+    slippage_bps: int = Field(default=50, description="Slippage tolerance in basis points (e.g., 50 = 0.5%)")
+
+
 class ContractParameters(BaseModel):
     """Parameters for calling createPosition on the vault contract"""
     pool: str = Field(..., description="Aerodrome pool address")
@@ -89,6 +98,8 @@ class ContractParameters(BaseModel):
     slippage_bps: int = Field(default=50, description="Slippage tolerance in basis points (e.g., 50 = 0.5%)")
     hedge_ratio: int = Field(..., description="Hedge ratio in basis points (e.g., 9200 = 92%)")
     collateral_ratio_bps: int = Field(..., description="Collateral ratio in basis points (e.g., 6500 = 65%)")
+    position_1: Optional['PositionParams'] = Field(None, description="First position params (for open_dual)")
+    position_2: Optional['PositionParams'] = Field(None, description="Second position params (for open_dual)")
 
 
 class VaultHedgeSimulation(BaseModel):
@@ -167,10 +178,7 @@ class MoonwellStrategyResponse(BaseModel):
 
     capital: CapitalInfo = Field(..., description="Capital information")
     contract_params: Optional[ContractParameters] = Field(None, description="Parameters for calling vault contract (null when action='no_action')")
-    simulation: Optional[VaultHedgeSimulation] = Field(None, description="Expected strategy simulation results (null when action='no_action')")
-    aerodrome_pool: Optional[AerodromeLP] = Field(None, description="Aerodrome LP pool details (null when action='no_action')")
     monitoring: Optional[MonitoringInfo] = Field(None, description="Monitoring information")
-    recommended_positions: Optional[List[RecommendedPosition]] = Field(None, description="Recommended position allocations for dual strategy (when action='open_dual')")
     performance: Optional[PerformanceData] = Field(None, description="Performance metrics (when action='no_action')")
 
 

@@ -19,6 +19,7 @@ from app.schemas.users import (
     MoonwellStrategyResponse,
     CapitalInfo,
     ContractParameters,
+    PositionParams,
     VaultHedgeSimulation,
     AerodromeLP,
     MonitoringInfo,
@@ -222,16 +223,8 @@ class VaultStrategyService:
                     base_asset="USDC"
                 ),
                 contract_params=contract_params,
-                simulation=simulation,
-                aerodrome_pool=AerodromeLP(
-                    protocol="aerodrome",
-                    pool=pool_metrics['symbol'],
-                    pool_address=pool_address,
-                    amount_usdc=simulation.total_lp_amount,
-                    range_percentage=range_percentage,
-                    effective_apr=Decimal(str(effective_apr))
-                ),
-                monitoring=monitoring_info
+                monitoring=monitoring_info,
+                performance=None
             )
 
             logger.info(f"Generated vault strategy for user {user_id}")
@@ -411,15 +404,6 @@ class VaultStrategyService:
             delta_neutral_score=Decimal(0)
         )
 
-        # Create minimal aerodrome pool info
-        aerodrome_pool = AerodromeLP(
-            pool=pool_symbol,
-            pool_address=pool_address,
-            amount_usdc=Decimal(0),
-            range_percentage=10,
-            effective_apr=None
-        )
-
         return MoonwellStrategyResponse(
             user_id=user_id,
             strategy_type="delta_neutral",
@@ -427,9 +411,8 @@ class VaultStrategyService:
             action="close",  # User should close problematic positions
             capital=CapitalInfo(total_usd=Decimal(str(balance))),
             contract_params=contract_params,
-            simulation=simulation,
-            aerodrome_pool=aerodrome_pool,
-            monitoring=monitoring_info
+            monitoring=monitoring_info,
+            performance=None
         )
 
     async def _generate_no_action_strategy(
@@ -534,67 +517,42 @@ class VaultStrategyService:
         weth_allocation = total_balance * Decimal(str(WETH_ALLOCATION_PCT)) / Decimal("100")
         cbbtc_allocation = total_balance * Decimal(str(CBBTC_ALLOCATION_PCT)) / Decimal("100")
 
-        # Build recommended positions (order by allocation percentage - highest first)
+        # Build position params (order by allocation percentage - highest first)
         positions_data = [
             ("WETH/USDC", WETH_USDC_POOL, WETH_ALLOCATION_PCT, weth_allocation),
             ("USDC/cbBTC", USDC_CBBTC_POOL, CBBTC_ALLOCATION_PCT, cbbtc_allocation)
         ]
         positions_data.sort(key=lambda x: x[2], reverse=True)  # Sort by allocation % descending
 
-        recommended_positions = [
-            RecommendedPosition(
-                pool_name=name,
-                pool_address=pool,
-                allocation_percentage=pct,
-                allocation_usdc=amount
-            )
-            for name, pool, pct, amount in positions_data
-        ]
+        # Create position params for both positions
+        position_1 = PositionParams(
+            pool=positions_data[0][1],
+            pool_name=positions_data[0][0],
+            usdc_amount=positions_data[0][3],
+            range_percentage=10,
+            slippage_bps=50
+        )
 
-        # Get primary pool (highest allocation) for contract params
-        primary_position = recommended_positions[0]  # Already sorted by allocation
-        primary_pool_address = primary_position.pool_address
-        primary_allocation = primary_position.allocation_usdc
+        position_2 = PositionParams(
+            pool=positions_data[1][1],
+            pool_name=positions_data[1][0],
+            usdc_amount=positions_data[1][3],
+            range_percentage=10,
+            slippage_bps=50
+        )
 
-        try:
-            pool_data = await pools_service.get_pool(primary_pool_address)
-            pool_symbol = pool_data.get('symbol', primary_position.pool_name)
-        except:
-            pool_symbol = primary_position.pool_name
-
-        # Create contract params for primary position (highest allocation)
+        # Create contract params with both positions
         deadline = int(datetime.utcnow().timestamp()) + 900
         contract_params = ContractParameters(
-            pool=primary_pool_address,
+            pool=position_1.pool,
             range_percentage=10,
             deadline=deadline,
-            usdc_amount=primary_allocation,
+            usdc_amount=total_balance,
             slippage_bps=50,
             hedge_ratio=9500,
-            collateral_ratio_bps=6500
-        )
-
-        # Create minimal simulation (user will call strategy for each position separately)
-        simulation = VaultHedgeSimulation(
-            hedge_asset="WETH",
-            collateral_amount=Decimal(0),
-            borrow_amount_usd=Decimal(0),
-            borrow_amount_asset=Decimal(0),
-            total_lp_amount=Decimal(0),
-            asset_exposure_usd=Decimal(0),
-            net_delta_usd=Decimal(0),
-            expected_health_factor=Decimal(0),
-            liquidation_price=Decimal(0),
-            delta_neutral_score=Decimal(0)
-        )
-
-        # Create aerodrome pool info
-        aerodrome_pool = AerodromeLP(
-            pool=pool_symbol,
-            pool_address=WETH_USDC_POOL,
-            amount_usdc=weth_allocation,
-            range_percentage=10,
-            effective_apr=None
+            collateral_ratio_bps=6500,
+            position_1=position_1,
+            position_2=position_2
         )
 
         return MoonwellStrategyResponse(
@@ -604,10 +562,8 @@ class VaultStrategyService:
             action="open_dual",
             capital=CapitalInfo(total_usd=total_balance),
             contract_params=contract_params,
-            simulation=simulation,
-            aerodrome_pool=aerodrome_pool,
             monitoring=None,
-            recommended_positions=recommended_positions
+            performance=None
         )
 
 
