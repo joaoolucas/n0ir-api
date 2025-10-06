@@ -118,12 +118,12 @@ class VaultStrategyService:
                         balance=balance
                     )
 
-                # Single position for balance between $40-$499
-                logger.info(f"User {user_id} opening single position with ${balance:.2f}")
+                # Single position for balance between $40-$499 - always WETH/USDC first
+                logger.info(f"User {user_id} opening single position in WETH/USDC with ${balance:.2f}")
                 return await self._generate_single_position_strategy(
                     user_id=user_id,
                     balance=balance,
-                    pool_address=pool_address,
+                    pool_address=WETH_USDC_POOL,
                     db=db
                 )
 
