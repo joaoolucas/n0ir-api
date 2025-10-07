@@ -1268,7 +1268,17 @@ class WalletTransactionService:
                 position_id=position_id_value  # Set the foreign key column
             )
 
-            self.db.add(transaction)
+            try:
+                self.db.add(transaction)
+                await self.db.flush()  # Flush to catch unique constraint violations immediately
+            except Exception as e:
+                # Handle duplicate transaction gracefully (race condition from concurrent syncs)
+                if "duplicate key value violates unique constraint" in str(e):
+                    logger.warning(f"Transaction {details['tx_hash']} already exists, skipping (race condition)")
+                    await self.db.rollback()
+                    return
+                else:
+                    raise
 
             # If this is a DEPOSIT transaction, publish balance change event for agent manager
             # NOTE: Only update balance if it hasn't been recently synced to avoid duplicates
