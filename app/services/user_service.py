@@ -663,8 +663,7 @@ class UserService:
             staked=staked,
             gauge_address=gauge_address,
             status='ACTIVE',  # Use uppercase status for consistency
-            entry_date=datetime.utcnow(),
-            last_updated=datetime.utcnow()
+            entry_date=datetime.utcnow()
         )
         
         # Create transaction record for position entry (debit)
@@ -752,9 +751,9 @@ class UserService:
             position.fees_earned_usdc = fees_earned_usdc
         if rewards_earned_usdc is not None:
             position.rewards_earned_usdc = rewards_earned_usdc
-        
-        position.last_updated = datetime.now(timezone.utc)
-        
+
+        # updated_at will be set automatically by SQLAlchemy onupdate
+
         await self.db.commit()
         await self.db.refresh(position)
         return position
@@ -809,7 +808,7 @@ class UserService:
         
         if position:
             position.status = status
-            position.last_updated = datetime.now(timezone.utc)
+            # updated_at will be set automatically by SQLAlchemy onupdate
             await self.db.commit()
             await self.db.refresh(position)
             logger.info(f"Updated position {nft_token_id} status to {status}")
