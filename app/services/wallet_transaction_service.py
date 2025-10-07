@@ -1277,15 +1277,19 @@ class WalletTransactionService:
                     await self.db.rollback()
                     return
 
+            # Parse block timestamp - this is when the transaction actually happened on-chain
+            block_ts = datetime.fromisoformat(details["timestamp"].replace("Z", "+00:00")) if details.get("timestamp") else datetime.utcnow()
+
             transaction = Transaction(
                 tx_hash=details["tx_hash"],
                 user_id=user_id,
                 tx_type=tx_type,
                 status="CONFIRMED",
                 block_number=details.get("block"),
-                block_timestamp=datetime.fromisoformat(details["timestamp"].replace("Z", "+00:00")) if details.get("timestamp") else None,
+                block_timestamp=block_ts,
                 event_data=event_data,
-                position_id=position_id_value  # Set the foreign key column
+                position_id=position_id_value,  # Set the foreign key column
+                created_at=block_ts  # Use blockchain timestamp, not current time
             )
 
             try:
