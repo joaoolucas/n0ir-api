@@ -556,7 +556,6 @@ class WalletTransactionService:
                         if token_price > 0:
                             hedge_debt_usd = int(hedge_debt_tokens * token_price * 1e6)  # Convert to USDC wei
                             hedge_debt_usd_value = hedge_debt_usd / 1e6
-                            logger.info(f"Hedge debt: {hedge_debt_tokens:.6f} tokens @ ${token_price:.2f} = ${hedge_debt_usd_value:.2f}")
                         else:
                             logger.warning(f"Could not get price for hedged asset {hedged_asset}, setting hedge_debt_usd to 0")
                     except Exception as price_error:
@@ -572,7 +571,6 @@ class WalletTransactionService:
                     usdc_returned = self._calculate_usdc_returned_from_transfers(traces, cdp_wallet, self.LIQUIDITY_MANAGER)
                     if usdc_returned > 0:
                         event_data["usdc_returned"] = usdc_returned
-                        logger.info(f"USDC returned to user: {usdc_returned/1e6:.6f} USDC")
 
                 usdc_amount = usdc_invested + hedge_collateral - hedge_debt_usd - usdc_returned
             except Exception as e:
@@ -942,23 +940,6 @@ class WalletTransactionService:
             for trace in traces:
                 to_addr = trace.get("to", "").lower()
 
-                # Check for any interaction with liquidity-related contracts
-                if to_addr == self.LIQUIDITY_MANAGER:
-                    logger.warning(f"Transaction {details['tx_hash'][:10]}... interacts with LiquidityManager but wasn't detected as position event")
-                    logger.warning(f"  From: {trace.get('from', '')[:10]}... To: {to_addr[:10]}...")
-                    logger.warning(f"  Method sig: {trace.get('input', '')[:10] if trace.get('input') else 'none'}")
-
-                # Check for NFT burns (which would indicate position close)
-                if "logs" in trace:
-                    for log in trace.get("logs", []):
-                        topics = log.get("topics", [])
-                        if topics and len(topics) >= 4:
-                            # ERC721 Transfer event
-                            if topics[0] and "ddf252ad" in str(topics[0]).lower():
-                                # Check if it's a burn (to address 0x0)
-                                to_addr_hex = topics[2][-40:] if len(topics) > 2 else ""
-                                if to_addr_hex == "0" * 40:
-                                    logger.warning(f"Transaction {details['tx_hash'][:10]}... has NFT burn but wasn't detected as POSITION_CLOSED")
 
         if position_event:
             method_name = position_event["method_name"]
@@ -986,7 +967,6 @@ class WalletTransactionService:
                 if "event_data" in position_event:
                     details["event_data"] = position_event["event_data"]
 
-                logger.info(f"Detected POSITION_CREATED: {details['tx_hash'][:10]}... NFT: {details.get('nft_token_id')}, Amount: {net_amount/1e6:.2f} USDC")
                 return TransactionType.POSITION_CREATED, details
 
             elif method_name == "closePosition":
@@ -1011,7 +991,6 @@ class WalletTransactionService:
                 if "event_data" in position_event:
                     details["event_data"] = position_event["event_data"]
 
-                logger.info(f"Detected POSITION_CLOSED: {details['tx_hash'][:10]}... NFT: {details.get('nft_token_id')}, Amount: {amount_received/1e6:.2f} USDC")
                 return TransactionType.POSITION_CLOSED, details
         
         # Check all traces for patterns
