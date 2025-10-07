@@ -58,7 +58,12 @@ class Position(Base):
     
     # The NEW PnL column that exists in the migrated database
     realized_pnl_usdc = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
-    
+
+    # Protocol fee tracking (added by schema_fixes.py at runtime)
+    protocol_fee_amount = Column(Numeric(precision=20, scale=6), default=0, nullable=True)
+    protocol_fee_collected = Column(Boolean, default=False, nullable=True)
+    protocol_fee_tx_hash = Column(String(66), nullable=True)
+
     # Timestamps
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
