@@ -1257,6 +1257,26 @@ class WalletTransactionService:
                 if nft_id:
                     position_id_value = nft_id
 
+            # IMPORTANT: Create position BEFORE transaction if this is a POSITION_CREATED event
+            # This prevents foreign key violations when inserting the transaction
+            if tx_type == "POSITION_CREATED" and position_id_value:
+                try:
+                    await self._create_position_if_needed(
+                        user_id=user_id,
+                        position_id=position_id_value,
+                        pool_address=event_data.get("pool"),
+                        pool_name=event_data.get("pool_name"),
+                        tx_hash=details["tx_hash"],
+                        amount_usdc=amount_usdc
+                    )
+                    await self.db.flush()  # Flush to ensure position exists before transaction insert
+                except Exception as e:
+                    logger.error(f"Failed to create position {position_id_value} before transaction: {e}")
+                    # If position creation fails, we can't insert the transaction with a FK reference
+                    # So skip this transaction for now - it will be picked up by ensure_positions_for_transactions
+                    await self.db.rollback()
+                    return
+
             transaction = Transaction(
                 tx_hash=details["tx_hash"],
                 user_id=user_id,
@@ -1272,9 +1292,15 @@ class WalletTransactionService:
                 self.db.add(transaction)
                 await self.db.flush()  # Flush to catch unique constraint violations immediately
             except Exception as e:
+                error_str = str(e)
                 # Handle duplicate transaction gracefully (race condition from concurrent syncs)
-                if "duplicate key value violates unique constraint" in str(e):
+                if "duplicate key value violates unique constraint" in error_str:
                     logger.warning(f"Transaction {details['tx_hash']} already exists, skipping (race condition)")
+                    await self.db.rollback()
+                    return
+                # Handle missing position (should have been created above, but might fail in edge cases)
+                elif "foreign key constraint" in error_str and "position_id" in error_str:
+                    logger.error(f"Position {position_id_value} does not exist for transaction {details['tx_hash']}, skipping")
                     await self.db.rollback()
                     return
                 else:
@@ -1354,20 +1380,8 @@ class WalletTransactionService:
                 except Exception as e:
                     logger.error(f"Failed to process deposit event: {e}")
 
-            # If this is a POSITION_CREATED transaction, create the position
-            if tx_type == "POSITION_CREATED" and position_id_value:
-                try:
-                    await self._create_position_if_needed(
-                        user_id=user_id,
-                        position_id=position_id_value,
-                        pool_address=event_data.get("pool"),
-                        pool_name=event_data.get("pool_name"),
-                        tx_hash=details["tx_hash"],
-                        amount_usdc=amount_usdc
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to create position for POSITION_CREATED transaction: {e}")
-                    # Continue processing other transactions
+            # Position was already created before transaction insert (see above)
+            # No need to create it again here
 
             # If this is a STAKING transaction, update position's staked status
             elif tx_type == "STAKING" and position_id_value:
