@@ -28,41 +28,53 @@ def upgrade():
     if 'amount_usdc' not in existing_columns:
         op.add_column('transactions', sa.Column('amount_usdc', sa.Numeric(precision=20, scale=6), nullable=True))
     
-    # Update existing transactions to populate amount_usdc
-    op.execute("""
-        UPDATE transactions
-        SET amount_usdc = CASE 
-            WHEN event_data ? 'amount_usdc' THEN (event_data->>'amount_usdc')::numeric
-            WHEN event_data ? 'usdc_invested' THEN (event_data->>'usdc_invested')::numeric
-            WHEN event_data ? 'usdc_received' THEN (event_data->>'usdc_received')::numeric
-            WHEN event_data ? 'usdc_out' THEN (event_data->>'usdc_out')::numeric
-            WHEN event_data ? 'usdc_in' THEN (event_data->>'usdc_in')::numeric
-            ELSE 0
-        END
-        WHERE amount_usdc IS NULL
-    """)
+    # Update existing transactions to populate amount_usdc (only if event_data exists)
+    result = conn.execute(sa.text("""
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name='transactions' AND column_name='event_data'
+    """))
+
+    if result.fetchone():
+        op.execute("""
+            UPDATE transactions
+            SET amount_usdc = CASE
+                WHEN event_data ? 'amount_usdc' THEN (event_data->>'amount_usdc')::numeric
+                WHEN event_data ? 'usdc_invested' THEN (event_data->>'usdc_invested')::numeric
+                WHEN event_data ? 'usdc_received' THEN (event_data->>'usdc_received')::numeric
+                WHEN event_data ? 'usdc_out' THEN (event_data->>'usdc_out')::numeric
+                WHEN event_data ? 'usdc_in' THEN (event_data->>'usdc_in')::numeric
+                ELSE 0
+            END
+            WHERE amount_usdc IS NULL
+        """)
     
-    # Consolidate POSITION_CREATED + STAKE_CREATED transactions
+    # Consolidate POSITION_CREATED + STAKE_CREATED transactions (skip if no data)
     op.execute("""
-        WITH stake_txs AS (
-            SELECT t1.id as create_id, t2.id as stake_id, t2.event_data, t2.tx_hash as stake_hash
-            FROM transactions t1
-            JOIN transactions t2 ON t1.position_id = t2.position_id 
-                AND t1.user_id = t2.user_id
-            WHERE t1.tx_type = 'POSITION_CREATED' 
-                AND t2.tx_type = 'STAKE_CREATED'
-                AND ABS(EXTRACT(EPOCH FROM (t1.created_at - t2.created_at))) < 60
-        )
-        UPDATE transactions t
-        SET event_data = t.event_data || jsonb_build_object(
-            'staked', true,
-            'stake_tx_hash', st.stake_hash,
-            'gauge_address', st.event_data->>'gauge_address'
-        )
-        FROM stake_txs st
-        WHERE t.id = st.create_id
+        DO $$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM transactions WHERE tx_type = 'STAKE_CREATED') THEN
+                WITH stake_txs AS (
+                    SELECT t1.id as create_id, t2.id as stake_id, t2.event_data, t2.tx_hash as stake_hash
+                    FROM transactions t1
+                    JOIN transactions t2 ON t1.position_id = t2.position_id
+                        AND t1.user_id = t2.user_id
+                    WHERE t1.tx_type = 'POSITION_CREATED'
+                        AND t2.tx_type = 'STAKE_CREATED'
+                        AND ABS(EXTRACT(EPOCH FROM (t1.created_at - t2.created_at))) < 60
+                )
+                UPDATE transactions t
+                SET event_data = t.event_data || jsonb_build_object(
+                    'staked', true,
+                    'stake_tx_hash', st.stake_hash,
+                    'gauge_address', st.event_data->>'gauge_address'
+                )
+                FROM stake_txs st
+                WHERE t.id = st.create_id;
+            END IF;
+        END $$;
     """)
-    
+
     # Delete redundant STAKE_CREATED transactions
     op.execute("""
         DELETE FROM transactions t1
@@ -76,26 +88,31 @@ def upgrade():
                 AND ABS(EXTRACT(EPOCH FROM (t1.created_at - t2.created_at))) < 60
         )
     """)
-    
-    # Consolidate POSITION_CLOSED + SWAP_EXECUTED transactions
+
+    # Consolidate POSITION_CLOSED + SWAP_EXECUTED transactions (skip if no data)
     op.execute("""
-        WITH swap_txs AS (
-            SELECT t1.id as close_id, t2.id as swap_id, t2.event_data, t2.tx_hash as swap_hash
-            FROM transactions t1
-            JOIN transactions t2 ON t1.position_id = t2.position_id 
-                AND t1.user_id = t2.user_id
-            WHERE t1.tx_type = 'POSITION_CLOSED' 
-                AND t2.tx_type IN ('SWAP_EXECUTED', 'AERO_SWAP')
-                AND ABS(EXTRACT(EPOCH FROM (t1.created_at - t2.created_at))) < 60
-        )
-        UPDATE transactions t
-        SET event_data = t.event_data || jsonb_build_object(
-            'aero_rewards', COALESCE((st.event_data->>'amount')::numeric, 0),
-            'aero_swap_usdc', COALESCE((st.event_data->>'amount_out')::numeric, 0),
-            'swap_tx_hash', st.swap_hash
-        )
-        FROM swap_txs st
-        WHERE t.id = st.close_id
+        DO $$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM transactions WHERE tx_type IN ('SWAP_EXECUTED', 'AERO_SWAP')) THEN
+                WITH swap_txs AS (
+                    SELECT t1.id as close_id, t2.id as swap_id, t2.event_data, t2.tx_hash as swap_hash
+                    FROM transactions t1
+                    JOIN transactions t2 ON t1.position_id = t2.position_id
+                        AND t1.user_id = t2.user_id
+                    WHERE t1.tx_type = 'POSITION_CLOSED'
+                        AND t2.tx_type IN ('SWAP_EXECUTED', 'AERO_SWAP')
+                        AND ABS(EXTRACT(EPOCH FROM (t1.created_at - t2.created_at))) < 60
+                )
+                UPDATE transactions t
+                SET event_data = t.event_data || jsonb_build_object(
+                    'aero_rewards', COALESCE((st.event_data->>'amount')::numeric, 0),
+                    'aero_swap_usdc', COALESCE((st.event_data->>'amount_out')::numeric, 0),
+                    'swap_tx_hash', st.swap_hash
+                )
+                FROM swap_txs st
+                WHERE t.id = st.close_id;
+            END IF;
+        END $$;
     """)
     
     # Delete redundant SWAP_EXECUTED/AERO_SWAP transactions

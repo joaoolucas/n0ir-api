@@ -30,17 +30,31 @@ depends_on = None
 
 def upgrade():
     """Drop all non-core tables."""
-    
-    # Drop tables in order (considering foreign key constraints)
-    op.drop_table('strategy_decisions')
-    op.drop_table('executor_stats')
-    op.drop_table('pool_metrics')
-    op.drop_table('daily_metrics')
-    op.drop_table('liquidity_events')
-    op.drop_table('wallet_transactions')
-    op.drop_table('blockchain_sync')
-    
-    print("✅ Dropped 7 non-core tables")
+
+    # Get list of existing tables
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    existing_tables = inspector.get_table_names()
+
+    # Drop tables in order (considering foreign key constraints) - only if they exist
+    tables_to_drop = [
+        'strategy_decisions',
+        'executor_stats',
+        'pool_metrics',
+        'daily_metrics',
+        'liquidity_events',
+        'wallet_transactions',
+        'blockchain_sync'
+    ]
+
+    dropped_count = 0
+    for table in tables_to_drop:
+        if table in existing_tables:
+            op.execute(f'DROP TABLE IF EXISTS {table} CASCADE')
+            dropped_count += 1
+
+    if dropped_count > 0:
+        print(f"✅ Dropped {dropped_count} non-core tables")
     print("✅ Schema simplified to 3 core tables: users, positions, transactions")
 
 

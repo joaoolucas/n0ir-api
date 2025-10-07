@@ -49,43 +49,30 @@ def upgrade():
     if 'idx_positions_user_status' not in existing_indexes:
         op.create_index('idx_positions_user_status', 'positions', ['user_id', 'status'])
     
-    # Add validation for transactions event_data structure (skip if it fails)
-    try:
+    # Standardize transaction types (if tx_type column exists)
+    conn = op.get_bind()
+    result = conn.execute(sa.text("""
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name='transactions' AND column_name='tx_type'
+    """))
+
+    if result.fetchone():
         op.execute("""
-        ALTER TABLE transactions 
-        ADD CONSTRAINT check_event_data_required_fields
-        CHECK (
-            CASE tx_type
-                WHEN 'POSITION_CREATED' THEN 
-                    event_data ? 'token_id' AND event_data ? 'usdc_invested'
-                WHEN 'POSITION_CLOSED' THEN
-                    event_data ? 'token_id' AND event_data ? 'usdc_received'
-                WHEN 'DEPOSIT' THEN
-                    event_data ? 'amount_usdc'
-                WHEN 'WITHDRAWAL' THEN
-                    event_data ? 'amount_usdc'
-                ELSE true
+            UPDATE transactions
+            SET tx_type = CASE tx_type
+                WHEN 'deposit' THEN 'DEPOSIT'
+                WHEN 'withdraw' THEN 'WITHDRAWAL'
+                WHEN 'withdrawal' THEN 'WITHDRAWAL'
+                WHEN 'position_created' THEN 'POSITION_CREATED'
+                WHEN 'position_closed' THEN 'POSITION_CLOSED'
+                WHEN 'aero_swap' THEN 'AERO_SWAP'
+                WHEN 'fee_collection' THEN 'FEE_COLLECTION'
+                WHEN 'protocol_fee' THEN 'FEE_COLLECTION'
+                ELSE UPPER(tx_type)
             END
-        )
+            WHERE tx_type != UPPER(tx_type)
         """)
-    except:
-        pass  # Constraint might already exist or fail on some data
-    
-    # Standardize transaction types
-    op.execute("""
-        UPDATE transactions 
-        SET tx_type = CASE tx_type
-            WHEN 'deposit' THEN 'DEPOSIT'
-            WHEN 'withdraw' THEN 'WITHDRAWAL'
-            WHEN 'withdrawal' THEN 'WITHDRAWAL'
-            WHEN 'position_created' THEN 'POSITION_CREATED'
-            WHEN 'position_closed' THEN 'POSITION_CLOSED'
-            WHEN 'aero_swap' THEN 'AERO_SWAP'
-            WHEN 'fee_collection' THEN 'FEE_COLLECTION'
-            WHEN 'protocol_fee' THEN 'FEE_COLLECTION'
-            ELSE UPPER(tx_type)
-        END
-    """)
 
 
 def downgrade():
