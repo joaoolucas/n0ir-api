@@ -23,7 +23,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = '032_drop_non_core_tables'
-down_revision = '031_cleanup_redundant_fields'
+down_revision = '031_add_confirmed_at_column'
 branch_labels = None
 depends_on = None
 
