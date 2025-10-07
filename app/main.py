@@ -3,11 +3,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 import asyncio
+import sentry_sdk
 from app.core.config import settings
 from app.api.v1.api import api_router
 from app.core.logger import logger
 from app.services.agent_management_service import get_agent_service
 from app.services.blockchain_event_consumer import blockchain_consumer
+from app.services.position_sync_service import run_position_sync_task
+from app.background.position_syncer import sync_active_users
+
+# Initialize Sentry
+if settings.sentry_dsn:
+    sentry_sdk.init(
+        dsn=settings.sentry_dsn,
+        send_default_pii=True,
+    )
 
 
 @asynccontextmanager
@@ -80,16 +90,40 @@ async def lifespan(app: FastAPI):
             logger.warning("Agent management service running without Redis")
     except Exception as e:
         logger.error(f"Failed to start agent management service listener: {e}")
-    
+
+    # Start position sync background task
+    logger.info("Starting position sync background task...")
+    position_sync_task = asyncio.create_task(run_position_sync_task())
+
+    # Start background user syncer to keep cache warm
+    logger.info("Starting background user syncer (30s interval)...")
+    user_sync_task = asyncio.create_task(sync_active_users())
+
     yield
     
     # Shutdown
     logger.info("Shutting down services...")
-    
+
+    # Cancel background tasks
+    position_sync_task.cancel()
+    user_sync_task.cancel()
+
+    try:
+        await position_sync_task
+    except asyncio.CancelledError:
+        pass
+    logger.info("Position sync task stopped")
+
+    try:
+        await user_sync_task
+    except asyncio.CancelledError:
+        pass
+    logger.info("Background user syncer stopped")
+
     # Stop blockchain event consumer
     await blockchain_consumer.stop()
     logger.info("Blockchain event consumer stopped")
-    
+
     logger.info("Shutdown complete")
 
 # Create FastAPI application

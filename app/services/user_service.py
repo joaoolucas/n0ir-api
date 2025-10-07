@@ -9,11 +9,13 @@ from sqlalchemy import select, update, and_, or_, func, case, Numeric
 from sqlalchemy.orm import selectinload
 
 from app.database.models import User, Transaction, Position
+# WalletTransaction removed - using transactions table instead
 from app.schemas.users import TransactionType, TransactionStatus, PositionStatus, TimePeriod
 from app.core.logger import logger
 from app.core.positions_service import positions_service
 from app.services.agent_management_service import get_agent_service
 from app.core.blockchain_service import blockchain_service
+from app.core.config import settings
 
 
 class UserService:
@@ -45,11 +47,14 @@ class UserService:
             # Create new user
             user = User(
                 user_id=user_id,
-                cdp_wallet_address=cdp_wallet_address,
-                cdp_wallet_name=cdp_wallet_name
+                cdp_wallet_address=cdp_wallet_address
             )
-            # Set agent status through the property (stored in user_metadata)
+            # Set agent status and wallet name through user_metadata
             user.agent_status = 'not_started'
+            if cdp_wallet_name:
+                if not user.user_metadata:
+                    user.user_metadata = {}
+                user.user_metadata['cdp_wallet_name'] = cdp_wallet_name
             
             self.db.add(user)
             await self.db.commit()
@@ -98,19 +103,17 @@ class UserService:
         for tx in txs:
             if not tx.event_data:
                 continue
-                
-            amt = Decimal(str(tx.amount_usdc or 0))
-            from_addr = tx.event_data.get('from_address', '').lower()
-            to_addr = tx.event_data.get('to_address', '').lower()
-            
+
+            # Get amount from event_data (amount_usdc column is deprecated)
+            amt = Decimal(str(tx.event_data.get('amount_usdc', 0)))
+
+            # The event_data doesn't have from_address/to_address fields
+            # For deposits and withdrawals categorized by wallet_transaction_service,
+            # we can trust the tx_type since it's already validated
             if tx.tx_type == 'DEPOSIT':
-                # Only count if from user wallet to CDP wallet
-                if from_addr == user_wallet and to_addr == cdp_wallet:
-                    deposits += amt
+                deposits += amt
             elif tx.tx_type in ['WITHDRAWAL', 'WITHDRAW']:
-                # Only count if from CDP wallet to user wallet
-                if from_addr == cdp_wallet and to_addr == user_wallet:
-                    withdrawals += amt
+                withdrawals += amt
 
         return deposits, withdrawals
     
@@ -161,7 +164,6 @@ class UserService:
             user.updated_at = datetime.utcnow()
             await self.db.commit()
             await self.db.refresh(user)
-            logger.info(f"Successfully updated wallet for user {user_id}")
         else:
             logger.warning(f"User {user_id} already has wallet {user.cdp_wallet_address}, not updating to {wallet_address}")
         
@@ -191,13 +193,16 @@ class UserService:
         if cost_basis_withdrawn is not None:
             tx_metadata['cost_basis_withdrawn'] = float(cost_basis_withdrawn)
         
+        now = datetime.now(timezone.utc)
         transaction = Transaction(
             user_id=user_id,
             tx_type=tx_type_value,
             tx_hash=tx_hash,
             status=TransactionStatus.PENDING,
             tx_metadata=tx_metadata,
-            event_data={'amount_usdc': float(amount_usdc)} if amount_usdc else {}
+            event_data={'amount_usdc': float(amount_usdc)} if amount_usdc else {},
+            block_timestamp=now,  # Set block_timestamp for proper ordering
+            created_at=now
         )
         
         self.db.add(transaction)
@@ -296,34 +301,42 @@ class UserService:
         offset: int = 0,
         sort_order: str = "desc"
     ) -> List[Transaction]:
-        """Get user transactions with optional filters."""
+        """Get user transactions with optional filters, including CDP wallet transactions."""
+        # First get transactions from the main Transaction table
         stmt = select(Transaction).where(Transaction.user_id == user_id)
-        
+
+        # Filter out deprecated transaction types (STAKING, SWAP, FEE_TRANSFER)
+        stmt = stmt.where(Transaction.tx_type.not_in(['STAKING', 'SWAP', 'FEE_TRANSFER']))
+
         if transaction_type:
             # Use the enum value directly - it should match the database
             tx_type_value = transaction_type.value if hasattr(transaction_type, 'value') else str(transaction_type)
             stmt = stmt.where(Transaction.tx_type == tx_type_value)
         if status:
             stmt = stmt.where(Transaction.status == status)
-        
-        # Order by block_number first (if available), then by created_at
-        # This ensures proper chronological order for blockchain transactions
+
+        # Order by block_timestamp for true chronological ordering
+        # Use COALESCE to handle nulls (though all should have block_timestamp)
         if sort_order.lower() == "asc":
             # Oldest first
             stmt = stmt.order_by(
-                Transaction.block_number.asc().nullsfirst(),  # Blockchain order first
-                Transaction.created_at.asc()  # Then by creation time
+                func.coalesce(Transaction.block_timestamp, Transaction.created_at).asc()
             )
         else:
             # Newest first (default)
             stmt = stmt.order_by(
-                Transaction.block_number.desc().nullslast(),  # Blockchain order first
-                Transaction.created_at.desc()  # Then by creation time
+                func.coalesce(Transaction.block_timestamp, Transaction.created_at).desc()
             )
-        stmt = stmt.limit(limit).offset(offset)
-        
+
+        # Execute regular transactions query
         result = await self.db.execute(stmt)
-        return result.scalars().all()
+        transactions = list(result.scalars().all())
+
+        # Note: CDP wallet transactions are now stored directly in the transactions table
+        # with appropriate tx_type instead of a separate WalletTransaction table
+
+        # Apply limit and offset to results
+        return transactions[offset:offset + limit]
     
     async def deposit_usdc(
         self,
@@ -376,23 +389,24 @@ class UserService:
         self,
         user_id: str,
         amount: Decimal,
-        tx_hash: Optional[str] = None,
-        to_address: Optional[str] = None,
-        force_close_positions: bool = True,
-        max_slippage_percent: Decimal = Decimal("0.5"),
         withdraw_all: bool = False
     ) -> Transaction:
         """Process USDC withdrawal for user.
-        
+
+        Withdrawals always:
+        - Go to the user_id address (no destination_address parameter)
+        - Force close positions if needed (hardcoded to True)
+        - Use 0.1% max slippage (hardcoded)
+        - Execute through agent manager (no manual tx_hash)
+
         Args:
-            user_id: The user's wallet address (used as ID)
+            user_id: The user's wallet address (used as both ID and destination)
             amount: Amount of USDC to withdraw
-            tx_hash: Optional transaction hash if already executed
-            to_address: Optional destination address (defaults to user_id)
-            force_close_positions: Whether to close positions if needed
-            max_slippage_percent: Maximum acceptable slippage when closing positions
             withdraw_all: Whether to withdraw entire available balance
         """
+        # Hardcoded parameters
+        FORCE_CLOSE_POSITIONS = True
+        MAX_SLIPPAGE_PERCENT = Decimal("0.1")
         # Verify user exists
         user = await self.get_user(user_id)
         if not user:
@@ -409,11 +423,8 @@ class UserService:
             logger.info(f"Withdraw all: using actual wallet balance {wallet_balance} instead of requested {amount}")
             amount = wallet_balance
         
-        # If wallet balance is insufficient, check if we should close positions
+        # If wallet balance is insufficient, always try to close positions (force_close_positions is always True)
         if wallet_balance < amount:
-            if not force_close_positions:
-                raise ValueError(f"Insufficient wallet balance. Available: {wallet_balance}, Requested: {amount}")
-            
             # Get active positions
             active_positions = await self.get_user_positions(user_id, status='ACTIVE')
             
@@ -430,49 +441,48 @@ class UserService:
             for position in active_positions:
                 expected_balance += (position.current_value_usdc or position.entry_amount_usdc)
             
-            if expected_balance < amount:
+            # Skip validation if withdraw_all is True - we want to withdraw everything
+            if not withdraw_all and expected_balance < amount:
                 raise ValueError(f"Insufficient funds even with positions. Expected: {expected_balance}, Requested: {amount}")
         
-        # If no tx_hash provided, execute withdrawal through agent manager
-        if not tx_hash:
-            from app.services.agent_management_service import get_agent_service
-            agent_service = get_agent_service()
-            
-            try:
-                # DO NOT mark positions as closed in DB - let the agent handle it on-chain
-                # The watcher will detect POSITION_CLOSED events and update the DB
-                
-                # If withdraw_all and positions need to be closed, calculate expected total
-                if withdraw_all and positions_to_close:
-                    # Calculate expected balance after positions are closed (including AERO rewards)
-                    expected_total = wallet_balance
-                    for position in positions_to_close:
-                        expected_total += (position.current_value_usdc or position.entry_amount_usdc)
-                    
-                    # Note: AERO rewards will be handled by the agent when closing positions
-                    logger.info(f"Withdraw all: expecting ~{expected_total} USDC after closing {len(positions_to_close)} positions")
-                    # Use a high amount to ensure everything is withdrawn
-                    amount = expected_total * Decimal("1.1")  # Add 10% buffer to ensure all funds are withdrawn
-                
-                # Request withdrawal through agent (it will close positions on-chain if needed)
-                result = await agent_service.withdraw_usdc(
-                    user_id=user_id,
-                    amount=float(amount),
-                    to_address=to_address,
-                    positions_to_close=[int(p.nft_token_id) for p in positions_to_close if p.nft_token_id],  # Ensure NFT IDs are integers
-                    withdraw_all=withdraw_all
-                )
-                
-                if not result.get('success'):
-                    error_msg = result.get('error', 'Unknown error')
-                    raise ValueError(f"Withdrawal failed: {error_msg}")
-                
-                tx_hash = result.get('tx_hash')
-                if not tx_hash:
-                    raise ValueError("Withdrawal executed but no transaction hash returned")
-                    
-            except Exception as e:
-                raise
+        # Always execute withdrawal through agent manager
+        from app.services.agent_management_service import get_agent_service
+        agent_service = get_agent_service()
+
+        try:
+            # DO NOT mark positions as closed in DB - let the agent handle it on-chain
+            # The watcher will detect POSITION_CLOSED events and update the DB
+
+            # If withdraw_all and positions need to be closed, calculate expected total
+            if withdraw_all and positions_to_close:
+                # Calculate expected balance after positions are closed (including AERO rewards)
+                expected_total = wallet_balance
+                for position in positions_to_close:
+                    expected_total += (position.current_value_usdc or position.entry_amount_usdc)
+
+                # Note: AERO rewards will be handled by the agent when closing positions
+                logger.info(f"Withdraw all: expecting ~{expected_total} USDC after closing {len(positions_to_close)} positions")
+                # Use a high amount to ensure everything is withdrawn
+                amount = expected_total * Decimal("1.1")  # Add 10% buffer to ensure all funds are withdrawn
+
+            # Request withdrawal through agent (destination is always user_id)
+            result = await agent_service.withdraw_usdc(
+                user_id=user_id,
+                amount=float(amount),
+                positions_to_close=[int(p.nft_token_id) for p in positions_to_close if p.nft_token_id],  # Ensure NFT IDs are integers
+                withdraw_all=withdraw_all
+            )
+
+            if not result.get('success'):
+                error_msg = result.get('error', 'Unknown error')
+                raise ValueError(f"Withdrawal failed: {error_msg}")
+
+            tx_hash = result.get('tx_hash')
+            if not tx_hash:
+                raise ValueError("Withdrawal executed but no transaction hash returned")
+
+        except Exception as e:
+            raise
         
         # Don't create transaction in database - let the watcher handle it
         # The watcher will detect the WITHDRAWAL event on-chain and create the transaction
@@ -484,17 +494,19 @@ class UserService:
         import uuid
         
         # Create a mock transaction for the API response
+        now = datetime.now(timezone.utc)
         transaction = Transaction(
             id=uuid.uuid4(),
             user_id=user_id,
-            tx_type='WITHDRAWAL',
+            tx_type='WITHDRAW',  # Changed from WITHDRAWAL to match schema
             tx_hash=tx_hash,
-            status='PENDING' if not tx_hash else 'CONFIRMED',
+            status='CONFIRMED',  # Always CONFIRMED since we wait for tx_hash from agent
             event_data={
                 'amount_usdc': float(amount),
-                'to_address': to_address or user_id
+                'to_address': user_id  # Always withdraw to user's own address
             },
-            created_at=datetime.now(timezone.utc)
+            block_timestamp=now,  # Set block_timestamp for proper ordering
+            created_at=now
         )
         
         # Check and update deposit flag after withdrawal
@@ -551,7 +563,7 @@ class UserService:
         warning_message = None
         if requires_closing:
             # Simple protocol fee message without specific AERO amounts
-            fee_msg = " A 2% protocol fee (0.0081 USDC) applies to AERO rewards."
+            fee_msg = " A 5% protocol fee applies to AERO rewards."
             if estimated_slippage > 0:
                 warning_message = f"This withdrawal requires closing {positions_to_close} position(s). Estimated slippage: {estimated_slippage:.4f} USDC.{fee_msg}"
             else:
@@ -625,8 +637,12 @@ class UserService:
         # Check if user has sufficient balance
         current_balance = await self.get_user_balance(user_id)
         if current_balance < entry_amount_usdc:
-            raise ValueError(
-                f"Insufficient balance. Available: {current_balance}, Required: {entry_amount_usdc}"
+            logger.warning(
+                "Recorded balance below entry amount for user {} (available={}, required={}); "
+                "proceeding because on-chain balance is authoritative.",
+                user_id,
+                current_balance,
+                entry_amount_usdc,
             )
         
         # Create position with initial value set to entry amount
@@ -652,6 +668,7 @@ class UserService:
         )
         
         # Create transaction record for position entry (debit)
+        now = datetime.now(timezone.utc)
         transaction = Transaction(
             user_id=user_id,
             transaction_type=TransactionType.POSITION_CREATED,
@@ -665,7 +682,8 @@ class UserService:
                 "pool_name": pool_name,
                 "action": "position_opened"
             }),
-            confirmed_at=datetime.now(timezone.utc)
+            block_timestamp=now,  # Set block_timestamp for proper ordering
+            confirmed_at=now
         )
         
         # Add both records in the same transaction
@@ -845,8 +863,7 @@ class UserService:
             # For now, skip blockchain fetch and use database values
             # The blockchain fetch might be failing or returning None
             final_value_usdc = position.current_value_usdc or position.entry_amount_usdc
-            logger.info(f"Using database value for position {nft_token_id}: current={position.current_value_usdc}, entry={position.entry_amount_usdc}, using={final_value_usdc}")
-        
+
         # Calculate realized P&L if not provided
         if realized_pnl_usdc is None:
             realized_pnl_usdc = final_value_usdc - position.entry_amount_usdc
@@ -880,6 +897,7 @@ class UserService:
             "realized_pnl_usdc": float(realized_pnl_usdc)
         }
         
+        now = datetime.now(timezone.utc)
         transaction = Transaction(
             id=uuid.uuid4(),  # Ensure we have a primary key
             user_id=user_id,
@@ -888,8 +906,9 @@ class UserService:
             status='CONFIRMED',  # Fixed to uppercase for consistency
             tx_metadata=tx_metadata,
             event_data={'amount_usdc': float(amount_returned)},
-            processed_at=datetime.now(timezone.utc),
-            created_at=datetime.now(timezone.utc)
+            block_timestamp=now,  # Set block_timestamp for proper ordering
+            processed_at=now,
+            created_at=now
         )
         
         self.db.add(transaction)
@@ -902,11 +921,7 @@ class UserService:
         
         # Log the transaction details for debugging
         logger.info(f"Created POSITION_CLOSED transaction: id={transaction.id}, amount={float(amount_returned)}, status={transaction.status}")
-        
-        # Double-check the balance immediately after
-        test_balance = await self.get_user_balance(user_id)
-        logger.info(f"Balance after closing position {nft_token_id}: {test_balance} USDC (should be {amount_returned})")
-        
+
         logger.info(f"Closed position {nft_token_id} for user {user_id}, returned {amount_returned} USDC")
         return position
     
@@ -1171,224 +1186,43 @@ class UserService:
     
     async def recalculate_user_pnl_for_period(self, user_id: str, period: TimePeriod = TimePeriod.ALL_TIME) -> Dict[str, Decimal]:
         """Recalculate and return user's PnL values for a specific time period.
-        
-        PNL is calculated as:
-        - Realized PNL: Sum of PnL from positions CLOSED within the period
-        - Unrealized PNL: Sum of PnL from positions CREATED within the period and still ACTIVE
-        
+
+        Uses the SimplePeriodPnLCalculator for proper period-based calculations that:
+        - Considers all positions active during the period (not just opened/closed)
+        - Uses average invested capital as the denominator for percentages
+        - Provides meaningful metrics that avoid impossible percentage values
+
         Args:
             user_id: User identifier
             period: Time period to calculate PnL for (24h, 7d, 30d, all)
-        
+
         Returns:
             Dictionary with PnL values for the period
         """
-        from app.core.positions_service import positions_service
-        from sqlalchemy import select, and_, or_
-        from app.database.models import Transaction
-        
-        # Get user
-        stmt = select(User).where(User.user_id == user_id)
-        result = await self.db.execute(stmt)
-        user = result.scalar_one_or_none()
-        
-        if not user:
-            logger.error(f"User {user_id} not found for PnL calculation")
-            return {}
-        
-        # Calculate time boundary based on period
-        now = datetime.now(timezone.utc)
-        if period == TimePeriod.DAY_1:
-            time_boundary = now - timedelta(days=1)
-        elif period == TimePeriod.DAY_7:
-            time_boundary = now - timedelta(days=7)
-        elif period == TimePeriod.DAY_30:
-            time_boundary = now - timedelta(days=30)
-        else:  # ALL_TIME
-            time_boundary = None
-        
-        # Get all positions
-        all_positions = await self.get_user_positions(user_id)
-        
-        # Filter positions based on period
-        if time_boundary:
-            # For closed positions: include if closed within the period
-            closed_positions = []
-            for p in all_positions:
-                if p.status == 'CLOSED' and p.closed_at:
-                    # Ensure closed_at is timezone-aware
-                    closed_at = p.closed_at
-                    if closed_at.tzinfo is None:
-                        closed_at = closed_at.replace(tzinfo=timezone.utc)
-                    if closed_at >= time_boundary:
-                        closed_positions.append(p)
-            
-            # For active positions: include if created within the period
-            active_positions = []
-            for p in all_positions:
-                if p.status == 'ACTIVE' and p.created_at:
-                    # Ensure created_at is timezone-aware
-                    created_at = p.created_at
-                    if created_at.tzinfo is None:
-                        created_at = created_at.replace(tzinfo=timezone.utc)
-                    if created_at >= time_boundary:
-                        active_positions.append(p)
-        else:
-            # All time - include all positions
-            closed_positions = [p for p in all_positions if p.status == 'CLOSED']
-            active_positions = [p for p in all_positions if p.status == 'ACTIVE']
-        
-        # Get deposits and withdrawals for the period for percentage calculations
-        total_deposits = Decimal(0)
-        total_withdrawals = Decimal(0)
-        
-        if time_boundary:
-            # Get all confirmed deposits and withdrawals
-            deposit_stmt = select(Transaction).where(
-                and_(
-                    Transaction.user_id == user_id,
-                    Transaction.tx_type == 'DEPOSIT',
-                    Transaction.status == 'CONFIRMED'
-                )
-            )
-            deposit_result = await self.db.execute(deposit_stmt)
-            deposits = deposit_result.scalars().all()
-            
-            # Filter deposits by period, handling timezone issues
-            filtered_deposits = []
-            for t in deposits:
-                if t.created_at:
-                    created_at = t.created_at
-                    if created_at.tzinfo is None:
-                        created_at = created_at.replace(tzinfo=timezone.utc)
-                    if created_at >= time_boundary:
-                        filtered_deposits.append(t)
-            total_deposits = sum(Decimal(str(t.amount_usdc)) for t in filtered_deposits)
-            
-            # Get withdrawals for the period
-            withdrawal_stmt = select(Transaction).where(
-                and_(
-                    Transaction.user_id == user_id,
-                    or_(Transaction.tx_type == 'WITHDRAWAL', Transaction.tx_type == 'WITHDRAW'),
-                    Transaction.status == 'CONFIRMED'
-                )
-            )
-            withdrawal_result = await self.db.execute(withdrawal_stmt)
-            withdrawals = withdrawal_result.scalars().all()
-            
-            # Filter withdrawals by period, handling timezone issues
-            filtered_withdrawals = []
-            for t in withdrawals:
-                if t.created_at:
-                    created_at = t.created_at
-                    if created_at.tzinfo is None:
-                        created_at = created_at.replace(tzinfo=timezone.utc)
-                    if created_at >= time_boundary:
-                        filtered_withdrawals.append(t)
-            total_withdrawals = sum(Decimal(str(t.amount_usdc)) for t in filtered_withdrawals)
-        else:
-            # All time - get all deposits and withdrawals
-            total_deposits, total_withdrawals = await self.get_deposit_withdrawal_totals(user_id)
-        
-        # =================================================================
-        # REALIZED PNL: Sum of PnL from positions CLOSED within the period
-        # =================================================================
-        realized_pnl = Decimal(0)
-        for position in closed_positions:
-            # For closed positions, calculate PnL as exit value - entry value
-            exit_value = position.current_value_usdc or Decimal(0)
-            entry_value = position.entry_amount_usdc or Decimal(0)
-            position_pnl = exit_value - entry_value
-            realized_pnl += position_pnl
-            logger.debug(f"Closed position {position.nft_token_id} (period {period}): entry={entry_value}, exit={exit_value}, pnl={position_pnl}")
-        
-        # =================================================================
-        # UNREALIZED PNL: Sum of PnL from positions CREATED within period and still ACTIVE
-        # =================================================================
-        total_unrealized_pnl = Decimal(0)
-        
-        for position in active_positions:
-            try:
-                # Fetch real-time value from blockchain
-                position_info = await positions_service.get_position_by_id(position.nft_token_id)
-                
-                if position_info:
-                    current_value_usd = Decimal(str(position_info.current_value_usd or 0))
-                    unclaimed_fees_usd = Decimal(str(position_info.unclaimed_fees_usd or 0))
-                    
-                    # Calculate total current value
-                    position_current_value = current_value_usd + unclaimed_fees_usd
-                    
-                    # Calculate unrealized PnL for this position
-                    entry_value = position.entry_amount_usdc or Decimal(0)
-                    position_unrealized_pnl = position_current_value - entry_value
-                    total_unrealized_pnl += position_unrealized_pnl
-                    
-                    logger.debug(f"Active position {position.nft_token_id} (period {period}): entry={entry_value}, current={position_current_value}, unrealized_pnl={position_unrealized_pnl}")
-                else:
-                    # Use cached values if blockchain fetch fails
-                    cached_value = position.current_value_usdc or position.entry_amount_usdc or Decimal(0)
-                    entry_value = position.entry_amount_usdc or Decimal(0)
-                    position_unrealized_pnl = cached_value - entry_value
-                    total_unrealized_pnl += position_unrealized_pnl
-                    
-            except Exception as e:
-                logger.error(f"Error fetching position {position.nft_token_id}: {e}")
-                # Use database values as fallback
-                cached_value = position.current_value_usdc or position.entry_amount_usdc or Decimal(0)
-                entry_value = position.entry_amount_usdc or Decimal(0)
-                position_unrealized_pnl = cached_value - entry_value
-                total_unrealized_pnl += position_unrealized_pnl
-        
-        # Calculate net deposits for percentage calculations
-        net_deposits = total_deposits - total_withdrawals
-        
-        # Calculate percentage returns
-        realized_pnl_percentage = Decimal(0)
-        if total_deposits > 0:
-            realized_pnl_percentage = (realized_pnl / total_deposits) * 100
-        
-        unrealized_pnl_percentage = Decimal(0)
-        if net_deposits > 0:
-            unrealized_pnl_percentage = (total_unrealized_pnl / net_deposits) * 100
-        
-        # Calculate total fees and rewards from filtered positions
-        all_filtered_positions = closed_positions + active_positions
-        total_fees_earned = sum(p.fees_earned_usdc or Decimal(0) for p in all_filtered_positions)
-        total_rewards_earned = sum(p.rewards_earned_usdc or Decimal(0) for p in all_filtered_positions)
-        
-        # Get protocol fees pending from filtered positions
-        protocol_fees_pending = sum(
-            p.protocol_fee_amount for p in all_filtered_positions 
-            if p.protocol_fee_amount and not p.protocol_fee_collected
-        )
-        
-        # Calculate total PnL (realized + unrealized)
-        total_pnl = realized_pnl + total_unrealized_pnl
-        
-        # Net PnL after protocol fees
-        net_pnl = total_pnl - protocol_fees_pending
-        
-        logger.info(
-            f"PNL for {user_id} (period {period}): "
-            f"realized={realized_pnl:.2f} ({realized_pnl_percentage:.2f}%), "
-            f"unrealized={total_unrealized_pnl:.2f} ({unrealized_pnl_percentage:.2f}%)"
-        )
-        
+        from app.services.period_pnl_calculator import SimplePeriodPnLCalculator
+
+        # Use the new period PNL calculator for proper calculations
+        calculator = SimplePeriodPnLCalculator(self.db)
+        pnl_result = await calculator.calculate_period_pnl(user_id, period)
+
+        # Map the results to maintain backwards compatibility with existing API
+        # The new calculator provides more accurate calculations that avoid impossible percentages
         return {
-            "realized_pnl_usdc": realized_pnl,
-            "unrealized_pnl_usdc": total_unrealized_pnl,
-            "unrealized_pnl_percentage": unrealized_pnl_percentage,
-            "unrealized_pnl_pct": unrealized_pnl_percentage,  # Alias
-            "realized_pnl_percentage": realized_pnl_percentage,
-            "fees_earned_usdc": total_fees_earned,
-            "rewards_earned_usdc": total_rewards_earned,
-            "total_pnl_usdc": total_pnl,
-            "protocol_fees_pending_usdc": protocol_fees_pending,
-            "net_pnl_usdc": net_pnl,
-            "period": period,
-            "active_positions_count": len(active_positions),
-            "closed_positions_count": len(closed_positions)
+            "realized_pnl_usdc": pnl_result.get("realized_pnl_usdc", Decimal(0)),
+            "unrealized_pnl_usdc": pnl_result.get("unrealized_pnl_usdc", Decimal(0)),
+            "fees_earned_usdc": pnl_result.get("fees_earned_usdc", Decimal(0)),
+            "rewards_earned_usdc": pnl_result.get("rewards_earned_usdc", Decimal(0)),
+            "total_pnl_usdc": pnl_result.get("total_pnl_usdc", Decimal(0)),
+            "total_pnl_percentage": pnl_result.get("total_pnl_percentage", Decimal(0)),
+            "net_deposits": pnl_result.get("net_deposits", Decimal(0)),
+            "average_invested": pnl_result.get("average_invested", Decimal(0)),
+            # Additional fields for API compatibility
+            "realized_pnl_percentage": Decimal(0),  # Will be calculated in the endpoint
+            "unrealized_pnl_percentage": Decimal(0),  # Will be calculated in the endpoint
+            "unrealized_pnl_pct": Decimal(0),  # Will be calculated in the endpoint
+            "protocol_fees_pending_usdc": Decimal(0),
+            "net_pnl_usdc": pnl_result.get("total_pnl_usdc", Decimal(0)),
+            "active_positions_count": 0  # Will be calculated separately if needed
         }
     
     async def calculate_user_performance(self, user_id: str) -> Dict[str, Any]:
@@ -1421,37 +1255,30 @@ class UserService:
         user = await self.get_user(user_id)
         if user and user.cdp_wallet_address and active_positions:
             try:
-                # Call strategy monitor endpoint internally
-                from app.schemas.strategy_v2 import MonitorRequest
-                from app.core.strategy_service import strategy_service
-                from app.schemas.strategy import MonitorPositionsRequest
-                
-                # Use the CDP wallet address for the strategy monitor
-                monitor_request = MonitorPositionsRequest(
-                    user_address=user.cdp_wallet_address
-                )
-                monitor_response = await strategy_service.monitor_positions(monitor_request)
-                
-                # Calculate weighted average APR based on position values
-                if monitor_response and monitor_response.positions:
-                    from app.core.positions_service import positions_service
-                    
-                    # Fetch actual position data for values
-                    positions_data = await positions_service.get_positions_by_owner(user.cdp_wallet_address)
-                    
-                    # Calculate weighted average APR
-                    total_value = 0
-                    weighted_apr_sum = 0
-                    
-                    for pos_data in positions_data:
-                        # Find corresponding position status with effective APR
-                        pos_status = next((p for p in monitor_response.positions if p.token_id == pos_data.id), None)
-                        if pos_status and pos_data.current_value_usd:
-                            position_value = pos_data.current_value_usd
-                            total_value += position_value
-                            weighted_apr_sum += position_value * pos_status.current_apr
-                    
-                    apr = Decimal(weighted_apr_sum / total_value) if total_value > 0 else Decimal(0)
+                # Strategy monitoring removed - using direct position data instead
+                from app.core.positions_service import positions_service
+
+                # Fetch actual position data for values
+                positions_data = await positions_service.get_positions_by_owner(user.cdp_wallet_address)
+
+                # Calculate weighted average APR directly from pool data
+                total_value = 0
+                weighted_apr_sum = 0
+
+                from app.core.pools_service import pools_service
+                for pos_data in positions_data:
+                    if pos_data.current_value_usd and hasattr(pos_data, 'pool_address'):
+                        try:
+                            pool_info = await pools_service.get_pool_info(pos_data.pool_address)
+                            if pool_info:
+                                position_value = pos_data.current_value_usd
+                                pool_apr = pool_info.get('apr_7d', 0)
+                                total_value += position_value
+                                weighted_apr_sum += position_value * pool_apr
+                        except:
+                            pass
+
+                apr = Decimal(weighted_apr_sum / total_value) if total_value > 0 else Decimal(0)
                 
             except Exception as e:
                 logger.warning(f"Could not fetch APR from strategy monitor for user {user_id}: {e}")
@@ -1477,3 +1304,110 @@ class UserService:
             "active_positions": len(active_positions),
             "total_positions": len(positions)
         }
+
+    async def sync_blockchain_data(self, user_id: str) -> Dict[str, Any]:
+        """Sync user's blockchain data (transactions and positions) with database.
+
+        This should be called by all endpoints to ensure DB is up-to-date with onchain state.
+
+        Uses smart rate limiting: skips sync if user was synced within the last 15 seconds.
+
+        Args:
+            user_id: User identifier
+
+        Returns:
+            Dict with sync results (transactions_synced, positions_created, etc.)
+        """
+        from app.core.cache import cache_manager
+
+        # Check if we should skip sync due to rate limiting
+        if await cache_manager.should_skip_sync(user_id):
+            # Return cached result if available
+            cached_result = await cache_manager.get_cached_sync_result(user_id)
+            if cached_result:
+                logger.debug(f"Skipping sync for {user_id} - synced {cached_result.get('seconds_ago', '?')}s ago")
+                return cached_result
+
+            # If no cached result, return minimal success result
+            logger.debug(f"Skipping sync for {user_id} - recently synced")
+            return {
+                "transactions_synced": 0,
+                "positions_created": 0,
+                "positions_updated": 0,
+                "success": True,
+                "skipped": True
+            }
+
+        sync_result = {
+            "transactions_synced": 0,
+            "positions_created": 0,
+            "positions_updated": 0,
+            "success": False
+        }
+
+        try:
+            # Get user with CDP wallet
+            user = await self.get_user(user_id)
+            if not user or not user.cdp_wallet_address:
+                logger.warning(f"User {user_id} has no CDP wallet for sync")
+                return sync_result
+
+            # Only sync if CDP API key is configured
+            if not settings.cdp_client_api_key:
+                logger.debug("CDP API key not configured, skipping blockchain sync")
+                return sync_result
+
+            # Import here to avoid circular dependency
+            from app.services.wallet_transaction_service import WalletTransactionService
+
+            # Sync transactions from blockchain
+            wallet_service = WalletTransactionService(self.db)
+
+            # Fetch and sync transactions
+            tx_result = await wallet_service.fetch_and_sync_transactions(
+                user_id=user_id,
+                cdp_wallet_address=user.cdp_wallet_address,
+                limit=100  # Sync last 100 transactions
+            )
+
+            sync_result["transactions_synced"] = tx_result.get("transactions_synced", 0)
+
+            # Ensure positions exist for all POSITION_CREATED transactions
+            positions_result = await wallet_service.ensure_positions_for_transactions(user_id)
+            sync_result["positions_created"] = positions_result.get("positions_created", 0) if positions_result else 0
+
+            # Update position values from blockchain
+            positions = await self.get_user_positions(user_id, status=PositionStatus.ACTIVE)
+            positions_updated = 0
+
+            for position in positions:
+                try:
+                    # Get current value from blockchain
+                    position_info = await positions_service.get_position_by_id(position.token_id)
+
+                    if position_info and position_info.current_value_usd:
+                        await self.update_position_value(
+                            nft_token_id=position.token_id,
+                            current_value_usdc=Decimal(str(position_info.current_value_usd)),
+                            unrealized_pnl_usdc=Decimal("0"),  # Not available in PositionInfo
+                            fees_earned_usdc=Decimal(str(position_info.unclaimed_fees_usd or 0)),
+                            rewards_earned_usdc=Decimal("0")  # Rewards are in AERO, not USD
+                        )
+                        positions_updated += 1
+                except Exception as e:
+                    logger.warning(f"Failed to update position {position.token_id}: {e}")
+
+            sync_result["positions_updated"] = positions_updated
+            sync_result["success"] = True
+
+            # Mark sync as completed and cache the result
+            await cache_manager.mark_sync_completed(user_id)
+            await cache_manager.cache_sync_result(user_id, sync_result)
+
+            logger.info(f"Blockchain sync for {user_id}: {sync_result}")
+
+        except Exception as e:
+            logger.error(f"Error syncing blockchain data for {user_id}: {e}")
+            sync_result["error"] = str(e)
+
+        return sync_result

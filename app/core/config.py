@@ -15,6 +15,7 @@ class Settings(BaseSettings):
         default="https://base-mainnet.g.alchemy.com/v2/PbEIlFPXdZpA6ld_nxViZD73mlaupBrY",
         env="RPC_URL"
     )
+    base_rpc_url: Optional[str] = Field(default=None, env="BASE_RPC_URL")
     
     # Cache Configuration (seconds)
     cache_ttl_token_info: int = Field(default=3600, env="CACHE_TTL_TOKEN_INFO")
@@ -38,10 +39,14 @@ class Settings(BaseSettings):
     cors_allow_methods: List[str] = Field(default=["*"], env="CORS_ALLOW_METHODS")
     cors_allow_headers: List[str] = Field(default=["*"], env="CORS_ALLOW_HEADERS")
     
-    # Sugar Contract Configuration
+    # Contract Addresses
     sugar_contract_address: str = Field(
         default="0x27fc745390d1f4BaF8D184FBd97748340f786634",
         env="SUGAR_CONTRACT_ADDRESS"
+    )
+    liquidity_manager_address: str = Field(
+        default="0xA933aAa8222De2f85E7A904E3E3e940652FBFdFD",
+        env="LIQUIDITY_MANAGER_ADDRESS"
     )
     
     # Common Token Addresses
@@ -57,19 +62,9 @@ class Settings(BaseSettings):
         default="0x4200000000000000000000000000000000000006",
         env="WETH_ADDRESS"
     )
-    
-    # Wallet Registry Configuration
-    wallet_registry_contract_address: str = Field(
-        default="0xade8EB85dAE5F102B26499B0Fe43D2217b679778",
-        env="WALLET_REGISTRY_CONTRACT_ADDRESS"
-    )
-    wallet_registry_operator_address: str = Field(
-        default="0x27f4f543c35ee533A7566663C0207Eb179FbA656",
-        env="WALLET_REGISTRY_OPERATOR_ADDRESS"
-    )
-    wallet_registry_operator_private_key: str = Field(
-        default="",
-        env="WALLET_REGISTRY_OPERATOR_PRIVATE_KEY"
+    cbbtc_address: str = Field(
+        default="0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf",
+        env="CBBTC_ADDRESS"
     )
     
     # Gas Configuration
@@ -109,6 +104,20 @@ class Settings(BaseSettings):
     cdp_api_key_id: Optional[str] = Field(default=None, env="CDP_API_KEY_ID")
     cdp_api_key_secret: Optional[str] = Field(default=None, env="CDP_API_KEY_SECRET")
     cdp_wallet_secret: Optional[str] = Field(default=None, env="CDP_WALLET_SECRET")
+    cdp_api_key_name: Optional[str] = Field(default=None, env="CDP_API_KEY_NAME")
+    cdp_api_key_private_key: Optional[str] = Field(default=None, env="CDP_API_KEY_PRIVATE_KEY")
+    
+    # CDP SQL API Configuration
+    cdp_client_api_key: Optional[str] = Field(
+        default=None,
+        env="CDP_CLIENT_API_KEY"
+    )
+    cdp_sql_api_url: str = Field(
+        default="https://api.cdp.coinbase.com/platform/v2/data/query/run",
+        env="CDP_SQL_API_URL"
+    )
+    cdp_sql_cache_ttl: int = Field(default=60, env="CDP_SQL_CACHE_TTL")
+    cdp_sql_max_retries: int = Field(default=3, env="CDP_SQL_MAX_RETRIES")
     
     # Etherscan API Configuration
     etherscan_api_key: Optional[str] = Field(default=None, env="ETHERSCAN_API_KEY")
@@ -131,6 +140,22 @@ class Settings(BaseSettings):
         default=None,
         env="API_BEARER_TOKEN"
     )
+
+    # JWT Secret for session tokens
+    jwt_secret: str = Field(
+        default="",
+        env="JWT_SECRET"
+    )
+
+    # Sentry Configuration
+    sentry_dsn: Optional[str] = Field(
+        default=None,
+        env="SENTRY_DSN"
+    )
+
+    # Wallet Registry Configuration
+    wallet_registry_contract_address: Optional[str] = Field(default=None, env="WALLET_REGISTRY_CONTRACT_ADDRESS")
+    wallet_registry_operator_address: Optional[str] = Field(default=None, env="WALLET_REGISTRY_OPERATOR_ADDRESS")
     
     @property
     def get_database_url(self) -> Optional[str]:

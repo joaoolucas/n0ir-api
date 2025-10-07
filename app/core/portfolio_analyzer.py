@@ -561,27 +561,32 @@ class PortfolioAnalyzer:
         Returns:
             Dynamic risk thresholds dictionary
         """
-        # Import calculator for safety scores
-        from app.core.strategy_calculator import StrategyCalculator
-        calculator = StrategyCalculator()
-        
-        # Calculate average safety score of current positions
-        avg_safety_score = 0
+        # Calculate average safety score of current positions (simplified without StrategyCalculator)
+        avg_safety_score = 50  # Default neutral safety score
+
         if positions:
             safety_scores = []
             for position in positions:
-                # Build pool data from position for safety calculation
-                pool_data = {
-                    'tvl_usd': position.get('pool_tvl', position.get('tvl', 1_000_000)),
-                    'volume_24h': position.get('volume_24h', 100_000),
-                    'token0': {'price_usd': position.get('token0_price', 1)},
-                    'token1': {'price_usd': position.get('token1_price', 1)}
-                }
-                safety_scores.append(calculator.calculate_simple_safety_score(pool_data))
-            avg_safety_score = sum(safety_scores) / len(safety_scores)
-        else:
-            # No positions = neutral safety
-            avg_safety_score = 50
+                # Simple safety score based on TVL and volume
+                tvl = position.get('pool_tvl', position.get('tvl', 1_000_000))
+                volume = position.get('volume_24h', 100_000)
+
+                # Basic safety calculation
+                score = 50  # Base score
+                if tvl > 10_000_000:  # $10M+ TVL
+                    score += 20
+                elif tvl > 5_000_000:  # $5M+ TVL
+                    score += 10
+
+                if volume > 1_000_000:  # $1M+ daily volume
+                    score += 20
+                elif volume > 500_000:  # $500k+ daily volume
+                    score += 10
+
+                score = min(100, max(0, score))  # Clamp to 0-100
+                safety_scores.append(score)
+
+            avg_safety_score = sum(safety_scores) / len(safety_scores) if safety_scores else 50
         
         # Base thresholds (copy from class defaults)
         thresholds = self.RISK_THRESHOLDS.copy()
@@ -882,13 +887,13 @@ class PortfolioAnalyzer:
         # Estimate slippage (exit + entry)
         # Higher for larger positions
         if position_value < 10_000:
-            slippage_rate = 0.003  # 0.3%
+            slippage_rate = 0.001  # 0.1% fixed
         elif position_value < 50_000:
-            slippage_rate = 0.005  # 0.5%
+            slippage_rate = 0.001  # 0.1% fixed
         elif position_value < 100_000:
-            slippage_rate = 0.008  # 0.8%
+            slippage_rate = 0.001  # 0.1% fixed
         else:
-            slippage_rate = 0.012  # 1.2%
+            slippage_rate = 0.001  # 0.1% fixed
         
         slippage_cost = position_value * slippage_rate * 2  # Exit and entry
         

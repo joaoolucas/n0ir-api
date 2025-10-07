@@ -1,4 +1,4 @@
-"""Unified 3-table database models."""
+"""Simplified database models with integrated hedge tracking."""
 
 from app.database.models.user import User
 from app.database.models.position import Position

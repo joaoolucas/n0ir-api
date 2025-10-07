@@ -76,15 +76,13 @@ class PoolsService:
             return cached_result
         
         logger.debug(f"Cache miss for pools list, fetching from blockchain")
-        
+
         # For fast initial loading, skip expensive operations
         # We'll fetch basic pool data without individual price lookups
-        
+
         # Directly fetch from Sugar contract
-        logger.info(f"Fetching pools: type={pool_type}, filters applied")
         pools_raw = await self._fetch_pools_fast(pool_type, blacklist)
-        logger.debug(f"Fetched {len(pools_raw)} raw pools from Sugar contract")
-        
+
         # Quick filtering without price fetches
         filtered_pools = []
         for pool_data in pools_raw:
@@ -102,11 +100,10 @@ class PoolsService:
         start = offset or 0
         end = start + (limit or 100)
         paginated_pools = filtered_pools[start:end]
-        
+
         # Convert to response format with minimal processing
         pools = await self._process_pools_minimal(paginated_pools)
-        logger.info(f"Processed {len(pools)} pools for response")
-        
+
         result = {
             "pools": pools,
             "pagination": {
@@ -553,16 +550,25 @@ class PoolsService:
         return apr  # Return actual APR without cap for accurate agent decision-making
     
     async def get_pool(self, address: str, include_effective_apr: bool = True) -> Dict:
-        """Get single pool by address"""
-        # Don't use cache for single pool fetches to ensure fresh data
+        """Get single pool by address with caching"""
+        # Always use same cache key and always include effective_apr for consistency
+        cache_key = address.lower()
+        cached_pool = await cache_manager.get_pool(cache_key)
+        if cached_pool:
+            logger.debug(f"Cache hit for pool {address}")
+            return cached_pool
+
         try:
             pool_data = self.sugar.functions.byAddress(
                 Web3.to_checksum_address(address)
             ).call()
-            
-            # Convert to dict with effective APR
-            result = await self._convert_sugar_to_pool_data(pool_data, include_effective_apr=include_effective_apr)
-            
+
+            # Always include effective APR for caching (ignore parameter for now)
+            result = await self._convert_sugar_to_pool_data(pool_data, include_effective_apr=True)
+
+            # Cache the result
+            await cache_manager.set_pool(cache_key, result)
+
             return result
         except Exception as e:
             logger.error(f"Failed to fetch pool {address}: {e}")
@@ -628,7 +634,7 @@ class PoolsService:
                 raise
         
         # Always fetch fresh price (cache is short TTL)
-        prices = await self._fetch_token_prices_from_dexscreener([address])
+        prices = await self._fetch_token_prices([address])
         price_usd = prices.get(address.lower(), 0)
         
         # Update cached info with price
@@ -636,27 +642,182 @@ class PoolsService:
         result["price_usd"] = price_usd
         
         return self._serialize_token(result)
-    
-    async def _fetch_token_prices_from_dexscreener(self, addresses: List[str]) -> Dict[str, float]:
-        """Fetch token prices from DexScreener API"""
+
+    async def _get_price_from_aerodrome_pool(self, token_address: str, pool_address: str, is_token0: bool) -> Optional[float]:
+        """
+        Calculate token price from Aerodrome pool using slot0.
+
+        Args:
+            token_address: Address of token to price
+            pool_address: Address of Aerodrome pool
+            is_token0: Whether token is token0 in the pool
+
+        Returns:
+            Token price in USD, or None if calculation fails
+        """
+        try:
+            # Get pool contract
+            pool_abi = [
+                {
+                    "name": "slot0",
+                    "type": "function",
+                    "stateMutability": "view",
+                    "inputs": [],
+                    "outputs": [
+                        {"name": "sqrtPriceX96", "type": "uint160"},
+                        {"name": "tick", "type": "int24"},
+                        {"name": "observationIndex", "type": "uint16"},
+                        {"name": "observationCardinality", "type": "uint16"},
+                        {"name": "observationCardinalityNext", "type": "uint16"},
+                        {"name": "unlocked", "type": "bool"}
+                    ]
+                },
+                {
+                    "name": "token0",
+                    "type": "function",
+                    "stateMutability": "view",
+                    "inputs": [],
+                    "outputs": [{"type": "address"}]
+                },
+                {
+                    "name": "token1",
+                    "type": "function",
+                    "stateMutability": "view",
+                    "inputs": [],
+                    "outputs": [{"type": "address"}]
+                }
+            ]
+
+            pool_contract = self.w3.eth.contract(
+                address=Web3.to_checksum_address(pool_address),
+                abi=pool_abi
+            )
+
+            # Get slot0 data
+            slot0_data = pool_contract.functions.slot0().call()
+            sqrt_price_x96 = slot0_data[0]
+
+            # Get token0 and token1 addresses to fetch decimals
+            token0_addr = pool_contract.functions.token0().call()
+            token1_addr = pool_contract.functions.token1().call()
+
+            token0_contract = self.w3.eth.contract(
+                address=Web3.to_checksum_address(token0_addr),
+                abi=TOKEN_ABI
+            )
+            token1_contract = self.w3.eth.contract(
+                address=Web3.to_checksum_address(token1_addr),
+                abi=TOKEN_ABI
+            )
+
+            decimals0 = token0_contract.functions.decimals().call()
+            decimals1 = token1_contract.functions.decimals().call()
+
+            # Convert sqrtPriceX96 to price
+            # sqrtPriceX96 = sqrt(reserve1/reserve0) * 2^96
+            # price = (sqrtPriceX96 / 2^96)^2 gives reserve1/reserve0 in smallest units
+            # To get human-readable: multiply by 10^(decimals0 - decimals1)
+            # This converts from (wei1/wei0) to (token1/token0)
+
+            price = (sqrt_price_x96 / (2**96)) ** 2
+            # This gives us reserve1/reserve0 in terms of smallest units (wei)
+            # Adjust for decimals to get human-readable price (tokens)
+            price_token1_per_token0 = price * (10 ** (decimals0 - decimals1))
+
+            # Now convert to USD
+            # For WETH/USDC pool: token0=WETH (18 decimals), token1=USDC (6 decimals)
+            #   price_token1_per_token0 = USDC per WETH = WETH price in USD ✓
+            # For USDC/cbBTC pool: token0=USDC (6 decimals), token1=cbBTC (18 decimals)
+            #   price_token1_per_token0 = cbBTC per USDC, so cbBTC price = 1 / price_token1_per_token0
+
+            if is_token0:
+                # Token we're pricing is token0
+                # price_token1_per_token0 tells us how much token1 per 1 token0
+                # Since token1 is USDC (=$1), this is the USD price of token0
+                adjusted_price = price_token1_per_token0
+            else:
+                # Token we're pricing is token1
+                # price_token1_per_token0 tells us how much token1 per 1 token0
+                # Since token0 is USDC (=$1), invert to get USD price of token1
+                adjusted_price = 1 / price_token1_per_token0 if price_token1_per_token0 > 0 else 0
+
+            logger.debug(f"Calculated price for {token_address} from pool {pool_address}: ${adjusted_price:.2f}")
+            return adjusted_price
+
+        except Exception as e:
+            logger.warning(f"Failed to get price from Aerodrome pool {pool_address} for {token_address}: {e}")
+            return None
+
+    async def _fetch_token_prices(self, addresses: List[str]) -> Dict[str, float]:
+        """
+        Fetch token prices using multiple sources (priority order):
+        1. Aerodrome pool slot0 for WETH/cbBTC
+        2. Fixed prices for stablecoins
+        3. CoinGecko for major tokens
+        4. DexScreener as fallback
+        """
         import aiohttp
         import asyncio
-        
+
         prices = {}
-        
-        # Known stablecoins (lowercase addresses)
-        stablecoins = {
-            "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913".lower(): 1.0,  # USDC on Base
-            "0x50c5725949a6f0c72e6c4a641f24049a917db0cb".lower(): 1.0,  # DAI on Base
-            "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca".lower(): 1.0,  # USDbC on Base
+
+        # Known tokens with fixed prices or Aerodrome pool mappings (lowercase addresses)
+        known_tokens = {
+            # Stablecoins
+            "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913".lower(): {"type": "stable", "price": 1.0},  # USDC on Base
+            "0x50c5725949a6f0c72e6c4a641f24049a917db0cb".lower(): {"type": "stable", "price": 1.0},  # DAI on Base
+            "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca".lower(): {"type": "stable", "price": 1.0},  # USDbC on Base
+            # Major tokens with Aerodrome pools
+            "0x4200000000000000000000000000000000000006".lower(): {  # WETH on Base
+                "type": "aerodrome",
+                "pool": "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59",  # WETH/USDC pool
+                "is_token0": True
+            },
+            "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf".lower(): {  # cbBTC on Base
+                "type": "aerodrome",
+                "pool": "0x4e962BB3889Bf030368F56810A9c96B83CB3E778",  # USDC/cbBTC-5% pool
+                "is_token0": False  # cbBTC is token1
+            },
+            "0x940181a94a35a4569e4529a3cdfb74e38fd98631".lower(): {"type": "coingecko", "id": "aerodrome-finance"},  # AERO on Base (keep CoinGecko fallback)
         }
         
         async def fetch_single_token_price(session: aiohttp.ClientSession, address: str) -> tuple[str, float]:
-            """Fetch price for a single token"""
-            # Check if it's a stablecoin
-            if address.lower() in stablecoins:
-                return (address.lower(), stablecoins[address.lower()])
-            
+            """Fetch price for a single token using Aerodrome, stablecoins, CoinGecko, or DexScreener"""
+            addr_lower = address.lower()
+
+            # Check if it's a known token
+            if addr_lower in known_tokens:
+                token_info = known_tokens[addr_lower]
+                if token_info["type"] == "stable":
+                    return (addr_lower, token_info["price"])
+                elif token_info["type"] == "aerodrome":
+                    # Try Aerodrome pool first
+                    try:
+                        price = await self._get_price_from_aerodrome_pool(
+                            address,
+                            token_info["pool"],
+                            token_info["is_token0"]
+                        )
+                        if price and price > 0:
+                            logger.debug(f"Fetched price for {address} from Aerodrome pool: ${price}")
+                            return (addr_lower, price)
+                    except Exception as e:
+                        logger.warning(f"Aerodrome pool pricing failed for {address}: {str(e)}, falling back to DexScreener")
+                elif token_info["type"] == "coingecko":
+                    # Try CoinGecko for major tokens
+                    try:
+                        url = f"https://api.coingecko.com/api/v3/simple/price?ids={token_info['id']}&vs_currencies=usd"
+                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                            if response.status == 200:
+                                data = await response.json()
+                                if token_info['id'] in data and 'usd' in data[token_info['id']]:
+                                    price = float(data[token_info['id']]['usd'])
+                                    logger.debug(f"Fetched price for {address} from CoinGecko: ${price}")
+                                    return (addr_lower, price)
+                    except Exception as e:
+                        logger.warning(f"CoinGecko API failed for {address}: {str(e)}")
+
+            # Try DexScreener
             try:
                 url = f"{DEXSCREENER_API_BASE}/tokens/{address}"
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as response:
@@ -669,11 +830,16 @@ class PoolsService:
                                 # Sort by liquidity and get the highest
                                 base_pairs.sort(key=lambda x: float(x.get('liquidity', {}).get('usd', 0)), reverse=True)
                                 price = float(base_pairs[0].get('priceUsd', 0))
-                                return (address.lower(), price)
+                                if price > 0:
+                                    logger.debug(f"Fetched price for {address} from DexScreener: ${price}")
+                                    return (addr_lower, price)
+                    elif response.status == 429:
+                        logger.warning(f"DexScreener rate limited for {address}")
             except Exception as e:
-                logger.warning(f"Failed to fetch price for {address}: {str(e)}")
-            
-            return (address.lower(), 0.0)
+                logger.warning(f"DexScreener failed for {address}: {str(e)}")
+
+            logger.warning(f"Could not fetch price for {address}, returning 0")
+            return (addr_lower, 0.0)
         
         # Fetch prices concurrently
         async with aiohttp.ClientSession() as session:
@@ -700,7 +866,7 @@ class PoolsService:
         
         # Fetch missing prices
         if addresses_to_fetch:
-            fetched_prices = await self._fetch_token_prices_from_dexscreener(addresses_to_fetch)
+            fetched_prices = await self._fetch_token_prices(addresses_to_fetch)
             prices.update(fetched_prices)
             
             # Cache the fetched prices
@@ -814,11 +980,28 @@ class PoolsService:
         token0_info = await self._get_or_fetch_token_info(token0_addr, pool_data[SugarFields.SYMBOL])
         token1_info = await self._get_or_fetch_token_info(token1_addr, pool_data[SugarFields.SYMBOL])
         
-        # Fetch token prices
-        prices = await self._fetch_token_prices_from_dexscreener([token0_addr, token1_addr, settings.aero_token_address])
+        # Fetch token prices (use get_token_prices which checks cache first)
+        prices = await self.get_token_prices([token0_addr, token1_addr, settings.aero_token_address])
         token0_price = prices.get(token0_addr.lower(), 0)
         token1_price = prices.get(token1_addr.lower(), 0)
-        aero_price = prices.get(settings.aero_token_address.lower(), 50)  # Default to $50 if not found
+        aero_price = prices.get(settings.aero_token_address.lower(), 0)
+
+        # Use fallback cache if prices are 0 (API failure)
+        if token0_price == 0:
+            fallback_price = await cache_manager.get_token_price_fallback(token0_addr)
+            if fallback_price:
+                token0_price = fallback_price
+                logger.debug(f"Using fallback price for {token0_addr}: ${fallback_price}")
+
+        if token1_price == 0:
+            fallback_price = await cache_manager.get_token_price_fallback(token1_addr)
+            if fallback_price:
+                token1_price = fallback_price
+                logger.debug(f"Using fallback price for {token1_addr}: ${fallback_price}")
+
+        if aero_price == 0:
+            fallback_price = await cache_manager.get_token_price_fallback(settings.aero_token_address)
+            aero_price = fallback_price if fallback_price else 50  # Default to $50 if no fallback
         
         # Calculate TVL
         token0_decimals = token0_info.get("decimals", 18)

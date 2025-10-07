@@ -9,16 +9,19 @@ from app.core.config import settings
 from app.core.cache import cache_manager
 from app.schemas.positions import PositionInfo
 from app.core.logger import logger
+from app.core.pool_constants import SUGAR_ABI
 
 
 class PositionsService:
     """Service for fetching and analyzing positions."""
-    
+
     # Contract addresses
     POSITION_MANAGER_ADDRESS = "0x827922686190790b37229fd06084350E74485b72"
     POOL_FACTORY_ADDRESS = "0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A"
-    LIQUIDITY_MANAGER_ADDRESS = "0x00c1Bc0CA9F703919C2BA320e5f200865F778AaE"
     SUGAR_ADDRESS = "0x27fc745390d1f4BaF8D184FBd97748340f786634"
+
+    # Known legacy position IDs that should be ignored (deprecated contracts)
+    IGNORED_POSITION_IDS = {25494740}
     
     # Token addresses
     AERO_ADDRESS = "0x940181a94A35A4569E4529A3CDfB74e38FD98631"
@@ -43,6 +46,7 @@ class PositionsService:
                 raise Exception(f"Failed to connect to RPC endpoint: {settings.rpc_url}")
         return self._w3
     
+
     def _get_position_manager_abi(self) -> List[Dict]:
         """Get position manager ABI."""
         # Simplified ABI with only the functions we need
@@ -147,15 +151,23 @@ class PositionsService:
             },
             {
                 "inputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
-                "name": "positionOwners",
+                "name": "positionOwner",
                 "outputs": [{"internalType": "address", "name": "", "type": "address"}],
                 "stateMutability": "view",
                 "type": "function"
             },
             {
                 "inputs": [{"internalType": "uint256", "name": "tokenId", "type": "uint256"}],
-                "name": "getPositionOwner",
-                "outputs": [{"internalType": "address", "name": "", "type": "address"}],
+                "name": "getPositionDetails",
+                "outputs": [
+                    {"internalType": "address", "name": "owner", "type": "address"},
+                    {"internalType": "uint256", "name": "collateral", "type": "uint256"},
+                    {"internalType": "uint256", "name": "debt", "type": "uint256"},
+                    {"internalType": "address", "name": "hedgedAsset", "type": "address"},
+                    {"internalType": "bool", "name": "isHedged", "type": "bool"},
+                    {"internalType": "uint256", "name": "collateralSupplyAPY", "type": "uint256"},
+                    {"internalType": "uint256", "name": "hedgedAssetBorrowAPY", "type": "uint256"}
+                ],
                 "stateMutability": "view",
                 "type": "function"
             }
@@ -288,7 +300,7 @@ class PositionsService:
         if self._liquidity_manager is None:
             w3 = self._get_w3()
             self._liquidity_manager = w3.eth.contract(
-                address=Web3.to_checksum_address(self.LIQUIDITY_MANAGER_ADDRESS),
+                address=Web3.to_checksum_address(settings.liquidity_manager_address),
                 abi=self._get_liquidity_manager_abi()
             )
         return self._liquidity_manager
@@ -299,7 +311,7 @@ class PositionsService:
             w3 = self._get_w3()
             self._sugar = w3.eth.contract(
                 address=Web3.to_checksum_address(self.SUGAR_ADDRESS),
-                abi=self._get_sugar_abi()
+                abi=SUGAR_ABI
             )
         return self._sugar
     
@@ -319,9 +331,7 @@ class PositionsService:
                 return fallback_price
             else:
                 logger.warning(f"Could not determine price for token {token_address} and no fallback available")
-        else:
-            logger.info(f"Got price for {token_address}: ${price}")
-        
+
         return price
     
     async def _get_token_decimals(self, token_address: str) -> int:
@@ -388,8 +398,6 @@ class PositionsService:
             # Find the position with matching ID
             for position in positions_data:
                 if position[0] == position_id:  # First element is position ID
-                    logger.info(f"Found position {position_id} in Sugar data")
-                    
                     if is_unstaked:
                         # For unstaked positions, we use amount0 and amount1 which represent the token amounts
                         # positionsUnstakedConcentrated returns same structure as positions
@@ -439,13 +447,29 @@ class PositionsService:
             # Get position data from position manager
             position_data = position_manager.functions.positions(token_id).call()
             
-            # Get owner from LiquidityManager's getPositionOwner
-            # This works for all positions tracked by LiquidityManager
-            owner = liquidity_manager.functions.getPositionOwner(token_id).call()
-            
-            # If owner is zero address, the position doesn't exist or isn't tracked
-            if not owner or owner == "0x0000000000000000000000000000000000000000":
-                raise ValueError(f"Position {token_id} not found or not tracked by LiquidityManager")
+            # Always try to get owner from LiquidityManager first (CDP wallet address)
+            cdp_wallet = None
+            try:
+                # Use getPositionDetails to get the owner (same as hedge service does)
+                position_details = liquidity_manager.functions.getPositionDetails(token_id).call()
+                potential_owner = position_details[0]  # owner is first element
+                logger.info(f"Position {token_id} - getPositionDetails returned owner: {potential_owner}")
+
+                if potential_owner and potential_owner != "0x0000000000000000000000000000000000000000":
+                    cdp_wallet = potential_owner
+                    logger.info(f"Position {token_id} CDP wallet from LiquidityManager: {cdp_wallet}")
+                else:
+                    logger.warning(f"Position {token_id} returned zero address from LiquidityManager.getPositionDetails")
+            except Exception as e:
+                logger.warning(f"Position {token_id} not in LiquidityManager: {e!r}")
+
+            # Get NFT owner to determine staking status
+            nft_owner = None
+            try:
+                nft_owner = position_manager.functions.ownerOf(token_id).call()
+                logger.debug(f"Position {token_id} NFT owner: {nft_owner}")
+            except Exception as e:
+                raise ValueError(f"Position {token_id} not found: {e}")
             
             # Extract position data
             token0 = position_data[2]
@@ -475,66 +499,111 @@ class PositionsService:
             except:
                 gauge_address = None
             
-            # Check if position is staked by checking NFT owner
-            # If the NFT is owned by the gauge contract, it's staked
-            # Otherwise it's unstaked (owned by the user directly)
-            staked = False
-            try:
-                nft_owner = position_manager.functions.ownerOf(token_id).call()
-                if gauge_address and nft_owner.lower() == gauge_address.lower():
-                    staked = True
-                    logger.info(f"Position {token_id} is staked (NFT owner: {nft_owner}, gauge: {gauge_address})")
-                else:
-                    staked = False
-                    logger.info(f"Position {token_id} is unstaked (NFT owner: {nft_owner}, gauge: {gauge_address})")
-            except Exception as e:
-                logger.warning(f"Failed to check staking status for position {token_id}: {e}")
-                staked = False
-            
+            # Determine owner and staking status
+            # If position is managed by LiquidityManager, use CDP wallet from getPositionOwner
+            if cdp_wallet:
+                owner = cdp_wallet
+                # All LiquidityManager positions are auto-staked on creation
+                staked = True
+                logger.info(f"Position {token_id} - LiquidityManager position: owner={owner}, staked=True (auto-staked)")
+            else:
+                # Legacy position not managed by LiquidityManager
+                owner = nft_owner
+                # Check if staked directly in gauge (old flow)
+                staked = gauge_address and nft_owner.lower() == gauge_address.lower()
+                logger.info(f"Position {token_id} - Legacy position: owner={owner}, staked={staked}")
+
             # Calculate USD values from Sugar contract
             current_value_usd = None
             unclaimed_fees_usd = None
             unclaimed_rewards_aero = None
-            
-            # Pass staking status to fetch the correct data
-            sugar_position = await self._fetch_position_from_sugar(token_id, owner, is_unstaked=not staked)
+            token0_amount = None
+            token1_amount = None
+
+            # For LiquidityManager positions (staked), use the LiquidityManager contract address for Sugar lookups
+            # The NFT is held by the gauge when staked, so we need to query Sugar with LiquidityManager address
+            # For legacy positions, use the actual NFT owner
+            if staked:
+                sugar_owner = settings.liquidity_manager_address
+            else:
+                sugar_owner = owner
+
+            logger.info(f"Position {token_id} - Using Sugar owner: {sugar_owner}, staked: {staked}, cdp_wallet: {cdp_wallet}")
+            sugar_position = await self._fetch_position_from_sugar(token_id, sugar_owner, is_unstaked=not staked)
+
             logger.info(f"Position {token_id} - Sugar data: {sugar_position}")
-            
+
             if sugar_position:
                 # Get token prices
                 token0_price = await self._get_token_price_usd(token0)
                 token1_price = await self._get_token_price_usd(token1)
                 aero_price = await self._get_token_price_usd(self.AERO_ADDRESS)
-                
+
                 logger.info(f"Position {token_id} - Prices: token0={token0_price}, token1={token1_price}, aero={aero_price}")
                 logger.info(f"Position {token_id} - Tokens: token0={token0}, token1={token1}")
-                
+
                 # Get token decimals
                 token0_decimals = await self._get_token_decimals(token0)
                 token1_decimals = await self._get_token_decimals(token1)
-                
+
                 logger.info(f"Position {token_id} - Decimals: token0={token0_decimals}, token1={token1_decimals}")
-                
+
                 # Calculate current value USD (staked0 * token0_price + staked1 * token1_price)
                 staked0_amount = sugar_position['staked0'] / (10 ** token0_decimals)
                 staked1_amount = sugar_position['staked1'] / (10 ** token1_decimals)
                 current_value_usd = (staked0_amount * token0_price) + (staked1_amount * token1_price)
-                
+
+                # Store token amounts
+                token0_amount = staked0_amount
+                token1_amount = staked1_amount
+
                 logger.info(f"Position {token_id} - Staked amounts: token0={staked0_amount}, token1={staked1_amount}")
                 logger.info(f"Position {token_id} - Current value USD: {current_value_usd}")
-                
+
                 # Calculate unclaimed fees USD (emissions_earned * aero_price)
                 emissions_amount = sugar_position['emissions_earned'] / 1e18  # Assuming 18 decimals
                 unclaimed_fees_usd = emissions_amount * aero_price
                 unclaimed_rewards_aero = emissions_amount  # Store AERO amount
-                
+
                 logger.info(f"Position {token_id} - Emissions: {emissions_amount} AERO = ${unclaimed_fees_usd}")
             else:
                 logger.warning(f"Position {token_id} - No Sugar data found")
-            
+
+            # Fetch pool APR and name from pools_service
+            pool_apr = None
+            pool_name = None
+            if pool_address:
+                try:
+                    from app.core.pools_service import pools_service
+                    pool_data = await pools_service.get_pool(pool_address, include_effective_apr=False)
+
+                    if pool_data:
+                        pool_apr = pool_data.get('apr', 0)
+
+                        # Extract pool name from symbol
+                        symbol = pool_data.get('symbol', '')
+                        if symbol and '-' in symbol:
+                            pool_name = symbol.split('-')[0]  # Get everything before the dash (e.g., "WETH/USDC-0.3%" -> "WETH/USDC")
+                        else:
+                            pool_name = symbol if symbol else None
+
+                        logger.info(f"Position {token_id} - Pool: {pool_name}, APR: {pool_apr}%")
+                    else:
+                        logger.warning(f"Position {token_id} - pools_service returned None for pool {pool_address}")
+                        pool_apr = 0
+                        pool_name = None
+                except Exception as e:
+                    logger.error(f"Could not fetch pool data for position {token_id} at {pool_address}: {e}", exc_info=True)
+                    pool_apr = 0
+                    pool_name = None
+            else:
+                logger.warning(f"Position {token_id} - No pool address available")
+                pool_apr = 0
+                pool_name = None
+
             position_info = PositionInfo(
                 id=token_id,
-                owner=owner,
+                owner=owner,  # CDP wallet from LiquidityManager or NFT owner
                 pool_address=pool_address,
                 tick_lower=tick_lower,
                 tick_upper=tick_upper,
@@ -548,7 +617,11 @@ class PositionsService:
                 gauge_address=gauge_address,
                 token0=token0,
                 token1=token1,
-                tick_spacing=tick_spacing
+                tick_spacing=tick_spacing,
+                token0_amount=token0_amount,
+                token1_amount=token1_amount,
+                pool_name=pool_name,  # Add pool name to position info
+                apr=pool_apr  # Add APR to position info
             )
             
             # Cache the result
@@ -561,12 +634,12 @@ class PositionsService:
     
     async def get_positions_by_owner(self, owner_address: str, skip_cache: bool = False) -> List[PositionInfo]:
         """
-        Get all positions owned by an address (both unstaked and staked).
-        
+        Get all positions owned by an address (both unstaked and staked) using Sugar contract.
+
         Args:
             owner_address: Owner's wallet address
             skip_cache: If True, bypass cache and fetch directly from blockchain
-            
+
         Returns:
             List of PositionInfo objects
         """
@@ -576,58 +649,105 @@ class PositionsService:
             cached_positions = await cache_manager.get_custom(cache_key, ttl=60)
             if cached_positions:
                 return [PositionInfo(**p) for p in cached_positions]
-        
+
         try:
-            position_manager = await self._get_position_manager()
-            liquidity_manager = await self._get_liquidity_manager()
+            # Get Sugar contract
+            if self._sugar is None:
+                w3 = self._get_w3()
+                self._sugar = w3.eth.contract(
+                    address=Web3.to_checksum_address(self.SUGAR_ADDRESS),
+                    abi=SUGAR_ABI
+                )
+
             owner_address = Web3.to_checksum_address(owner_address)
-            
-            all_position_ids = []
-            
-            # 1. Get unstaked positions (NFTs held directly by the owner)
-            try:
-                balance = position_manager.functions.balanceOf(owner_address).call()
-                for index in range(balance):
-                    try:
-                        token_id = position_manager.functions.tokenOfOwnerByIndex(owner_address, index).call()
-                        all_position_ids.append(token_id)
-                    except Exception as e:
-                        logger.error(f"Failed to get unstaked position at index {index}: {str(e)}")
-                        continue
-            except Exception as e:
-                logger.error(f"Failed to get unstaked positions: {str(e)}")
-            
-            # 2. Get staked positions from LiquidityManager
-            try:
-                staked_position_ids = liquidity_manager.functions.getUserPositions(owner_address).call()
-                all_position_ids.extend(staked_position_ids)
-            except Exception as e:
-                logger.error(f"Failed to get staked positions: {str(e)}")
-            
-            # Remove duplicates (shouldn't happen, but just in case)
-            all_position_ids = list(set(all_position_ids))
-            
-            if not all_position_ids:
+
+            # Call Sugar contract to get all positions (both staked and unstaked)
+            # Using limit=9000 and offset=0 to get all positions
+            sugar_positions = self._sugar.functions.positions(
+                9000,  # _limit
+                0,     # _offset
+                owner_address  # _account
+            ).call()
+
+            if not sugar_positions:
+                logger.info(f"No positions found for {owner_address}")
                 return []
-            
+
             positions = []
-            
-            # Fetch details for each position
-            for token_id in all_position_ids:
+
+            # Parse Sugar response and fetch additional details for each position
+            for pos_data in sugar_positions:
                 try:
+                    token_id = pos_data[0]  # id field
+
+                    # Skip ignored positions
+                    if token_id in self.IGNORED_POSITION_IDS:
+                        logger.info(f"Skipping legacy position {token_id}")
+                        continue
+
+                    # Get additional position details using existing method
                     position_info = await self.get_position_by_id(token_id)
+
+                    # Override staked status based on Sugar data
+                    # If staked liquidity > 0, position is staked
+                    if pos_data[3] > 0:  # staked field
+                        position_info.staked = True
+
                     positions.append(position_info)
+
                 except Exception as e:
-                    logger.error(f"Failed to load position {token_id}: {str(e)}")
+                    logger.error(f"Failed to process position {token_id}: {str(e)}")
                     continue
-            
+
             # Cache the result
-            await cache_manager.set_custom(cache_key, [p.dict() for p in positions], ttl=60)
-            
+            if positions:
+                await cache_manager.set_custom(cache_key, [p.dict() for p in positions], ttl=60)
+
+            logger.info(f"Found {len(positions)} positions for {owner_address} via Sugar contract")
             return positions
-            
+
         except Exception as e:
-            raise Exception(f"Failed to fetch positions for {owner_address}: {str(e)}")
+            logger.error(f"Sugar contract failed, falling back to direct NFT query: {str(e)}")
+
+            # Fallback to the old method if Sugar fails
+            try:
+                position_manager = await self._get_position_manager()
+                owner_address = Web3.to_checksum_address(owner_address)
+
+                all_position_ids = []
+
+                # Get unstaked positions only (NFTs held directly by the owner)
+                try:
+                    balance = position_manager.functions.balanceOf(owner_address).call()
+                    for index in range(balance):
+                        try:
+                            token_id = position_manager.functions.tokenOfOwnerByIndex(owner_address, index).call()
+                            if token_id in self.IGNORED_POSITION_IDS:
+                                continue
+                            all_position_ids.append(token_id)
+                        except Exception as e:
+                            logger.error(f"Failed to get position at index {index}: {str(e)}")
+                            continue
+                except Exception as e:
+                    logger.error(f"Failed to get positions via NFT: {str(e)}")
+
+                if not all_position_ids:
+                    return []
+
+                positions = []
+                for token_id in all_position_ids:
+                    try:
+                        position_info = await self.get_position_by_id(token_id)
+                        positions.append(position_info)
+                    except Exception as e:
+                        logger.error(f"Failed to load position {token_id}: {str(e)}")
+                        continue
+
+                return positions
+
+            except Exception as e2:
+                logger.error(f"Both Sugar and NFT methods failed: {str(e2)}")
+                raise Exception(f"Failed to fetch positions for {owner_address}: {str(e)}")
 
 
 # Create singleton instance

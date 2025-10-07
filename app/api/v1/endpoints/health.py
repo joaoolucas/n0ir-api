@@ -1,39 +1,21 @@
-from fastapi import APIRouter, HTTPException, Request
-from app.schemas.common import HealthResponse
-from app.core.pools_service import pools_service
-from app.core.logger import logger
+"""Health check endpoints for monitoring system status."""
+
+from fastapi import APIRouter
+from typing import Dict, Any
+from datetime import datetime
 
 router = APIRouter()
 
 
-@router.get(
-    "/health",
-    response_model=HealthResponse,
-    responses={
-        503: {"model": HealthResponse, "description": "Service Unavailable"}
-    }
-)
-async def health_check(request: Request):
-    """
-    Check service health status.
+@router.get("/health")
+async def health_check() -> Dict[str, Any]:
+    """Basic health check endpoint.
     
-    Returns the current health status of the API service including:
-    - Service status (healthy/unhealthy)
-    - Connected blockchain network
-    - Current block number
-    - Sugar contract address
-    - Last update timestamp
+    Returns:
+        Dictionary with service status
     """
-    logger.debug(f"GET /health - IP: {request.client.host if request.client else 'unknown'}")
-    
-    # Return a simple health status for now
-    # We'll check pools_service later once we confirm basic connectivity
-    from datetime import datetime
-    import time
     return {
         "status": "healthy",
-        "network": "base",
-        "block_number": 0,  # Will be updated when pools_service is working
-        "sugar_contract": "0x27fc745390d1f4BaF8D184FBd97748340f786634",
-        "last_update": int(time.time())
+        "timestamp": datetime.utcnow().isoformat(),
+        "service": "n0ir-api"
     }

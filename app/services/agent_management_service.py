@@ -36,8 +36,7 @@ class AgentManagementService:
         try:
             # Handle Railway template variable format
             redis_url = self.redis_url
-            logger.info(f"Attempting Redis connection with URL: {redis_url[:30] if redis_url else 'None'}...")
-            
+
             # Check if it's a template variable that wasn't expanded
             if redis_url and redis_url.startswith('${{'):
                 logger.error(f"Redis URL appears to be an unexpanded template variable: {redis_url}")
@@ -45,9 +44,8 @@ class AgentManagementService:
             elif redis_url and not redis_url.startswith(('redis://', 'rediss://')):
                 logger.warning(f"Invalid Redis URL format (should start with redis:// or rediss://): {redis_url[:30]}...")
                 redis_url = None
-            
+
             if redis_url:
-                logger.info(f"Creating async Redis client with URL: {redis_url[:30]}...")
                 # Create both sync (for publishing) and async (for subscribing) clients
                 self.redis_client = redis.from_url(
                     redis_url,
@@ -60,7 +58,6 @@ class AgentManagementService:
                 )
                 # Test connection
                 await self.async_redis_client.ping()
-                logger.info(f"Async Redis connection established successfully to {redis_url[:30]}")
                 self._initialized = True
             else:
                 logger.warning("Redis URL not configured, running without Redis (agent features disabled)")
@@ -77,8 +74,7 @@ class AgentManagementService:
         await self._ensure_initialized()
         if self.async_redis_client and self._listener_task is None:
             self._listener_task = asyncio.create_task(self._listen_for_wallet_creation())
-            logger.info("Started wallet creation listener task")
-    
+
     async def _listen_for_wallet_creation(self):
         """Listen for wallet creation events from agent manager."""
         if not self.async_redis_client:
@@ -90,24 +86,20 @@ class AgentManagementService:
             self._pubsub = self.async_redis_client.pubsub()
             # Listen for wallet_created, wallet_ready, agent_responses, transaction_complete, and position:created
             await self._pubsub.subscribe('wallet_created', 'wallet_ready', 'agent_responses', 'transaction_complete', 'position:created')
-            logger.info("Subscribed to channels: wallet_created, wallet_ready, agent_responses, transaction_complete, position:created")
-            
+
             # Use async iterator for messages
             async for message in self._pubsub.listen():
                 try:
                     logger.debug(f"Received pubsub message: type={message.get('type')}, channel={message.get('channel')}")
-                    
+
                     if message and message['type'] == 'message':
-                        logger.info(f"Processing message from channel {message['channel']}: {message['data'][:100]}")
                         data = json.loads(message['data'])
                         user_id = data.get('user_id')
-                        logger.info(f"Message for user_id: {user_id}, channel: {message['channel']}")
-                        
+
                         # Handle wallet_ready or wallet_created events to update database
                         if message['channel'] in ['wallet_ready', 'wallet_created']:
                             wallet_address = data.get('wallet_address')
                             if user_id and wallet_address:
-                                logger.info(f"Received {message['channel']} for user {user_id}: {wallet_address}")
                                 # Update the user's wallet address in the database
                                 try:
                                     from app.services.user_service import UserService
@@ -116,7 +108,6 @@ class AgentManagementService:
                                         user_service = UserService(db)
                                         await user_service.update_user_wallet(user_id, wallet_address)
                                         break
-                                    logger.info(f"Successfully updated wallet address in database for user {user_id}")
                                 except Exception as e:
                                     logger.error(f"Failed to update wallet address for user {user_id}: {e}")
                         
@@ -130,8 +121,7 @@ class AgentManagementService:
                                     if not future.done():
                                         future.set_result(data)
                                     del self.wallet_callbacks[callback_key]
-                                    logger.info(f"Processed withdrawal callback for user {user_id}")
-                        
+
                         # Handle position:created events
                         elif message['channel'] == 'position:created':
                             await self._handle_position_created(data)
@@ -149,7 +139,6 @@ class AgentManagementService:
                             if not future.done():
                                 future.set_result(data)
                             del self.wallet_callbacks[user_id]
-                            logger.info(f"Processed callback for user {user_id}")
                 except Exception as e:
                     logger.error(f"Error processing wallet creation message: {e}")
                     
@@ -473,14 +462,17 @@ class AgentManagementService:
             logger.error(f"Error requesting agent restart: {e}")
             return {'success': False, 'error': str(e)}
     
-    async def withdraw_usdc(self, user_id: str, amount: float, to_address: str = None, positions_to_close: List[int] = None, withdraw_all: bool = False) -> Dict:
+    async def withdraw_usdc(self, user_id: str, amount: float, positions_to_close: List[int] = None, withdraw_all: bool = False) -> Dict:
         """Request USDC withdrawal through agent manager.
-        
+
+        Withdrawals always go to the user_id address (no separate destination).
+
         Args:
-            user_id: The user's wallet address (used as ID)
+            user_id: The user's wallet address (used as both ID and destination)
             amount: Amount of USDC to withdraw
-            to_address: Optional destination address (defaults to user_id if not provided)
-        
+            positions_to_close: List of position NFT IDs to close if needed
+            withdraw_all: Whether to withdraw entire balance
+
         Returns:
             Dict with success status and transaction info
         """
@@ -488,17 +480,13 @@ class AgentManagementService:
         if not self.redis_client:
             logger.warning("Redis not available, cannot process withdrawal")
             return {'success': False, 'error': 'Redis not available'}
-        
-        # Default to user's own address if not specified
-        if not to_address:
-            to_address = user_id
-        
-        # Create withdrawal command
+
+        # Create withdrawal command (destination is always user_id)
         command = {
             'action': 'withdraw',  # Agent-manager expects 'action' not 'type'
             'user_id': user_id,
             'amount_usdc': amount,
-            'to_address': to_address,
+            'to_address': user_id,  # Always withdraw to user's own address
             'positions_to_close': json.dumps(positions_to_close or []),  # Serialize list to JSON string
             'withdraw_all': str(withdraw_all),  # Convert bool to string for Redis
             'timestamp': datetime.utcnow().isoformat()
@@ -520,7 +508,7 @@ class AgentManagementService:
                 'success': result.get('success', False),
                 'tx_hash': result.get('tx_hash'),
                 'amount': amount,
-                'to_address': to_address,
+                'to_address': user_id,  # Always the user's own address
                 'error': result.get('error')
             }
             
@@ -533,4 +521,74 @@ class AgentManagementService:
             if f"{user_id}:withdraw" in self.wallet_callbacks:
                 del self.wallet_callbacks[f"{user_id}:withdraw"]
             logger.error(f"Error processing withdrawal: {e}")
+            return {'success': False, 'error': str(e)}
+
+    async def activate_agent(self, user_id: str, strategy_type: str = "delta_neutral") -> Dict:
+        """Send explicit activate command to agent manager."""
+        await self._ensure_initialized()
+        if not self.redis_client:
+            return {'success': False, 'error': 'Redis not available'}
+
+        command = {
+            'action': 'activate',  # New action type
+            'user_id': user_id,
+            'strategy_type': strategy_type,
+            'timestamp': datetime.utcnow().isoformat()
+        }
+
+        try:
+            # Use existing infrastructure - send via stream
+            stream_id = await self.async_redis_client.xadd('agent:commands:stream', command)
+            logger.info(f"Sent activate command for {user_id}: stream_id={stream_id}")
+
+            # Wait for response (with timeout)
+            response_future = asyncio.Future()
+            self.wallet_callbacks[f"{user_id}:activate"] = response_future
+
+            try:
+                result = await asyncio.wait_for(response_future, timeout=30)
+                return result
+            except asyncio.TimeoutError:
+                # Don't fail, just return status
+                if f"{user_id}:activate" in self.wallet_callbacks:
+                    del self.wallet_callbacks[f"{user_id}:activate"]
+                return {
+                    'success': True,
+                    'message': 'Activation command sent, processing in background'
+                }
+        except Exception as e:
+            logger.error(f"Error sending activate command: {e}")
+            return {'success': False, 'error': str(e)}
+
+    async def deactivate_agent(self, user_id: str, withdraw_funds: bool = True) -> Dict:
+        """Send explicit deactivate command to agent manager. Always withdraws all funds."""
+        await self._ensure_initialized()
+        if not self.redis_client:
+            return {'success': False, 'error': 'Redis not available'}
+
+        command = {
+            'action': 'deactivate',  # New action type
+            'user_id': user_id,
+            'withdraw_funds': 'true',  # Always withdraw funds
+            'timestamp': datetime.utcnow().isoformat()
+        }
+
+        try:
+            stream_id = await self.async_redis_client.xadd('agent:commands:stream', command)
+            logger.info(f"Sent deactivate command for {user_id}: stream_id={stream_id}")
+
+            # Always wait for withdrawal completion
+            response_future = asyncio.Future()
+            self.wallet_callbacks[f"{user_id}:deactivate"] = response_future
+
+            try:
+                result = await asyncio.wait_for(response_future, timeout=180)
+                return result
+            except asyncio.TimeoutError:
+                return {
+                    'success': True,
+                    'message': 'Deactivation in progress, withdrawal processing'
+                }
+        except Exception as e:
+            logger.error(f"Error sending deactivate command: {e}")
             return {'success': False, 'error': str(e)}

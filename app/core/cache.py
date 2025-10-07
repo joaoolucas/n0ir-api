@@ -1,8 +1,11 @@
 import time
+import json
 from typing import Any, Dict, Optional
 from dataclasses import dataclass
 import asyncio
+import redis.asyncio as aioredis
 from app.core.config import settings
+from loguru import logger
 
 
 @dataclass
@@ -12,60 +15,157 @@ class CacheEntry:
     ttl: int
 
 
-class InMemoryCache:
+class RedisCache:
+    """Redis-backed cache with fallback to in-memory cache."""
+
     def __init__(self):
-        self._cache: Dict[str, CacheEntry] = {}
+        self._redis: Optional[aioredis.Redis] = None
+        self._memory_cache: Dict[str, CacheEntry] = {}
         self._lock = asyncio.Lock()
-        
+        self._initialized = False
+
+    async def _ensure_initialized(self):
+        """Lazy initialization of Redis connection."""
+        if self._initialized:
+            return
+
+        async with self._lock:
+            if self._initialized:
+                return
+
+            try:
+                redis_url = settings.redis_url
+                if redis_url and not redis_url.startswith('${{'):
+                    self._redis = await aioredis.from_url(
+                        redis_url,
+                        encoding="utf-8",
+                        decode_responses=False
+                    )
+                    await self._redis.ping()
+                    logger.info("Redis cache initialized successfully")
+                else:
+                    logger.warning("Redis URL not configured, using in-memory cache fallback")
+            except Exception as e:
+                logger.warning(f"Failed to connect to Redis, using in-memory cache: {e}")
+                self._redis = None
+            finally:
+                self._initialized = True
+
     async def get(self, key: str) -> Optional[Any]:
-        async with self._lock:
-            if key not in self._cache:
+        await self._ensure_initialized()
+
+        # Try Redis first
+        if self._redis:
+            try:
+                value = await self._redis.get(f"cache:{key}")
+                if value:
+                    return json.loads(value)
                 return None
-            
-            entry = self._cache[key]
+            except Exception as e:
+                logger.warning(f"Redis get failed for {key}, falling back to memory: {e}")
+
+        # Fallback to memory cache
+        async with self._lock:
+            if key not in self._memory_cache:
+                return None
+
+            entry = self._memory_cache[key]
             current_time = time.time()
-            
-            # Check if entry has expired
+
             if current_time - entry.timestamp > entry.ttl:
-                del self._cache[key]
+                del self._memory_cache[key]
                 return None
-            
+
             return entry.value
-    
+
     async def set(self, key: str, value: Any, ttl: int) -> None:
+        await self._ensure_initialized()
+
+        # Try Redis first
+        if self._redis:
+            try:
+                await self._redis.setex(
+                    f"cache:{key}",
+                    ttl,
+                    json.dumps(value)
+                )
+                return
+            except Exception as e:
+                logger.warning(f"Redis set failed for {key}, falling back to memory: {e}")
+
+        # Fallback to memory cache
         async with self._lock:
-            self._cache[key] = CacheEntry(
+            self._memory_cache[key] = CacheEntry(
                 value=value,
                 timestamp=time.time(),
                 ttl=ttl
             )
-    
+
     async def delete(self, key: str) -> None:
+        await self._ensure_initialized()
+
+        if self._redis:
+            try:
+                await self._redis.delete(f"cache:{key}")
+                return
+            except Exception as e:
+                logger.warning(f"Redis delete failed for {key}: {e}")
+
         async with self._lock:
-            self._cache.pop(key, None)
-    
+            self._memory_cache.pop(key, None)
+
     async def clear(self) -> None:
+        await self._ensure_initialized()
+
+        if self._redis:
+            try:
+                # Delete all keys with cache: prefix
+                cursor = 0
+                while True:
+                    cursor, keys = await self._redis.scan(cursor, match="cache:*", count=100)
+                    if keys:
+                        await self._redis.delete(*keys)
+                    if cursor == 0:
+                        break
+                return
+            except Exception as e:
+                logger.warning(f"Redis clear failed: {e}")
+
         async with self._lock:
-            self._cache.clear()
-    
+            self._memory_cache.clear()
+
     async def cleanup_expired(self) -> None:
-        """Remove expired entries from cache"""
+        """Remove expired entries from memory cache (Redis handles expiration automatically)"""
         async with self._lock:
             current_time = time.time()
             expired_keys = [
-                key for key, entry in self._cache.items()
+                key for key, entry in self._memory_cache.items()
                 if current_time - entry.timestamp > entry.ttl
             ]
             for key in expired_keys:
-                del self._cache[key]
+                del self._memory_cache[key]
 
 
 class CacheManager:
     def __init__(self):
-        self.cache = InMemoryCache()
+        self.cache = RedisCache()
         # User-specific cache TTLs
         self.USER_CONTEXT_TTL = 10  # 10 seconds for user context
         self.USER_ANALYSIS_TTL = 5   # 5 seconds for analysis results
+        self.SYNC_RATE_LIMIT = 15  # Skip sync if last sync was <15 seconds ago
+
+    # Generic cache methods for CDP and other services
+    async def get(self, key: str) -> Optional[Any]:
+        """Generic get method for cache."""
+        return await self.cache.get(key)
+
+    async def set(self, key: str, value: Any, ttl: int) -> None:
+        """Generic set method for cache."""
+        await self.cache.set(key, value, ttl)
+
+    async def delete(self, key: str) -> None:
+        """Generic delete method for cache."""
+        await self.cache.delete(key)
         
     async def get_pool(self, address: str) -> Optional[Any]:
         key = f"pool:{address.lower()}"
@@ -160,6 +260,41 @@ class CacheManager:
     async def set_custom(self, key: str, data: Any, ttl: int = 300) -> None:
         """Set a custom cache entry with specified TTL."""
         await self.cache.set(key, data, ttl)
+
+    # Sync rate limiting methods
+    async def should_skip_sync(self, user_id: str) -> bool:
+        """
+        Check if we should skip syncing for this user based on rate limiting.
+        Returns True if user was synced within the last SYNC_RATE_LIMIT seconds.
+        """
+        key = f"sync:timestamp:{user_id.lower()}"
+        last_sync = await self.cache.get(key)
+
+        if last_sync is None:
+            return False
+
+        # Check if last sync was recent enough to skip
+        time_since_sync = time.time() - last_sync
+        return time_since_sync < self.SYNC_RATE_LIMIT
+
+    async def mark_sync_completed(self, user_id: str) -> None:
+        """
+        Mark that a sync has been completed for this user.
+        Stores timestamp to enable rate limiting.
+        """
+        key = f"sync:timestamp:{user_id.lower()}"
+        # Store with longer TTL than rate limit to maintain history
+        await self.cache.set(key, time.time(), ttl=60)
+
+    async def get_cached_sync_result(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Get cached sync result if available."""
+        key = f"sync:result:{user_id.lower()}"
+        return await self.cache.get(key)
+
+    async def cache_sync_result(self, user_id: str, result: Dict[str, Any]) -> None:
+        """Cache sync result for quick retrieval."""
+        key = f"sync:result:{user_id.lower()}"
+        await self.cache.set(key, result, ttl=self.SYNC_RATE_LIMIT)
 
 
 # Create singleton instance

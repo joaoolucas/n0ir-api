@@ -1,4 +1,4 @@
-"""Unified Position model matching 3-table architecture."""
+"""Hybrid Position model that works with both old and new database schemas."""
 
 from datetime import datetime
 from decimal import Decimal
@@ -6,6 +6,7 @@ from typing import Optional, TYPE_CHECKING, List
 from sqlalchemy import Column, String, DateTime, ForeignKey, Index, Numeric, Integer, Boolean
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship, Mapped
+from sqlalchemy.ext.hybrid import hybrid_property
 from app.database.base import Base
 
 if TYPE_CHECKING:
@@ -14,7 +15,7 @@ if TYPE_CHECKING:
 
 
 class Position(Base):
-    """Uniswap V3 positions with enriched data and PnL tracking."""
+    """Uniswap V3 positions - hybrid version for both schemas."""
     __tablename__ = "positions"
     
     # Primary key - NFT token ID from blockchain
@@ -34,7 +35,6 @@ class Position(Base):
     # Tick and liquidity information
     tick_lower = Column(Integer, nullable=True)
     tick_upper = Column(Integer, nullable=True)
-    tick_spacing = Column(Integer, nullable=True)
     liquidity = Column(String(80), nullable=True)  # Stored as string due to uint256 size
     
     # USD amounts
@@ -51,96 +51,49 @@ class Position(Base):
     entry_tx_hash = Column(String(66), nullable=True)
     exit_tx_hash = Column(String(66), nullable=True)
     
-    # Protocol fee fields (already exist)
-    protocol_fee_amount = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
-    protocol_fee_collected = Column(Boolean, default=False, nullable=False)
-    protocol_fee_tx_hash = Column(String(66), nullable=True)
+    # Protocol fees tracked in transactions table now
     
     # Position status
-    status = Column(String(20), nullable=False, default="ACTIVE", index=True)  # ACTIVE, CLOSED, LIQUIDATED
+    status = Column(String(20), nullable=False, default="ACTIVE", index=True)
     
-    # PnL tracking fields
-    unrealized_pnl_usd = Column(Numeric(precision=20, scale=2), default=0, nullable=False)
-    unrealized_pnl_pct = Column(Numeric(precision=10, scale=4), default=0, nullable=False)
-    realized_pnl_usd = Column(Numeric(precision=20, scale=2), default=0, nullable=False)
-    realized_pnl_pct = Column(Numeric(precision=10, scale=4), default=0, nullable=False)
-    
-    # Position details stored as JSONB for flexibility
-    position_data = Column(JSONB, default={}, nullable=False)
-    # Expected position_data fields:
-    # - token0_address, token1_address
-    # - token0_symbol, token1_symbol (e.g., "WETH", "USDC")
-    # - pool_name (e.g., "WETH-USDC")
-    # - pool_fee_tier (e.g., 3000 for 0.3%)
-    # - tick_lower, tick_upper, tick_spacing
-    # - liquidity (as string due to size)
-    # - price_ranges: {lower_price, upper_price, current_price}
-    # - initial_investment_usd
-    # - current_value_usd
-    # - total_deposits_usd, total_withdrawals_usd
-    # - fees_earned: {token0_fees, token1_fees, total_fees_usd}
-    # - rewards_earned_usd
-    # - impermanent_loss_usd
-    # - gauge_info: {gauge_address, staked, staked_amount, reward_rate, apr}
-    # - entry_tx_hash, exit_tx_hash
-    
-    # Blockchain state stored separately
-    blockchain_data = Column(JSONB, default={}, nullable=False)
-    # Expected blockchain_data fields:
-    # - last_synced_block
-    # - creation_tx_hash
-    # - close_tx_hash (if closed)
-    # - all_tx_hashes (array)
-    # - gas_spent
+    # The NEW PnL column that exists in the migrated database
+    realized_pnl_usdc = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-    closed_at = Column(DateTime(timezone=True), nullable=True, index=True)
-    entry_date = Column(DateTime(timezone=True), nullable=True)  # Alias for created_at
-    exit_date = Column(DateTime(timezone=True), nullable=True)   # Alias for closed_at
-    last_updated = Column(DateTime(timezone=True), nullable=True)  # Alias for updated_at
+    entry_date = Column(DateTime(timezone=True), nullable=True)
+    exit_date = Column(DateTime(timezone=True), nullable=True, index=True)
     
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="positions")
-    transactions: Mapped[List["Transaction"]] = relationship(
-        "Transaction",
-        back_populates="position",
-        cascade="all, delete-orphan",
-        lazy="select"
-    )
+    transactions: Mapped[List["Transaction"]] = relationship("Transaction", back_populates="position")
     
     # Indexes
     __table_args__ = (
-        Index("idx_positions_user", "user_id", "status"),
-        Index("idx_positions_pool", "pool_address"),
-        Index("idx_positions_status", "status", postgresql_where="status = 'ACTIVE'"),
-        Index("idx_positions_pnl", "user_id", "unrealized_pnl_usd", 
-              postgresql_where="status = 'ACTIVE'"),
+        Index("idx_positions_user_status", "user_id", "status"),
+        Index("idx_positions_status", "status"),
     )
     
-    # Computed properties for backward compatibility
+    # Removed JSONB hybrid properties - not needed
+    
+    # Backward compatibility properties for schema validation
     @property
     def nft_token_id(self) -> int:
-        """Alias for token_id for backward compatibility."""
+        """Alias for token_id to maintain compatibility with PositionResponse schema."""
         return self.token_id
-    
+
     @property
     def unrealized_pnl_usdc(self) -> Decimal:
-        """Return unrealized PnL as Decimal."""
-        return self.unrealized_pnl_usd or Decimal(0)
-    
+        """Calculate unrealized PnL from current value and entry amount."""
+        if self.current_value_usdc and self.entry_amount_usdc:
+            return self.current_value_usdc - self.entry_amount_usdc
+        return Decimal(0)
+
     @property
-    def realized_pnl_usdc(self) -> Decimal:
-        """Return realized PnL as Decimal."""
-        return self.realized_pnl_usd or Decimal(0)
-    
-    @property
-    def total_pnl_usdc(self) -> float:
-        """Calculate total PnL including fees and rewards."""
-        unrealized = float(self.unrealized_pnl_usd or 0)
-        realized = float(self.realized_pnl_usd or 0)
-        return unrealized + realized if self.status == 'ACTIVE' else realized
-    
+    def last_updated(self) -> datetime:
+        """Alias for updated_at to maintain compatibility."""
+        return self.updated_at
+
     def __repr__(self):
-        return f"<Position(token_id={self.token_id}, pool={self.pool_address[:10]}..., status={self.status}, pnl={self.total_pnl_usdc:.2f})>"
+        return f"<Position(token_id={self.token_id}, user={self.user_id}, status={self.status})>"

@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
-from sqlalchemy import Column, String, DateTime, ForeignKey, Index, Integer
+from sqlalchemy import Column, String, DateTime, ForeignKey, Index, Integer, Numeric
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship, Mapped
 import uuid
@@ -27,24 +27,25 @@ class Transaction(Base):
     user_id = Column(String(42), ForeignKey("users.user_id"), nullable=False, index=True)
     position_id = Column(Integer, ForeignKey("positions.token_id"), nullable=True, index=True)
     
-    # Transaction type - comprehensive list
+    # Transaction type - simplified to core types
     tx_type = Column(String(50), nullable=False, index=True)
     # Types:
-    # Position lifecycle: POSITION_CREATED, POSITION_MODIFIED, POSITION_CLOSED
-    # Liquidity: LIQUIDITY_ADDED, LIQUIDITY_REMOVED
-    # Financial: FEES_COLLECTED, SWAP_EXECUTED, REWARDS_CLAIMED
-    # Staking: STAKE_CREATED, STAKE_REMOVED
-    # User actions: DEPOSIT, WITHDRAWAL
-    # Protocol: PROTOCOL_FEE
+    # DEPOSIT: User deposits USDC to the platform
+    # WITHDRAW: User withdraws USDC from the platform
+    # POSITION_CREATED: New liquidity position created
+    # POSITION_CLOSED: Liquidity position closed (includes AERO swaps and fees)
+    # FEE_TRANSFER: Fee transfers to 0xfD75350A7e2C4914908fF7E3082c45Af5762f5FE
     
     # Transaction status
     status = Column(String(20), nullable=False, default="PENDING", index=True)
     # Status: PENDING, CONFIRMED, FAILED
     
+    # Amount tracking
+    amount_usdc = Column(Numeric(precision=20, scale=6), nullable=True)
+    
     # Blockchain information
     block_number = Column(Integer, nullable=True, index=True)
     block_timestamp = Column(DateTime(timezone=True), nullable=True)
-    gas_used = Column(Integer, nullable=True)
     
     # Event data - flexible storage for type-specific data
     event_data = Column(JSONB, default={}, nullable=False)
@@ -59,21 +60,9 @@ class Transaction(Base):
     # DEPOSIT: {amount_usdc, from_address}
     # WITHDRAWAL: {amount_usdc, to_address}
     
-    # Additional metadata
-    tx_metadata = Column(JSONB, default={}, nullable=False)
-    # Examples:
-    # - usd_values: amounts in USD at transaction time
-    # - price_impacts: for swaps
-    # - related_tx_ids: linked transactions
-    # - error_messages: if failed
-    # - retry_count: for failed transactions
-    # - gas_price: in Gwei
-    # - realized_pnl_usdc: PnL realized in this transaction
-    # - portfolio_value_at_time: for PnL tracking
-    
     # Timestamps
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
-    processed_at = Column(DateTime(timezone=True), nullable=True)
+    confirmed_at = Column(DateTime(timezone=True), nullable=True)
     
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="transactions")
@@ -85,6 +74,7 @@ class Transaction(Base):
         Index("idx_transactions_position", "position_id", "tx_type"),
         Index("idx_transactions_block", "block_number"),
         Index("idx_transactions_type", "tx_type", "status"),
+        Index("idx_transactions_composite", "user_id", "tx_type", "block_timestamp"),
     )
     
     # Computed properties for backward compatibility
@@ -102,11 +92,12 @@ class Transaction(Base):
             'WITHDRAW': 'withdraw',  # Handle both WITHDRAWAL and WITHDRAW
             'POSITION_CREATED': 'position_created',
             'POSITION_CLOSED': 'position_closed',
-            'POSITION_ENTRY': 'position_entry',  # Legacy support
-            'POSITION_EXIT': 'position_exit',    # Legacy support
-            'PROTOCOL_FEE': 'fee_collection',
-            'FEE_COLLECTION': 'fee_collection',
-            'AERO_SWAP': 'aero_swap'
+            'POSITION_ENTRY': 'position_created',  # Legacy support - map to position_created
+            'POSITION_EXIT': 'position_closed',    # Legacy support - map to position_closed
+            'PROTOCOL_FEE': 'position_closed',     # Fees are part of closing positions
+            'FEE_COLLECTION': 'position_closed',   # Fees are part of closing positions
+            'AERO_SWAP': 'position_closed',        # AERO swaps are part of closing positions
+            'FEE_TRANSFER': 'fee_transfer'          # Fee transfers
         }
         return mapping.get(self.tx_type, self.tx_type.lower())
     
@@ -142,32 +133,41 @@ class Transaction(Base):
     
     @property
     def realized_pnl_usdc(self) -> Optional[float]:
-        """Get realized PnL from tx_metadata."""
-        if self.tx_metadata and 'realized_pnl_usdc' in self.tx_metadata:
-            return float(self.tx_metadata['realized_pnl_usdc'])
+        """Get realized PnL from event_data."""
+        if self.event_data and 'realized_pnl_usdc' in self.event_data:
+            return float(self.event_data['realized_pnl_usdc'])
         return None
     
     @property
     def gas_price(self) -> Optional[float]:
-        """Get gas price from tx_metadata."""
-        if self.tx_metadata and 'gas_price' in self.tx_metadata:
-            return float(self.tx_metadata['gas_price'])
+        """Get gas price from event_data."""
+        if self.event_data and 'gas_price' in self.event_data:
+            return float(self.event_data['gas_price'])
         return None
+    
+    @property
+    def gas_used(self) -> Optional[int]:
+        """Get gas used from event_data."""
+        if self.event_data and 'gas_used' in self.event_data:
+            return int(self.event_data['gas_used'])
+        return None
+    
+    @property
+    def tx_metadata(self) -> Optional[dict]:
+        """Alias for event_data for backward compatibility."""
+        return self.event_data
     
     @property
     def related_position_id(self) -> Optional[int]:
         """Alias for position_id for backward compatibility."""
         return self.position_id
     
-    @property
-    def confirmed_at(self) -> Optional[datetime]:
-        """Alias for processed_at for backward compatibility."""
-        return self.processed_at
+    # Removed conflicting property - confirmed_at is already a column
     
     @property
     def get_metadata(self) -> dict:
-        """Get tx_metadata for backward compatibility."""
-        return self.tx_metadata or {}
+        """Get event_data for backward compatibility."""
+        return self.event_data or {}
     
     def __repr__(self):
         return f"<Transaction(id={str(self.id)[:8]}..., type={self.tx_type}, status={self.status})>"

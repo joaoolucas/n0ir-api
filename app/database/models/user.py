@@ -21,8 +21,8 @@ class User(Base):
     
     # CDP Wallet information
     cdp_wallet_address = Column(String(42), unique=True, nullable=True, index=True)
-    cdp_wallet_name = Column(String(100), nullable=True)
-    
+    owner_wallet_address = Column(String(42), nullable=True)  # Added missing column
+
     # Wallet balance tracking fields (watcher-owned) - these DO exist
     usdc_balance = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
     last_deposit_block = Column(Integer, nullable=True)
@@ -30,24 +30,27 @@ class User(Base):
     total_deposits_usdc = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
     total_withdrawals_usdc = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
     last_scanned_block = Column(Integer, nullable=True)
-    
+
+    # PnL tracking fields - these exist in database
+    unrealized_pnl_usd = Column(Numeric(precision=20, scale=2), default=0, nullable=False)
+    unrealized_pnl_pct = Column(Numeric(precision=20, scale=2), default=0, nullable=False)
+    realized_pnl_usd = Column(Numeric(precision=20, scale=2), default=0, nullable=False)
+    realized_pnl_pct = Column(Numeric(precision=20, scale=2), default=0, nullable=False)
+
     # Agent startup requirement tracking
     has_deposited_50_usdc = Column(Boolean, default=False, nullable=False)
-    
-    # PnL tracking fields
-    unrealized_pnl_usd = Column(Numeric(precision=20, scale=2), default=0, nullable=False)
-    unrealized_pnl_pct = Column(Numeric(precision=10, scale=4), default=0, nullable=False)
-    realized_pnl_usd = Column(Numeric(precision=20, scale=2), default=0, nullable=False)
-    realized_pnl_pct = Column(Numeric(precision=10, scale=4), default=0, nullable=False)
-    
-    # Agent tracking fields (optional)
+
+    # Agent tracking timestamps
     agent_started_at = Column(DateTime(timezone=True), nullable=True)
     agent_stopped_at = Column(DateTime(timezone=True), nullable=True)
     last_balance_check = Column(DateTime(timezone=True), nullable=True)
-    agent_metadata = Column(JSONB, nullable=True)
-    
+
+    # PnL is tracked in positions table, not here
+    # Agent tracking moved to user_metadata JSONB field
+
     # Flexible metadata storage
     user_metadata = Column(JSONB, default={}, nullable=False)
+    agent_metadata = Column(JSONB, nullable=True)
     # Expected user_metadata fields:
     # - agent_status: not_started, starting, running, stopping, stopped, failed
     # - agent_started_at: timestamp
@@ -81,7 +84,7 @@ class User(Base):
     __table_args__ = (
         Index("idx_users_updated", "updated_at"),
         Index("idx_users_cdp_wallet", "cdp_wallet_address"),
-        Index("idx_users_pnl", "unrealized_pnl_usd"),
+        Index("idx_users_cdp_balance", "cdp_wallet_address", "usdc_balance"),
         Index("idx_users_balance", "usdc_balance"),
         Index("idx_users_last_scanned", "last_scanned_block"),
     )
@@ -113,31 +116,20 @@ class User(Base):
             self.user_metadata = {}
         # Always store uppercase status for consistency
         self.user_metadata['status'] = value.upper() if isinstance(value, str) else 'ACTIVE'
-    
+
     @property
-    def total_pnl_usd(self) -> float:
-        """Calculate total PnL (unrealized + realized)."""
-        return float((self.unrealized_pnl_usd or 0) + (self.realized_pnl_usd or 0))
-    
-    @property
-    def unrealized_pnl_usdc(self):
-        """Alias for unrealized_pnl_usd for backward compatibility."""
-        return self.unrealized_pnl_usd
-    
-    @property
-    def realized_pnl_usdc(self):
-        """Alias for realized_pnl_usd for backward compatibility."""
-        return self.realized_pnl_usd
-    
-    @property 
-    def unrealized_pnl_percentage(self):
-        """Alias for unrealized_pnl_pct for backward compatibility."""
-        return self.unrealized_pnl_pct
-    
-    @property
-    def realized_pnl_percentage(self):
-        """Alias for realized_pnl_pct for backward compatibility."""
-        return self.realized_pnl_pct
-    
+    def cdp_wallet_name(self) -> str:
+        """Get CDP wallet name from user_metadata."""
+        return self.user_metadata.get('cdp_wallet_name', None) if self.user_metadata else None
+
+    @cdp_wallet_name.setter
+    def cdp_wallet_name(self, value: str):
+        """Set CDP wallet name in user_metadata."""
+        if not self.user_metadata:
+            self.user_metadata = {}
+        self.user_metadata['cdp_wallet_name'] = value
+
+    # PnL properties removed - calculated from positions instead
+
     def __repr__(self):
-        return f"<User(user_id={self.user_id}, cdp_wallet={self.cdp_wallet_address}, pnl={self.total_pnl_usd:.2f})>"
+        return f"<User(user_id={self.user_id}, cdp_wallet={self.cdp_wallet_address}, balance={float(self.usdc_balance):.2f}, realized_pnl={float(self.realized_pnl_usd):.2f})>"

@@ -152,6 +152,26 @@ async def ensure_schema_compatibility(session: AsyncSession):
         """))
         await session.commit()
         
+        # DROP unwanted tables if they exist (we only need 3 core tables)
+        logger.info("Cleaning up unwanted tables...")
+        
+        # Drop tables that keep getting recreated
+        tables_to_drop = [
+            'wallet_transactions',
+            'liquidity_events', 
+            'blockchain_sync'
+        ]
+        
+        for table in tables_to_drop:
+            try:
+                await session.execute(text(f"DROP TABLE IF EXISTS {table} CASCADE"))
+                logger.info(f"Dropped unwanted table: {table}")
+            except Exception as e:
+                logger.warning(f"Could not drop table {table}: {e}")
+        
+        await session.commit()
+        logger.info("Cleaned up unwanted tables - using only 3 core tables (users, positions, transactions)")
+        
         logger.info("Schema compatibility check completed")
         
     except Exception as e:
