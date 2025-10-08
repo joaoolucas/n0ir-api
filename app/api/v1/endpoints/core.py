@@ -279,10 +279,6 @@ async def deactivate_agent(
                 message="User not found"
             )
 
-        # Sync blockchain data before deactivation to get latest state
-        service = UserService(db)
-        await service.sync_blockchain_data(user_id)
-
         # Send deactivate command to agent manager (always withdraws funds)
         agent_service = get_agent_service()
         result = await agent_service.deactivate_agent(
