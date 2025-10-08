@@ -104,10 +104,10 @@ class User(Base):
     @property
     def status(self) -> str:
         """Get user status - for compatibility with UserResponse schema."""
-        # Users are always active unless specified otherwise in metadata
+        # Users default to INACTIVE until they activate their agent
         # Always return uppercase status for consistency with UserStatus enum
-        status = self.user_metadata.get('status', 'ACTIVE') if self.user_metadata else 'ACTIVE'
-        return status.upper() if isinstance(status, str) else 'ACTIVE'
+        status = self.user_metadata.get('status', 'INACTIVE') if self.user_metadata else 'INACTIVE'
+        return status.upper() if isinstance(status, str) else 'INACTIVE'
     
     @status.setter
     def status(self, value: str):
@@ -115,7 +115,7 @@ class User(Base):
         if not self.user_metadata:
             self.user_metadata = {}
         # Always store uppercase status for consistency
-        self.user_metadata['status'] = value.upper() if isinstance(value, str) else 'ACTIVE'
+        self.user_metadata['status'] = value.upper() if isinstance(value, str) else 'INACTIVE'
 
     @property
     def cdp_wallet_name(self) -> str:
