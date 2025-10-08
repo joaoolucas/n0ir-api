@@ -640,10 +640,7 @@ async def get_transactions(
             detail="Cannot access another user's transactions"
         )
 
-    # Sync blockchain data to get latest transactions
     service = UserService(db)
-    sync_result = await service.sync_blockchain_data(user_id)
-
     transactions = await service.get_user_transactions(
         user_id=user_id,
         limit=limit,
@@ -759,11 +756,6 @@ async def get_positions(
 
     service = UserService(db)
 
-    # Sync blockchain data to get latest positions
-    sync_start = time.time()
-    await service.sync_blockchain_data(user_id)
-    logger.info(f"⏱️ Sync took {time.time() - sync_start:.2f}s")
-
     positions_start = time.time()
     positions = await service.get_user_positions(user_id=user_id, status=status)
     logger.info(f"⏱️ Get positions took {time.time() - positions_start:.2f}s")
@@ -819,9 +811,6 @@ async def get_performance(
     from app.core.blockchain_service import blockchain_service
 
     service = UserService(db)
-
-    # Sync blockchain data to get latest performance metrics
-    await service.sync_blockchain_data(user_id)
 
     # Get user
     stmt = select(User).where(User.user_id == user_id)
