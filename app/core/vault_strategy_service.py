@@ -63,7 +63,7 @@ class VaultStrategyService:
 
             # Minimum amount required to enter a position
             MIN_POSITION_AMOUNT = Decimal("40")
-            DUAL_POSITION_THRESHOLD = Decimal("500")
+            DUAL_POSITION_THRESHOLD = Decimal("1000")
             WETH_USDC_POOL = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59"
             USDC_CBBTC_POOL = "0x4e962BB3889Bf030368F56810A9c96B83CB3E778"
 
@@ -579,7 +579,7 @@ class VaultStrategyService:
         balance: float
     ) -> MoonwellStrategyResponse:
         """
-        Generate dual position strategy for balances >= $500.
+        Generate dual position strategy for balances >= $1000.
         Fixed allocation: WETH/USDC 70%, USDC/cbBTC 30%
         """
         # Pool addresses
