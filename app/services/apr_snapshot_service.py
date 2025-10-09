@@ -67,7 +67,7 @@ class APRSnapshotService:
                 tvl_usd=Decimal(str(pool_data.get("tvl_usd", 0))) if pool_data.get("tvl_usd") else None,
                 volume_24h=Decimal(str(pool_data.get("volume_24h", 0))) if pool_data.get("volume_24h") else None,
                 timestamp=datetime.utcnow(),
-                metadata={
+                pool_metadata={
                     "fee_tier": pool_data.get("fee_tier"),
                     "tick_spacing": pool_data.get("tick_spacing"),
                     "is_stable": pool_data.get("is_stable"),

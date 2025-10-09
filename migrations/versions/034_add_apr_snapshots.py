@@ -31,7 +31,7 @@ def upgrade():
         sa.Column('tvl_usd', sa.Numeric(20, 2), nullable=True),
         sa.Column('volume_24h', sa.Numeric(20, 2), nullable=True),
         sa.Column('timestamp', sa.DateTime(timezone=True), nullable=False, server_default=sa.text('CURRENT_TIMESTAMP'), index=True),
-        sa.Column('metadata', postgresql.JSONB, nullable=True),
+        sa.Column('pool_metadata', postgresql.JSONB, nullable=True),
     )
 
     # Create composite index for efficient queries by pool and time range

@@ -31,7 +31,7 @@ class APRSnapshot(Base):
     timestamp = Column(DateTime(timezone=True), nullable=False, index=True, default=datetime.utcnow)
 
     # Additional metadata (fee tier, tick spacing, etc.)
-    metadata = Column(JSONB, nullable=True)
+    pool_metadata = Column(JSONB, nullable=True)
 
     # Composite index for efficient queries
     __table_args__ = (
