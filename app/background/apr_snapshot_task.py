@@ -51,6 +51,6 @@ async def capture_apr_snapshots_task():
         except Exception as e:
             logger.error(f"Error in APR snapshot background task: {e}", exc_info=True)
 
-        # Run every hour (3600 seconds)
-        logger.info("Sleeping for 1 hour until next APR snapshot capture...")
-        await asyncio.sleep(3600)
+        # Run every 10 minutes (600 seconds)
+        logger.info("Sleeping for 10 minutes until next APR snapshot capture...")
+        await asyncio.sleep(600)

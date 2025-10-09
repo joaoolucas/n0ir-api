@@ -101,7 +101,7 @@ async def lifespan(app: FastAPI):
     user_sync_task = asyncio.create_task(sync_active_users())
 
     # Start APR snapshot background task
-    logger.info("Starting APR snapshot background task (1 hour interval)...")
+    logger.info("Starting APR snapshot background task (10 minute interval)...")
     apr_snapshot_task = asyncio.create_task(capture_apr_snapshots_task())
 
     yield
