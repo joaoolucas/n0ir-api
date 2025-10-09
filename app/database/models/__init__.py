@@ -3,11 +3,13 @@
 from app.database.models.user import User
 from app.database.models.position import Position
 from app.database.models.transaction import Transaction
+from app.database.models.apr_snapshot import APRSnapshot
 
 __all__ = [
     "User",
     "Position",
-    "Transaction"
+    "Transaction",
+    "APRSnapshot"
 ]
 
 # Note: The following models are deprecated and replaced by the unified schema:

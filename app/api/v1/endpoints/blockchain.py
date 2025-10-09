@@ -38,6 +38,8 @@ from app.database.models import Position
 WHITELISTED_POOLS = {
     "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59",  # WETH/USDC
     "0x4e962bb3889bf030368f56810a9c96b83cb3e778",  # cbBTC/USDC
+    "0xe846373c1a92b167b4e9cd5d8e4d6b1db9e90ec7",  # New pool 1
+    "0xd43decd5df4bdffd5a4cf35ca1f9557e33b7246c",  # New pool 2
 }
 
 router = APIRouter()
