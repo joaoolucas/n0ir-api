@@ -517,48 +517,54 @@ class VaultStrategyService:
         # Calculate suggested range based on pool metrics
         range_percentage = self._calculate_optimal_range(pool_metrics)
 
-        # Find optimal strategy using vault contract
-        try:
-            optimal_strategy = vault_contract.find_optimal_strategy(
-                usdc_amount=float(balance),
-                pool_address=pool_address,
-                range_percentage=range_percentage
-            )
+        # Check if this strategy should use hedging
+        should_hedge = True
+        if strategy_config:
+            # Non-hedged strategies: no Aave borrowing
+            # Stable strategies: no need for hedging (already stable)
+            should_hedge = strategy_config.hedged and not strategy_config.is_stable
+            logger.info(f"Strategy config: hedged={strategy_config.hedged}, stable={strategy_config.is_stable}, should_hedge={should_hedge}")
 
-            if not optimal_strategy or 'simulation' not in optimal_strategy:
-                raise ValueError("Invalid optimal strategy returned from vault contract")
+        # Find optimal strategy using vault contract (only if hedging)
+        if should_hedge:
+            try:
+                optimal_strategy = vault_contract.find_optimal_strategy(
+                    usdc_amount=float(balance),
+                    pool_address=pool_address,
+                    range_percentage=range_percentage
+                )
+            except Exception as e:
+                logger.error(f"Error finding optimal strategy: {e}")
+                logger.warning("Vault contract simulations failed - using default hedging strategy")
+                optimal_strategy = {
+                    'hedge_ratio': 9500,
+                    'collateral_ratio_bps': 6500,
+                    'simulation': None
+                }
+        else:
+            # Non-hedged or stable: no Aave borrowing
+            logger.info(f"Skipping hedge optimization - using direct LP strategy")
+            optimal_strategy = {
+                'hedge_ratio': 0,  # No hedging
+                'collateral_ratio_bps': 0,  # No Aave collateral
+                'simulation': None
+            }
 
-            # Calculate deadline (15 minutes from now)
-            deadline = int(datetime.utcnow().timestamp()) + 900
+        # Calculate deadline (15 minutes from now)
+        deadline = int(datetime.utcnow().timestamp()) + 900
 
-            # Build contract parameters
-            contract_params = ContractParameters(
-                pool=pool_address,
-                range_percentage=range_percentage,
-                deadline=deadline,
-                usdc_amount=Decimal(str(balance)),
-                slippage_bps=50,  # 0.5% slippage
-                hedge_ratio=optimal_strategy['hedge_ratio'],
-                collateral_ratio_bps=optimal_strategy['collateral_ratio_bps']
-            )
+        # Build contract parameters
+        contract_params = ContractParameters(
+            pool=pool_address,
+            range_percentage=range_percentage,
+            deadline=deadline,
+            usdc_amount=Decimal(str(balance)),
+            slippage_bps=50,  # 0.5% slippage
+            hedge_ratio=optimal_strategy['hedge_ratio'],
+            collateral_ratio_bps=optimal_strategy['collateral_ratio_bps']
+        )
 
-            logger.info(f"Generated single position strategy for {user_id}: pool={pool_address}, amount=${balance}")
-
-        except Exception as e:
-            logger.error(f"Error finding optimal strategy: {e}")
-            logger.warning("Vault contract simulations failed - using default strategy estimation")
-
-            deadline = int(datetime.utcnow().timestamp()) + 900
-
-            contract_params = ContractParameters(
-                pool=pool_address,
-                range_percentage=range_percentage,
-                deadline=deadline,
-                usdc_amount=Decimal(str(balance)),
-                slippage_bps=50,
-                hedge_ratio=9500,
-                collateral_ratio_bps=6500
-            )
+        logger.info(f"Generated single position strategy for {user_id}: pool={pool_address}, amount=${balance}, hedge_ratio={optimal_strategy['hedge_ratio']}, collateral_ratio={optimal_strategy['collateral_ratio_bps']}")
 
         # Build response
         return MoonwellStrategyResponse(
