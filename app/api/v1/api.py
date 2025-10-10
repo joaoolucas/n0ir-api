@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from app.api.v1.endpoints import blockchain, health, core, info
+from app.api.v1.endpoints import blockchain, health, core, info, admin
 from app.core.auth import verify_bearer_token
 
 api_router = APIRouter()
@@ -8,6 +8,13 @@ api_router = APIRouter()
 api_router.include_router(
     health.router,
     tags=["Health"]
+)
+
+# Include admin endpoints (auth handled per-endpoint)
+api_router.include_router(
+    admin.router,
+    prefix="/admin",
+    tags=["Admin"]
 )
 
 # Include blockchain endpoints with Bearer token authentication
