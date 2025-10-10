@@ -178,7 +178,8 @@ class MoonwellStrategyService:
         """
         Generate strategy using StrategyConfig for multi-strategy support.
 
-        This is the new multi-strategy version that supports all strategy types.
+        NOTE: This now delegates to vault_strategy_service which uses Aave for hedging.
+        The name is kept for backward compatibility but internally uses Aave via vault.
 
         Args:
             user_id: User ID
@@ -188,6 +189,9 @@ class MoonwellStrategyService:
         Returns:
             Dictionary with strategy allocations per pool
         """
+        from app.core.vault_strategy_service import vault_strategy_service
+        from app.integrations.vault_contract import vault_contract
+
         try:
             # Get user and validate
             user = await self._get_user(user_id, db)
@@ -224,32 +228,47 @@ class MoonwellStrategyService:
                     logger.warning(f"Could not fetch pool data for {pool_address}: {e}")
                     pool_metrics = None
 
-                # For hedged strategies, calculate Moonwell position
-                if strategy_config.hedged:
-                    allocation_dict = moonwell_service.calculate_hedge_position(
-                        total_capital=pool_capital,
-                        pool_address=pool_address,
-                        pool_metrics=pool_metrics,
-                        weth_price=4000  # TODO: Get from price oracle
-                    )
-                else:
-                    # For non-hedged, just allocate directly to LP
-                    # Calculate optimal range
-                    if pool_metrics:
-                        suggested_range = moonwell_service.calculate_optimal_range_from_pool_metrics(
-                            apr=pool_metrics.get('apr', 20),
-                            volume_24h=pool_metrics.get('volume_24h', 0),
-                            tvl=pool_metrics.get('tvl_usd', 0),
-                            is_stable=pool_metrics.get('is_stable', False)
-                        )
-                        effective_apr = moonwell_service.calculate_effective_apr(
-                            pool_metrics.get('apr', 20),
-                            suggested_range
-                        )
-                    else:
-                        suggested_range = 20
-                        effective_apr = 40
+                # Calculate optimal range
+                suggested_range = vault_strategy_service._calculate_optimal_range(
+                    pool_address=pool_address,
+                    pool_metrics=pool_metrics
+                )
 
+                # For hedged strategies, use Aave via vault contract
+                if strategy_config.hedged:
+                    # Convert LTV to collateralRatioBps (LTV 0.65 = 6500 bps)
+                    collateral_ratio_bps = int(strategy_config.ltv * 10000)
+
+                    # Simulate hedge using vault contract
+                    hedge_sim = vault_contract.simulate_hedge(
+                        usdc_amount=pool_capital,
+                        pool_address=pool_address,
+                        range_percentage=suggested_range,
+                        collateral_ratio_bps=collateral_ratio_bps,
+                        hedge_ratio_bps=strategy_config.hedge_ratio
+                    )
+
+                    allocation_dict = {
+                        "aave": {
+                            "protocol": "aave",
+                            "collateral_usdc": pool_capital,
+                            "borrow_asset": hedge_sim['asset_symbol'],
+                            "borrow_amount_usd": hedge_sim['borrow_amount_usd'],
+                            "borrow_amount_asset": hedge_sim['borrow_amount_asset'],
+                            "health_factor": hedge_sim['health_factor'],
+                            "liquidation_price": hedge_sim['liquidation_price']
+                        },
+                        "aerodrome_lp": {
+                            "protocol": "aerodrome",
+                            "pool": pool_metrics['symbol'] if pool_metrics else "UNKNOWN",
+                            "pool_address": pool_address,
+                            "amount_usdc": hedge_sim['total_lp_amount'],
+                            "range_percentage": suggested_range,
+                            "effective_apr": pool_metrics.get('apr', 20) if pool_metrics else 20
+                        }
+                    }
+                else:
+                    # For non-hedged, just allocate directly to LP (no Aave)
                     allocation_dict = {
                         "aerodrome_lp": {
                             "protocol": "aerodrome",
@@ -257,7 +276,7 @@ class MoonwellStrategyService:
                             "pool_address": pool_address,
                             "amount_usdc": pool_capital,
                             "range_percentage": suggested_range,
-                            "effective_apr": effective_apr
+                            "effective_apr": pool_metrics.get('apr', 20) if pool_metrics else 20
                         }
                     }
 
@@ -265,13 +284,14 @@ class MoonwellStrategyService:
 
             logger.info(
                 f"Generated {strategy_config.strategy_type.value} strategy for user {user_id} "
-                f"with {len(allocations)} pool(s)"
+                f"with {len(allocations)} pool(s) using Aave/Vault"
             )
 
             return {
                 "user_id": user_id,
                 "strategy_type": strategy_config.strategy_type.value,
                 "hedged": strategy_config.hedged,
+                "uses_aave": strategy_config.hedged,
                 "total_capital": float(balance),
                 "allocations": allocations
             }

@@ -91,21 +91,23 @@ class StrategyConfig:
         """
         Return loan-to-value ratio for hedged strategies.
 
+        Uses Aave collateral ratios via vault contract.
         Stable pairs can use higher LTV due to lower volatility.
         Volatile pairs use conservative LTV for safety.
 
         Returns:
-            LTV ratio as decimal (e.g., 0.45 for 45%)
+            LTV ratio as decimal (e.g., 0.65 for 65%)
         """
         if not self.hedged:
             return 0.0
 
         # Stable pairs can safely use higher LTV
         if self.is_stable:
-            return 0.70  # 70% LTV for stablecoins
+            return 0.75  # 75% LTV for stablecoins (Aave allows up to 80%)
 
-        # Volatile pairs use conservative LTV
-        return 0.45  # 45% LTV for ETH/BTC
+        # Volatile pairs use Aave-safe LTV
+        # Aave WETH/USDC collateral factor is ~82%, we use 65% for safety
+        return 0.65  # 65% LTV for ETH/BTC (collateralRatioBps = 6500)
 
     def _get_allocation_split(self) -> Dict[str, float]:
         """
