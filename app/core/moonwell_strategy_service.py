@@ -13,6 +13,7 @@ from app.core.moonwell_service import moonwell_service
 from app.core.blockchain_service import blockchain_service
 from app.core.positions_service import positions_service
 from app.core.pools_service import pools_service
+from app.core.strategy_factory import StrategyConfig
 from app.database.models import User
 from app.schemas.users import (
     MoonwellStrategyResponse,
@@ -167,6 +168,117 @@ class MoonwellStrategyService:
             )
         )
         return result.scalar_one_or_none()
+
+    async def generate_strategy_with_config(
+        self,
+        user_id: str,
+        db: AsyncSession,
+        strategy_config: StrategyConfig
+    ) -> Dict:
+        """
+        Generate strategy using StrategyConfig for multi-strategy support.
+
+        This is the new multi-strategy version that supports all strategy types.
+
+        Args:
+            user_id: User ID
+            db: Database session
+            strategy_config: Strategy configuration
+
+        Returns:
+            Dictionary with strategy allocations per pool
+        """
+        try:
+            # Get user and validate
+            user = await self._get_user(user_id, db)
+            if not user:
+                raise ValueError(f"User {user_id} not found")
+
+            if not user.cdp_wallet_address:
+                raise ValueError(f"User {user_id} has no CDP wallet")
+
+            # Get wallet balance
+            balance = await blockchain_service.get_usdc_balance(user.cdp_wallet_address)
+            logger.info(f"User {user_id} balance: ${balance:.2f}")
+
+            # Generate allocations for each pool in the strategy
+            allocations = {}
+
+            for pool_address in strategy_config.pools:
+                # Get pool allocation
+                pool_capital = strategy_config.get_pool_allocation(pool_address, float(balance))
+
+                # Get pool data
+                try:
+                    pool_data = await pools_service.get_pool(pool_address)
+                    pool_metrics = {
+                        'apr': pool_data.get('apr', 20),
+                        'volume_24h': pool_data.get('volume_24h', 0),
+                        'tvl_usd': pool_data.get('tvl_usd', 0),
+                        'is_stable': pool_data.get('is_stable', False) or strategy_config.is_stable,
+                        'symbol': pool_data.get('symbol', 'UNKNOWN'),
+                        'current_tick': pool_data.get('current_tick', 0),
+                        'tick_spacing': pool_data.get('tick_spacing', 100)
+                    }
+                except Exception as e:
+                    logger.warning(f"Could not fetch pool data for {pool_address}: {e}")
+                    pool_metrics = None
+
+                # For hedged strategies, calculate Moonwell position
+                if strategy_config.hedged:
+                    allocation_dict = moonwell_service.calculate_hedge_position(
+                        total_capital=pool_capital,
+                        pool_address=pool_address,
+                        pool_metrics=pool_metrics,
+                        weth_price=4000  # TODO: Get from price oracle
+                    )
+                else:
+                    # For non-hedged, just allocate directly to LP
+                    # Calculate optimal range
+                    if pool_metrics:
+                        suggested_range = moonwell_service.calculate_optimal_range_from_pool_metrics(
+                            apr=pool_metrics.get('apr', 20),
+                            volume_24h=pool_metrics.get('volume_24h', 0),
+                            tvl=pool_metrics.get('tvl_usd', 0),
+                            is_stable=pool_metrics.get('is_stable', False)
+                        )
+                        effective_apr = moonwell_service.calculate_effective_apr(
+                            pool_metrics.get('apr', 20),
+                            suggested_range
+                        )
+                    else:
+                        suggested_range = 20
+                        effective_apr = 40
+
+                    allocation_dict = {
+                        "aerodrome_lp": {
+                            "protocol": "aerodrome",
+                            "pool": pool_metrics['symbol'] if pool_metrics else "UNKNOWN",
+                            "pool_address": pool_address,
+                            "amount_usdc": pool_capital,
+                            "range_percentage": suggested_range,
+                            "effective_apr": effective_apr
+                        }
+                    }
+
+                allocations[pool_address] = allocation_dict
+
+            logger.info(
+                f"Generated {strategy_config.strategy_type.value} strategy for user {user_id} "
+                f"with {len(allocations)} pool(s)"
+            )
+
+            return {
+                "user_id": user_id,
+                "strategy_type": strategy_config.strategy_type.value,
+                "hedged": strategy_config.hedged,
+                "total_capital": float(balance),
+                "allocations": allocations
+            }
+
+        except Exception as e:
+            logger.error(f"Error generating strategy for user {user_id}: {e}")
+            raise
 
     def _is_position_out_of_range(self, position) -> bool:
         """Check if position is out of range."""

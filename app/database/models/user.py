@@ -10,6 +10,7 @@ from app.database.base import Base
 if TYPE_CHECKING:
     from app.database.models.transaction import Transaction
     from app.database.models.position import Position
+    from app.database.models.user_strategy import UserStrategy
 
 
 class User(Base):
@@ -72,9 +73,16 @@ class User(Base):
         cascade="all, delete-orphan",
         lazy="select"
     )
-    
+
     positions: Mapped[List["Position"]] = relationship(
         "Position",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        lazy="select"
+    )
+
+    strategies: Mapped[List["UserStrategy"]] = relationship(
+        "UserStrategy",
         back_populates="user",
         cascade="all, delete-orphan",
         lazy="select"
