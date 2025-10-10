@@ -30,6 +30,14 @@ async def mark_migrations_complete(
         raise HTTPException(status_code=403, detail="Invalid token")
 
     try:
+        # Create alembic_version table if it doesn't exist
+        await db.execute(text("""
+            CREATE TABLE IF NOT EXISTS alembic_version (
+                version_num VARCHAR(32) NOT NULL,
+                CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)
+            )
+        """))
+
         # Delete any existing version
         await db.execute(text("DELETE FROM alembic_version"))
 
