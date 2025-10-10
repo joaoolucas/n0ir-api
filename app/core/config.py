@@ -147,6 +147,12 @@ class Settings(BaseSettings):
         env="JWT_SECRET"
     )
 
+    # Environment Configuration
+    environment: str = Field(
+        default="development",
+        env="ENVIRONMENT"
+    )
+
     # Sentry Configuration
     sentry_dsn: Optional[str] = Field(
         default=None,

@@ -13,12 +13,14 @@ from app.services.position_sync_service import run_position_sync_task
 from app.background.position_syncer import sync_active_users
 from app.background.apr_snapshot_task import capture_apr_snapshots_task
 
-# Initialize Sentry
-if settings.sentry_dsn:
+# Initialize Sentry (production only)
+if settings.sentry_dsn and settings.environment == "production":
     sentry_sdk.init(
         dsn=settings.sentry_dsn,
         send_default_pii=True,
+        environment=settings.environment,
     )
+    logger.info("Sentry initialized for production environment")
 
 
 @asynccontextmanager
