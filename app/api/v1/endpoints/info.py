@@ -966,59 +966,97 @@ async def get_performance(
 @router.post("/{user_id}/strategy", response_model=VaultStrategyResponse)
 async def get_vault_strategy(
     user_id: str,
+    strategy_type: Optional[str] = Query(
+        default="hedged_blueprint",
+        description="Strategy type: hedged_weth_only, hedged_cbbtc_only, hedged_blueprint, "
+                    "nonhedged_weth_only, nonhedged_cbbtc_only, nonhedged_blueprint, "
+                    "stable_usdc_eurc, stable_usdc_brz"
+    ),
     _: bool = Depends(verify_bearer_token),
     db: AsyncSession = Depends(get_db)
 ) -> VaultStrategyResponse:
     """
-    Generate vault-based delta-neutral strategy for a user.
+    Generate vault-based strategy for a user with configurable strategy type.
 
-    This endpoint generates a strategy and returns all parameters needed
-    to call the vault contract's createPosition function:
+    **Strategy Types:**
+    - `hedged_weth_only`: Hedged WETH/USDC only (uses Aave)
+    - `hedged_cbbtc_only`: Hedged cbBTC/USDC only (uses Aave)
+    - `hedged_blueprint`: Hedged 50/50 WETH and cbBTC (default, uses Aave)
+    - `nonhedged_weth_only`: Non-hedged WETH/USDC only (direct LP)
+    - `nonhedged_cbbtc_only`: Non-hedged cbBTC/USDC only (direct LP)
+    - `nonhedged_blueprint`: Non-hedged 50/50 WETH and cbBTC (direct LP)
+    - `stable_usdc_eurc`: USDC/EURC stable pair
+    - `stable_usdc_brz`: USDC/BRZ stable pair
 
-    Returns:
+    **Returns:**
     - contract_params: Ready-to-use parameters for vault.createPosition()
       - pool: Aerodrome pool address
       - rangePercentage: Position range (e.g., 10 = ±5%)
       - deadline: Transaction deadline timestamp
       - usdcAmount: USDC amount to deploy
       - slippageBps: Slippage tolerance (default 50 = 0.5%)
-      - hedgeRatio: Hedge ratio in bps (e.g., 9200 = 92%)
+      - hedgeRatio: Hedge ratio in bps (e.g., 10000 = 100% for hedged, 0 for non-hedged)
       - collateralRatioBps: Collateral ratio in bps (e.g., 6500 = 65%)
 
     - simulation: Expected results from the strategy
       - Health factor, liquidation price, delta-neutral score
       - Collateral, borrow, and LP amounts
 
-    - aerodrome_pool: Pool details and expected APR
     - monitoring: Range break alerts if applicable
     """
     from app.core.vault_strategy_service import vault_strategy_service
     from app.core.pools_service import pools_service
+    from app.core.strategy_factory import StrategyConfig
+    from app.schemas.strategy import StrategyTypeEnum
 
     try:
-        # Select pool with highest APR from supported pools
-        WETH_USDC_POOL = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59"  # WETH/USDC
-        USDC_CBBTC_POOL = "0x4e962BB3889Bf030368F56810A9c96B83CB3E778"  # USDC/cbBTC
+        # Validate and parse strategy type
+        try:
+            strategy_enum = StrategyTypeEnum(strategy_type)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid strategy_type: {strategy_type}. Valid options: "
+                       f"{', '.join([s.value for s in StrategyTypeEnum])}"
+            )
 
-        # Fetch APR for both pools
-        weth_pool_data = await pools_service.get_pool(WETH_USDC_POOL)
-        cbbtc_pool_data = await pools_service.get_pool(USDC_CBBTC_POOL)
+        # Create strategy configuration
+        strategy_config = StrategyConfig(strategy_enum)
 
-        weth_apr = weth_pool_data.get('apr', 0) or 0
-        cbbtc_apr = cbbtc_pool_data.get('apr', 0) or 0
+        logger.info(f"Generating {strategy_type} strategy for user {user_id}")
 
-        # Select pool with higher APR
-        if cbbtc_apr > weth_apr:
-            pool_address = USDC_CBBTC_POOL
-            logger.debug(f"Selected USDC/cbBTC pool with APR {cbbtc_apr:.2f}% (vs WETH/USDC {weth_apr:.2f}%)")
+        # For blueprint strategies, use the existing dual-position logic
+        # For single-pool strategies, use the specified pool
+        if "blueprint" in strategy_type:
+            # Blueprint: Use existing logic that selects pool by APR
+            WETH_USDC_POOL = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59"
+            USDC_CBBTC_POOL = "0x4e962BB3889Bf030368F56810A9c96B83CB3E778"
+
+            # Fetch APR for both pools
+            weth_pool_data = await pools_service.get_pool(WETH_USDC_POOL)
+            cbbtc_pool_data = await pools_service.get_pool(USDC_CBBTC_POOL)
+
+            weth_apr = weth_pool_data.get('apr', 0) or 0
+            cbbtc_apr = cbbtc_pool_data.get('apr', 0) or 0
+
+            # Select pool with higher APR for primary position
+            if cbbtc_apr > weth_apr:
+                pool_address = USDC_CBBTC_POOL
+                logger.debug(f"Selected USDC/cbBTC pool with APR {cbbtc_apr:.2f}% (vs WETH/USDC {weth_apr:.2f}%)")
+            else:
+                pool_address = WETH_USDC_POOL
+                logger.debug(f"Selected WETH/USDC pool with APR {weth_apr:.2f}% (vs USDC/cbBTC {cbbtc_apr:.2f}%)")
         else:
-            pool_address = WETH_USDC_POOL
-            logger.debug(f"Selected WETH/USDC pool with APR {weth_apr:.2f}% (vs USDC/cbBTC {cbbtc_apr:.2f}%)")
+            # Single pool strategy: Use the configured pool
+            pool_address = strategy_config.pools[0]
+            logger.debug(f"Using configured pool {pool_address} for {strategy_type}")
 
+        # Generate strategy with configuration
         strategy = await vault_strategy_service.generate_strategy(
             user_id=user_id,
             db=db,
-            pool_address=pool_address
+            pool_address=pool_address,
+            strategy_config=strategy_config
         )
 
         if strategy.monitoring and strategy.monitoring.alerts:
@@ -1028,6 +1066,8 @@ async def get_vault_strategy(
 
         return strategy
 
+    except HTTPException:
+        raise
     except ValueError as e:
         # User not found or no CDP wallet
         raise HTTPException(status_code=404, detail=str(e))

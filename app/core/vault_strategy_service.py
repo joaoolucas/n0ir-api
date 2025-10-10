@@ -36,15 +36,17 @@ class VaultStrategyService:
         self,
         user_id: str,
         db: AsyncSession,
-        pool_address: str = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59"  # Default to WETH/USDC pool
+        pool_address: str = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59",  # Default to WETH/USDC pool
+        strategy_config: Optional['StrategyConfig'] = None  # Optional strategy configuration
     ) -> VaultStrategyResponse:
         """
-        Generate vault-based delta-neutral strategy for user.
+        Generate vault-based strategy for user with optional strategy configuration.
 
         Args:
             user_id: User ID
             db: Database session
             pool_address: Pool address
+            strategy_config: Optional StrategyConfig for multi-strategy support
 
         Returns:
             Strategy response with allocations

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from app.api.v1.endpoints import blockchain, health, core, info, admin, strategies
+from app.api.v1.endpoints import blockchain, health, core, info, admin
 from app.core.auth import verify_bearer_token
 
 api_router = APIRouter()
@@ -36,10 +36,4 @@ api_router.include_router(
 api_router.include_router(
     info.router,
     tags=["Info"]
-)
-
-# Include Strategies endpoints for multi-strategy support
-# Requires JWT session token authentication
-api_router.include_router(
-    strategies.router
 )
