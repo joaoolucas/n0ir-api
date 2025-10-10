@@ -30,6 +30,49 @@ class StrategyTypeEnum(str, Enum):
         return self.value.startswith("stable_")
 
 
+# Mapping from short codes to full enum values
+STRATEGY_SHORT_CODES = {
+    "h1": "hedged_weth_only",
+    "h2": "hedged_cbbtc_only",
+    "h3": "hedged_blueprint",
+    "n1": "nonhedged_weth_only",
+    "n2": "nonhedged_cbbtc_only",
+    "n3": "nonhedged_blueprint",
+    "s1": "stable_usdc_eurc",
+    "s2": "stable_usdc_brz",
+}
+
+
+def parse_strategy_type(strategy_input: str) -> StrategyTypeEnum:
+    """
+    Parse strategy type from either short code or full name.
+
+    Args:
+        strategy_input: Short code (e.g., "h1") or full name (e.g., "hedged_weth_only")
+
+    Returns:
+        StrategyTypeEnum
+
+    Raises:
+        ValueError: If strategy type is invalid
+    """
+    # Try short code first
+    if strategy_input in STRATEGY_SHORT_CODES:
+        strategy_value = STRATEGY_SHORT_CODES[strategy_input]
+    else:
+        strategy_value = strategy_input
+
+    # Validate against enum
+    try:
+        return StrategyTypeEnum(strategy_value)
+    except ValueError:
+        raise ValueError(
+            f"Invalid strategy type: {strategy_input}. "
+            f"Valid short codes: {', '.join(STRATEGY_SHORT_CODES.keys())}. "
+            f"Valid full names: {', '.join([s.value for s in StrategyTypeEnum])}"
+        )
+
+
 class StrategyStatusEnum(str, Enum):
     """Strategy status values."""
     ACTIVE = "active"

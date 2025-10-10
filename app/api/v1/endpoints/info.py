@@ -967,10 +967,8 @@ async def get_performance(
 async def get_vault_strategy(
     user_id: str,
     strategy_type: Optional[str] = Query(
-        default="hedged_blueprint",
-        description="Strategy type: hedged_weth_only, hedged_cbbtc_only, hedged_blueprint, "
-                    "nonhedged_weth_only, nonhedged_cbbtc_only, nonhedged_blueprint, "
-                    "stable_usdc_eurc, stable_usdc_brz"
+        default="h3",
+        description="Strategy type (short code or full name): h1, h2, h3 (default), n1, n2, n3, s1, s2"
     ),
     _: bool = Depends(verify_bearer_token),
     db: AsyncSession = Depends(get_db)
@@ -978,15 +976,20 @@ async def get_vault_strategy(
     """
     Generate vault-based strategy for a user with configurable strategy type.
 
-    **Strategy Types:**
-    - `hedged_weth_only`: Hedged WETH/USDC only (uses Aave)
-    - `hedged_cbbtc_only`: Hedged cbBTC/USDC only (uses Aave)
-    - `hedged_blueprint`: Hedged 50/50 WETH and cbBTC (default, uses Aave)
-    - `nonhedged_weth_only`: Non-hedged WETH/USDC only (direct LP)
-    - `nonhedged_cbbtc_only`: Non-hedged cbBTC/USDC only (direct LP)
-    - `nonhedged_blueprint`: Non-hedged 50/50 WETH and cbBTC (direct LP)
-    - `stable_usdc_eurc`: USDC/EURC stable pair
-    - `stable_usdc_brz`: USDC/BRZ stable pair
+    **Strategy Types (Short Codes):**
+    - `h1`: Hedged WETH/USDC only (uses Aave)
+    - `h2`: Hedged cbBTC/USDC only (uses Aave)
+    - `h3`: Hedged 50/50 WETH and cbBTC (default, uses Aave)
+    - `n1`: Non-hedged WETH/USDC only (direct LP)
+    - `n2`: Non-hedged cbBTC/USDC only (direct LP)
+    - `n3`: Non-hedged 50/50 WETH and cbBTC (direct LP)
+    - `s1`: USDC/EURC stable pair
+    - `s2`: USDC/BRZ stable pair
+
+    **Full Names (also supported):**
+    - `hedged_weth_only`, `hedged_cbbtc_only`, `hedged_blueprint`
+    - `nonhedged_weth_only`, `nonhedged_cbbtc_only`, `nonhedged_blueprint`
+    - `stable_usdc_eurc`, `stable_usdc_brz`
 
     **Returns:**
     - contract_params: Ready-to-use parameters for vault.createPosition()
@@ -1007,17 +1010,16 @@ async def get_vault_strategy(
     from app.core.vault_strategy_service import vault_strategy_service
     from app.core.pools_service import pools_service
     from app.core.strategy_factory import StrategyConfig
-    from app.schemas.strategy import StrategyTypeEnum
+    from app.schemas.strategy import parse_strategy_type
 
     try:
-        # Validate and parse strategy type
+        # Validate and parse strategy type (supports both short codes and full names)
         try:
-            strategy_enum = StrategyTypeEnum(strategy_type)
-        except ValueError:
+            strategy_enum = parse_strategy_type(strategy_type)
+        except ValueError as e:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid strategy_type: {strategy_type}. Valid options: "
-                       f"{', '.join([s.value for s in StrategyTypeEnum])}"
+                detail=str(e)
             )
 
         # Create strategy configuration
