@@ -858,7 +858,8 @@ async def get_performance(
     # Apply period filter if specified
     cutoff_time = None
     if period:
-        now = datetime.utcnow()
+        from datetime import timezone
+        now = datetime.now(timezone.utc)
         if period == TimePeriod.DAY_1:
             cutoff_time = now - timedelta(hours=24)
         elif period == TimePeriod.DAY_7:
