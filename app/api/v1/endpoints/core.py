@@ -276,16 +276,22 @@ async def activate_agent(
 async def deactivate_agent(
     user_id: str,
     request: Request,
+    strategy_type: Optional[str] = None,
     authenticated_wallet: str = Depends(get_authenticated_wallet),
     db: AsyncSession = Depends(get_db)
 ) -> DeactivateResponse:
     """
     Deactivate trading agent for user.
 
+    Args:
+        user_id: User wallet address
+        strategy_type: Optional strategy short code (h1-h3, n1-n3, s1-s2)
+                      If provided, only deactivates that specific strategy
+                      If None, deactivates all strategies and stops agent
+
     This will:
-    1. Stop the agent process
-    2. Close all open positions
-    3. Withdraw all funds to user's wallet
+    1. If strategy_type provided: Remove that strategy from active_strategies
+    2. If no strategy_type: Stop agent process, close all positions, withdraw funds
     """
     # Verify user can only deactivate their own agent
     if authenticated_wallet.lower() != user_id.lower():
@@ -310,35 +316,89 @@ async def deactivate_agent(
                 message="User not found"
             )
 
-        # Send deactivate command to agent manager (always withdraws funds)
-        agent_service = get_agent_service()
-        result = await agent_service.deactivate_agent(
-            user_id=user_id,
-            withdraw_funds=True  # Always withdraw all funds
-        )
+        # Case 1: Deactivate specific strategy
+        if strategy_type:
+            from app.schemas.strategy import parse_strategy_type
 
-        if result.get('success'):
-            # Update user status to SUSPENDED and set agent_status to stopped
-            user.status = 'SUSPENDED'
-            user.agent_status = 'stopped'
-            user.agent_stopped_at = datetime.utcnow()
-            # Mark JSONB field as modified so SQLAlchemy commits the changes
-            attributes.flag_modified(user, 'user_metadata')
+            # Validate strategy type
+            try:
+                strategy_enum = parse_strategy_type(strategy_type)
+            except ValueError as e:
+                return DeactivateResponse(
+                    user_id=user_id,
+                    status="error",
+                    message=str(e)
+                )
+
+            # Get strategy key (short code)
+            strategy_key = strategy_type if strategy_type in ["h1", "h2", "h3", "n1", "n2", "n3", "s1", "s2"] else strategy_enum.value.split("_")[1] if "_" in strategy_enum.value else strategy_enum.value
+
+            # Check if strategy exists and is active
+            if not user.active_strategies or strategy_key not in user.active_strategies:
+                return DeactivateResponse(
+                    user_id=user_id,
+                    status="error",
+                    message=f"Strategy {strategy_type} is not active for this user"
+                )
+
+            # Remove strategy from active_strategies
+            user.active_strategies.pop(strategy_key, None)
+            attributes.flag_modified(user, 'active_strategies')
+
+            # If no more active strategies, also stop the agent
+            if not user.active_strategies or len(user.active_strategies) == 0:
+                agent_service = get_agent_service()
+                agent_result = await agent_service.deactivate_agent(
+                    user_id=user_id,
+                    withdraw_funds=True
+                )
+
+                user.status = 'SUSPENDED'
+                user.agent_status = 'stopped'
+                user.agent_stopped_at = datetime.utcnow()
+                attributes.flag_modified(user, 'user_metadata')
+
             await db.commit()
 
             return DeactivateResponse(
                 user_id=user_id,
-                status="deactivated" if result.get('was_active') else "already_inactive",
-                withdrawn_amount=Decimal(str(result.get('withdrawn_amount', 0))) if result.get('withdrawn_amount') else None,
-                tx_hash=result.get('tx_hash'),
-                message=result.get('message', 'Agent deactivated successfully')
+                status="deactivated",
+                message=f"Strategy {strategy_type} deactivated successfully"
             )
+
+        # Case 2: Deactivate all strategies and stop agent
         else:
-            return DeactivateResponse(
+            # Send deactivate command to agent manager (always withdraws funds)
+            agent_service = get_agent_service()
+            result = await agent_service.deactivate_agent(
                 user_id=user_id,
-                status="error",
-                message=result.get('error', 'Failed to deactivate agent')
+                withdraw_funds=True  # Always withdraw all funds
             )
+
+            if result.get('success'):
+                # Update user status to SUSPENDED and set agent_status to stopped
+                user.status = 'SUSPENDED'
+                user.agent_status = 'stopped'
+                user.agent_stopped_at = datetime.utcnow()
+                # Clear all active strategies
+                user.active_strategies = {}
+                attributes.flag_modified(user, 'active_strategies')
+                attributes.flag_modified(user, 'user_metadata')
+                await db.commit()
+
+                return DeactivateResponse(
+                    user_id=user_id,
+                    status="deactivated" if result.get('was_active') else "already_inactive",
+                    withdrawn_amount=Decimal(str(result.get('withdrawn_amount', 0))) if result.get('withdrawn_amount') else None,
+                    tx_hash=result.get('tx_hash'),
+                    message=result.get('message', 'Agent deactivated successfully')
+                )
+            else:
+                return DeactivateResponse(
+                    user_id=user_id,
+                    status="error",
+                    message=result.get('error', 'Failed to deactivate agent')
+                )
 
     except Exception as e:
         logger.error(f"Error deactivating agent for {user_id}: {e}")
