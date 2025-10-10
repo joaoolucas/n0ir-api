@@ -28,10 +28,10 @@ class StrategyConfig:
         self.strategy_type = strategy_type
         self.pools = self._get_pools()
         self.hedged = self._is_hedged()
+        self.is_stable = self._is_stable()  # Set is_stable before calling _get_ltv()
         self.hedge_ratio = self._get_hedge_ratio()
         self.allocation_split = self._get_allocation_split()
         self.ltv = self._get_ltv()
-        self.is_stable = self._is_stable()
 
     def _get_pools(self) -> List[str]:
         """
