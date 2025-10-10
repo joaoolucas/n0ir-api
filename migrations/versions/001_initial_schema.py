@@ -17,28 +17,19 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Create enum types if they don't exist
+    # Check if tables already exist - if so, skip migration
     conn = op.get_bind()
+    inspector = sa.inspect(conn)
 
-    # Check and create userstatus enum
-    result = conn.execute(sa.text("SELECT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'userstatus')"))
-    if not result.scalar():
-        sa.Enum('ACTIVE', 'SUSPENDED', 'CLOSED', name='userstatus').create(conn)
+    if 'users' in inspector.get_table_names():
+        # Tables already exist, skip migration
+        return
 
-    # Check and create transactiontype enum
-    result = conn.execute(sa.text("SELECT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'transactiontype')"))
-    if not result.scalar():
-        sa.Enum('DEPOSIT', 'WITHDRAW', 'POSITION_ENTRY', 'POSITION_EXIT', 'FEE_COLLECTION', name='transactiontype').create(conn)
-
-    # Check and create transactionstatus enum
-    result = conn.execute(sa.text("SELECT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'transactionstatus')"))
-    if not result.scalar():
-        sa.Enum('PENDING', 'CONFIRMED', 'FAILED', 'CANCELLED', name='transactionstatus').create(conn)
-
-    # Check and create positionstatus enum
-    result = conn.execute(sa.text("SELECT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'positionstatus')"))
-    if not result.scalar():
-        sa.Enum('ACTIVE', 'CLOSED', 'LIQUIDATED', name='positionstatus').create(conn)
+    # Create enum types using raw SQL to avoid async issues
+    op.execute("CREATE TYPE IF NOT EXISTS userstatus AS ENUM ('ACTIVE', 'SUSPENDED', 'CLOSED')")
+    op.execute("CREATE TYPE IF NOT EXISTS transactiontype AS ENUM ('DEPOSIT', 'WITHDRAW', 'POSITION_ENTRY', 'POSITION_EXIT', 'FEE_COLLECTION')")
+    op.execute("CREATE TYPE IF NOT EXISTS transactionstatus AS ENUM ('PENDING', 'CONFIRMED', 'FAILED', 'CANCELLED')")
+    op.execute("CREATE TYPE IF NOT EXISTS positionstatus AS ENUM ('ACTIVE', 'CLOSED', 'LIQUIDATED')")
 
     # Create users table
     op.create_table('users',
