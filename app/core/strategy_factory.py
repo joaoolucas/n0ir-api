@@ -7,7 +7,6 @@ from app.schemas.strategy import StrategyTypeEnum
 WETH_USDC_POOL = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59"
 CBBTC_USDC_POOL = "0x4e962bb3889bf030368f56810a9c96b83cb3e778"
 USDC_EURC_POOL = "0xE846373C1a92B167b4E9cd5d8E4d6B1Db9E90EC7"  # Pool 1 from whitelist
-USDC_BRZ_POOL = "0xD43Decd5Df4BDFFd5A4Cf35cA1f9557E33B7246C"  # Pool 2 from whitelist
 
 
 class StrategyConfig:
@@ -48,7 +47,6 @@ class StrategyConfig:
             StrategyTypeEnum.NONHEDGED_CBBTC: [CBBTC_USDC_POOL],
             StrategyTypeEnum.NONHEDGED_BLUEPRINT: [WETH_USDC_POOL, CBBTC_USDC_POOL],
             StrategyTypeEnum.STABLE_USDC_EURC: [USDC_EURC_POOL],
-            StrategyTypeEnum.STABLE_USDC_BRZ: [USDC_BRZ_POOL],
         }
         return mapping[self.strategy_type]
 
