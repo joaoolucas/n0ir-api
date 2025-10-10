@@ -58,6 +58,17 @@ class APRSnapshotService:
                 effective_apr_wide = effective_apr_range.get("wide")
                 effective_apr_stable = effective_apr_range.get("stable")
 
+            # Build metadata dict, only including keys that exist
+            metadata = {}
+            if "fee_tier" in pool_data:
+                metadata["fee_tier"] = pool_data["fee_tier"]
+            if "tick_spacing" in pool_data:
+                metadata["tick_spacing"] = pool_data["tick_spacing"]
+            if "is_stable" in pool_data:
+                metadata["is_stable"] = pool_data["is_stable"]
+            if "current_tick" in pool_data:
+                metadata["current_tick"] = pool_data["current_tick"]
+
             # Create snapshot
             snapshot = APRSnapshot(
                 pool_address=pool_address.lower(),
@@ -70,12 +81,7 @@ class APRSnapshotService:
                 tvl_usd=Decimal(str(pool_data.get("tvl_usd", 0))) if pool_data.get("tvl_usd") else None,
                 volume_24h=Decimal(str(pool_data.get("volume_24h", 0))) if pool_data.get("volume_24h") else None,
                 timestamp=datetime.utcnow(),
-                pool_metadata={
-                    "fee_tier": pool_data.get("fee_tier"),
-                    "tick_spacing": pool_data.get("tick_spacing"),
-                    "is_stable": pool_data.get("is_stable"),
-                    "current_tick": pool_data.get("current_tick"),
-                }
+                pool_metadata=metadata if metadata else None
             )
 
             db.add(snapshot)
