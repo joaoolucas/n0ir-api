@@ -1025,11 +1025,11 @@ async def get_vault_strategy(
         # Create strategy configuration
         strategy_config = StrategyConfig(strategy_enum)
 
-        logger.info(f"Generating {strategy_type} strategy for user {user_id}")
+        logger.info(f"Generating {strategy_enum.value} strategy for user {user_id}")
 
         # For blueprint strategies, use the existing dual-position logic
         # For single-pool strategies, use the specified pool
-        if "blueprint" in strategy_type:
+        if "blueprint" in strategy_enum.value:
             # Blueprint: Use existing logic that selects pool by APR
             WETH_USDC_POOL = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59"
             USDC_CBBTC_POOL = "0x4e962BB3889Bf030368F56810A9c96B83CB3E778"
@@ -1051,7 +1051,7 @@ async def get_vault_strategy(
         else:
             # Single pool strategy: Use the configured pool
             pool_address = strategy_config.pools[0]
-            logger.debug(f"Using configured pool {pool_address} for {strategy_type}")
+            logger.debug(f"Using configured pool {pool_address} for {strategy_enum.value}")
 
         # Generate strategy with configuration
         strategy = await vault_strategy_service.generate_strategy(
