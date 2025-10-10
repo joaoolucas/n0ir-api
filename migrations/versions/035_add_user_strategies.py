@@ -25,10 +25,13 @@ def upgrade():
 
     # Check if table already exists
     table_exists = 'user_strategies' in inspector.get_table_names()
+    print(f"🔍 Migration check: user_strategies table exists = {table_exists}")
 
     # Check if strategy_id column exists in positions
     positions_columns = [col['name'] for col in inspector.get_columns('positions')]
     strategy_id_exists = 'strategy_id' in positions_columns
+    print(f"🔍 Migration check: strategy_id column exists in positions = {strategy_id_exists}")
+    print(f"🔍 Positions columns: {positions_columns}")
 
     if table_exists and strategy_id_exists:
         print("⚠️  Migration already applied, skipping")
@@ -36,30 +39,47 @@ def upgrade():
 
     if table_exists and not strategy_id_exists:
         print("⚠️  user_strategies table exists but strategy_id column missing, adding column...")
-        # Just add the missing column
-        op.add_column('positions', sa.Column('strategy_id', postgresql.UUID(as_uuid=True), nullable=True))
-        op.create_foreign_key(
-            'fk_positions_strategy_id',
-            'positions',
-            'user_strategies',
-            ['strategy_id'],
-            ['strategy_id'],
-            ondelete='SET NULL'
-        )
-        op.create_index('idx_positions_strategy_id', 'positions', ['strategy_id'])
+        try:
+            # Just add the missing column
+            op.add_column('positions', sa.Column('strategy_id', postgresql.UUID(as_uuid=True), nullable=True))
+            print("✅ Added strategy_id column")
 
-        # Link existing active positions to their user's default strategy
-        op.execute("""
-            UPDATE positions p
-            SET strategy_id = us.strategy_id
-            FROM user_strategies us
-            WHERE p.user_id = us.user_id
-                AND us.strategy_type = 'hedged_blueprint'
-                AND p.status = 'ACTIVE'
-                AND p.strategy_id IS NULL
-        """)
-        print("✅ Added strategy_id to positions table")
-        return
+            # Try to create foreign key (might already exist)
+            try:
+                op.create_foreign_key(
+                    'fk_positions_strategy_id',
+                    'positions',
+                    'user_strategies',
+                    ['strategy_id'],
+                    ['strategy_id'],
+                    ondelete='SET NULL'
+                )
+                print("✅ Created foreign key constraint")
+            except Exception as fk_error:
+                print(f"⚠️  Foreign key might already exist: {fk_error}")
+
+            # Try to create index (might already exist)
+            try:
+                op.create_index('idx_positions_strategy_id', 'positions', ['strategy_id'])
+                print("✅ Created index")
+            except Exception as idx_error:
+                print(f"⚠️  Index might already exist: {idx_error}")
+
+            # Link existing active positions to their user's default strategy
+            op.execute("""
+                UPDATE positions p
+                SET strategy_id = us.strategy_id
+                FROM user_strategies us
+                WHERE p.user_id = us.user_id
+                    AND us.strategy_type = 'hedged_blueprint'
+                    AND p.status = 'ACTIVE'
+                    AND p.strategy_id IS NULL
+            """)
+            print("✅ Linked existing positions to default strategies")
+            return
+        except Exception as e:
+            print(f"❌ Error adding column: {e}")
+            raise
 
     # Create strategy type enum
     op.execute("""
