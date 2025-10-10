@@ -159,19 +159,26 @@ async def create_user(
 async def activate_agent(
     user_id: str,
     request: Request,
+    strategy_type: Optional[str] = "h3",
     authenticated_wallet: str = Depends(get_authenticated_wallet),
     db: AsyncSession = Depends(get_db)
 ) -> ActivateResponse:
     """
-    Activate trading agent for user.
+    Activate trading agent for user with strategy selection.
 
     This will:
-    1. Start the agent process
-    2. Enable automated trading based on strategy
+    1. Validate and store selected strategy type in user.active_strategies
+    2. Start the agent process
+    3. Enable automated trading based on strategy
+
+    Args:
+        user_id: User wallet address
+        strategy_type: Strategy short code or full name (h1-h3, n1-n3, s1-s2). Default: h3 (hedged_blueprint)
 
     Requires user to exist with CDP wallet (use /create first).
     """
     from app.services.agent_management_service import get_agent_service
+    from app.schemas.strategy import parse_strategy_type
 
     # Verify user can only activate their own agent
     if authenticated_wallet.lower() != user_id.lower():
@@ -181,6 +188,16 @@ async def activate_agent(
         )
 
     try:
+        # Validate strategy type
+        try:
+            strategy_enum = parse_strategy_type(strategy_type)
+        except ValueError as e:
+            return ActivateResponse(
+                user_id=user_id,
+                status="error",
+                message=str(e)
+            )
+
         # Check user exists with wallet
         service = UserService(db)
         user = await service.get_user(user_id)
@@ -199,14 +216,28 @@ async def activate_agent(
                 message="User has no CDP wallet. Please create wallet first with /create endpoint"
             )
 
+        # Store selected strategy in active_strategies
+        if not user.active_strategies:
+            user.active_strategies = {}
+
+        strategy_key = strategy_type if strategy_type in ["h1", "h2", "h3", "n1", "n2", "n3", "s1", "s2"] else strategy_enum.value.split("_")[1] if "_" in strategy_enum.value else strategy_enum.value
+
+        user.active_strategies[strategy_key] = {
+            "strategy_type": strategy_enum.value,
+            "status": "active",
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        attributes.flag_modified(user, 'active_strategies')
+
         # Sync blockchain data before activation
         await service.sync_blockchain_data(user_id)
 
-        # Send activate command to agent manager (always use delta_neutral strategy)
+        # Send activate command to agent manager with selected strategy
         agent_service = get_agent_service()
         result = await agent_service.activate_agent(
             user_id=user_id,
-            strategy_type="delta_neutral"
+            strategy_type=strategy_enum.value
         )
 
         if result.get('success'):

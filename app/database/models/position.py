@@ -12,7 +12,6 @@ from app.database.base import Base
 if TYPE_CHECKING:
     from app.database.models.user import User
     from app.database.models.transaction import Transaction
-    from app.database.models.user_strategy import UserStrategy
 
 
 class Position(Base):
@@ -25,8 +24,8 @@ class Position(Base):
     # Foreign key to user
     user_id = Column(String(42), ForeignKey("users.user_id"), nullable=False, index=True)
 
-    # Foreign key to strategy (nullable for backward compatibility)
-    strategy_id = Column(UUID(as_uuid=True), ForeignKey("user_strategies.strategy_id"), nullable=True, index=True)
+    # Strategy type (hybrid approach - stored as metadata on position)
+    strategy_type = Column(String(50), nullable=True, index=True)
 
     # Pool information
     pool_address = Column(String(42), nullable=False, index=True)
@@ -76,13 +75,14 @@ class Position(Base):
     
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="positions")
-    strategy: Mapped[Optional["UserStrategy"]] = relationship("UserStrategy", back_populates="positions")
     transactions: Mapped[List["Transaction"]] = relationship("Transaction", back_populates="position")
     
     # Indexes
     __table_args__ = (
         Index("idx_positions_user_status", "user_id", "status"),
         Index("idx_positions_status", "status"),
+        Index("idx_positions_strategy_type", "strategy_type"),
+        Index("idx_positions_user_strategy", "user_id", "strategy_type"),
     )
     
     # Removed JSONB hybrid properties - not needed
