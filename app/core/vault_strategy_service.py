@@ -126,7 +126,8 @@ class VaultStrategyService:
                     user_id=user_id,
                     balance=balance,
                     pool_address=WETH_USDC_POOL,
-                    db=db
+                    db=db,
+                    strategy_config=strategy_config
                 )
 
             # Case: 1 active position
@@ -140,7 +141,8 @@ class VaultStrategyService:
                         user_id=user_id,
                         balance=balance,
                         pool_address=other_pool,
-                        db=db
+                        db=db,
+                        strategy_config=strategy_config
                     )
                 else:
                     logger.info(f"User {user_id} has 1 position but insufficient balance for second: ${balance:.2f}")
@@ -479,7 +481,8 @@ class VaultStrategyService:
         user_id: str,
         balance: float,
         pool_address: str,
-        db: AsyncSession
+        db: AsyncSession,
+        strategy_config: Optional['StrategyConfig'] = None
     ) -> VaultStrategyResponse:
         """
         Generate single position strategy.
