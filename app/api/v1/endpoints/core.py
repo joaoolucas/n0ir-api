@@ -17,7 +17,7 @@ from app.schemas.users import (
     CreateResponse,
     ActivateResponse,
     DeactivateResponse,
-    MoonwellStrategyResponse
+    VaultStrategyResponse
 )
 from app.database.models import User
 from app.core.auth import get_authenticated_wallet, create_session_token

@@ -16,7 +16,7 @@ from app.core.pools_service import pools_service
 from app.core.config import settings
 from app.database.models import User
 from app.schemas.users import (
-    MoonwellStrategyResponse,
+    VaultStrategyResponse,
     CapitalInfo,
     ContractParameters,
     PositionParams,
@@ -37,7 +37,7 @@ class VaultStrategyService:
         user_id: str,
         db: AsyncSession,
         pool_address: str = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59"  # Default to WETH/USDC pool
-    ) -> MoonwellStrategyResponse:
+    ) -> VaultStrategyResponse:
         """
         Generate vault-based delta-neutral strategy for user.
 

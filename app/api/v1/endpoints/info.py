@@ -25,7 +25,7 @@ from app.schemas.users import (
     TransactionStatus,
     PositionStatus,
     TimePeriod,
-    MoonwellStrategyResponse
+    VaultStrategyResponse
 )
 
 # Enums for database compatibility
@@ -963,12 +963,12 @@ async def get_performance(
     )
 
 
-@router.post("/{user_id}/strategy", response_model=MoonwellStrategyResponse)
+@router.post("/{user_id}/strategy", response_model=VaultStrategyResponse)
 async def get_vault_strategy(
     user_id: str,
     _: bool = Depends(verify_bearer_token),
     db: AsyncSession = Depends(get_db)
-) -> MoonwellStrategyResponse:
+) -> VaultStrategyResponse:
     """
     Generate vault-based delta-neutral strategy for a user.
 
