@@ -10,7 +10,7 @@ This migration adds support for multiple concurrent strategies per user.
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
-import inspect
+from sqlalchemy import inspect
 
 revision = '035_add_user_strategies'
 down_revision = '034_add_apr_snapshots'
