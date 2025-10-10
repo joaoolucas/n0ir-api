@@ -24,8 +24,41 @@ def upgrade():
     inspector = inspect(conn)
 
     # Check if table already exists
-    if 'user_strategies' in inspector.get_table_names():
-        print("⚠️  user_strategies table already exists, skipping creation")
+    table_exists = 'user_strategies' in inspector.get_table_names()
+
+    # Check if strategy_id column exists in positions
+    positions_columns = [col['name'] for col in inspector.get_columns('positions')]
+    strategy_id_exists = 'strategy_id' in positions_columns
+
+    if table_exists and strategy_id_exists:
+        print("⚠️  Migration already applied, skipping")
+        return
+
+    if table_exists and not strategy_id_exists:
+        print("⚠️  user_strategies table exists but strategy_id column missing, adding column...")
+        # Just add the missing column
+        op.add_column('positions', sa.Column('strategy_id', postgresql.UUID(as_uuid=True), nullable=True))
+        op.create_foreign_key(
+            'fk_positions_strategy_id',
+            'positions',
+            'user_strategies',
+            ['strategy_id'],
+            ['strategy_id'],
+            ondelete='SET NULL'
+        )
+        op.create_index('idx_positions_strategy_id', 'positions', ['strategy_id'])
+
+        # Link existing active positions to their user's default strategy
+        op.execute("""
+            UPDATE positions p
+            SET strategy_id = us.strategy_id
+            FROM user_strategies us
+            WHERE p.user_id = us.user_id
+                AND us.strategy_type = 'hedged_blueprint'
+                AND p.status = 'ACTIVE'
+                AND p.strategy_id IS NULL
+        """)
+        print("✅ Added strategy_id to positions table")
         return
 
     # Create strategy type enum
