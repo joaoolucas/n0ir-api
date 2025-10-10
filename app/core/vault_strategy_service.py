@@ -388,7 +388,7 @@ class VaultStrategyService:
         balance: float,
         pool_address: str,
         monitoring_info: MonitoringInfo
-    ) -> MoonwellStrategyResponse:
+    ) -> VaultStrategyResponse:
         """
         Generate a monitoring-only strategy response when positions need attention.
         This returns alerts without requiring minimum balance.
@@ -403,7 +403,7 @@ class VaultStrategyService:
             positions_to_close=positions_to_close
         )
 
-        return MoonwellStrategyResponse(
+        return VaultStrategyResponse(
             user_id=user_id,
             strategy_type="delta_neutral",
             timestamp=datetime.utcnow().isoformat(),
@@ -421,7 +421,7 @@ class VaultStrategyService:
         pool_address: str,
         reason: str,
         db: AsyncSession
-    ) -> MoonwellStrategyResponse:
+    ) -> VaultStrategyResponse:
         """
         Generate a no_action strategy response when balance is insufficient.
         Returns performance data instead of contract params.
@@ -461,7 +461,7 @@ class VaultStrategyService:
                 pnl_pct=None
             )
 
-        return MoonwellStrategyResponse(
+        return VaultStrategyResponse(
             user_id=user_id,
             strategy_type="delta_neutral",
             timestamp=datetime.utcnow().isoformat(),
@@ -480,7 +480,7 @@ class VaultStrategyService:
         balance: float,
         pool_address: str,
         db: AsyncSession
-    ) -> MoonwellStrategyResponse:
+    ) -> VaultStrategyResponse:
         """
         Generate single position strategy.
 
@@ -567,7 +567,7 @@ class VaultStrategyService:
         logger.info(f"Generated single position strategy for {user_id}: pool={pool_address}, amount=${balance}, hedge_ratio={optimal_strategy['hedge_ratio']}, collateral_ratio={optimal_strategy['collateral_ratio_bps']}")
 
         # Build response
-        return MoonwellStrategyResponse(
+        return VaultStrategyResponse(
             user_id=user_id,
             strategy_type="delta_neutral",
             timestamp=datetime.utcnow().isoformat(),
@@ -585,7 +585,7 @@ class VaultStrategyService:
         self,
         user_id: str,
         balance: float
-    ) -> MoonwellStrategyResponse:
+    ) -> VaultStrategyResponse:
         """
         Generate dual position strategy for balances >= $1000.
         Fixed allocation: WETH/USDC 70%, USDC/cbBTC 30%
@@ -673,7 +673,7 @@ class VaultStrategyService:
             position_2=position_2
         )
 
-        return MoonwellStrategyResponse(
+        return VaultStrategyResponse(
             user_id=user_id,
             strategy_type="delta_neutral",
             timestamp=datetime.utcnow().isoformat(),
