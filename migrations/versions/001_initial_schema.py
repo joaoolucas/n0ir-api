@@ -17,6 +17,29 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Create enum types if they don't exist
+    conn = op.get_bind()
+
+    # Check and create userstatus enum
+    result = conn.execute(sa.text("SELECT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'userstatus')"))
+    if not result.scalar():
+        sa.Enum('ACTIVE', 'SUSPENDED', 'CLOSED', name='userstatus').create(conn)
+
+    # Check and create transactiontype enum
+    result = conn.execute(sa.text("SELECT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'transactiontype')"))
+    if not result.scalar():
+        sa.Enum('DEPOSIT', 'WITHDRAW', 'POSITION_ENTRY', 'POSITION_EXIT', 'FEE_COLLECTION', name='transactiontype').create(conn)
+
+    # Check and create transactionstatus enum
+    result = conn.execute(sa.text("SELECT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'transactionstatus')"))
+    if not result.scalar():
+        sa.Enum('PENDING', 'CONFIRMED', 'FAILED', 'CANCELLED', name='transactionstatus').create(conn)
+
+    # Check and create positionstatus enum
+    result = conn.execute(sa.text("SELECT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'positionstatus')"))
+    if not result.scalar():
+        sa.Enum('ACTIVE', 'CLOSED', 'LIQUIDATED', name='positionstatus').create(conn)
+
     # Create users table
     op.create_table('users',
         sa.Column('user_id', sa.String(), nullable=False),
