@@ -45,6 +45,11 @@ class APRSnapshotService:
                 include_effective_apr=True
             )
 
+            # Validate pool_data is a dict
+            if not isinstance(pool_data, dict):
+                logger.error(f"Invalid pool_data type for {pool_address}: {type(pool_data)}")
+                return None
+
             # Extract effective APR ranges
             effective_apr_range = pool_data.get("effective_apr_range")
             effective_apr_narrow = None
@@ -52,7 +57,7 @@ class APRSnapshotService:
             effective_apr_wide = None
             effective_apr_stable = None
 
-            if effective_apr_range:
+            if effective_apr_range and isinstance(effective_apr_range, dict):
                 effective_apr_narrow = effective_apr_range.get("narrow")
                 effective_apr_standard = effective_apr_range.get("standard")
                 effective_apr_wide = effective_apr_range.get("wide")
@@ -63,8 +68,12 @@ class APRSnapshotService:
 
             # Safely add each field if it exists
             for field in ["fee_tier", "tick_spacing", "is_stable", "current_tick"]:
-                if field in pool_data and pool_data[field] is not None:
-                    metadata[field] = pool_data[field]
+                try:
+                    if field in pool_data and pool_data[field] is not None:
+                        metadata[field] = pool_data[field]
+                except (KeyError, TypeError) as field_error:
+                    logger.warning(f"Error accessing field '{field}' in pool_data for {pool_address}: {field_error}")
+                    continue
 
             # Create snapshot
             snapshot = APRSnapshot(
