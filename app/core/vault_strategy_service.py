@@ -117,24 +117,13 @@ class VaultStrategyService:
                 is_blueprint = strategy_config and "blueprint" in strategy_config.strategy_type.value
 
                 if is_blueprint:
-                    # Blueprint strategies always do 50/50 split, regardless of balance
-                    if balance >= MIN_POSITION_AMOUNT * 2:
-                        logger.info(f"User {user_id} selected blueprint strategy with ${balance:.2f} - opening dual positions")
-                        return await self._generate_dual_position_strategy(
-                            user_id=user_id,
-                            balance=balance,
-                            strategy_config=strategy_config
-                        )
-                    else:
-                        # Not enough for two positions
-                        logger.warning(f"User {user_id} selected blueprint but has ${balance:.2f} (need ${MIN_POSITION_AMOUNT * 2})")
-                        return await self._generate_no_action_strategy(
-                            user_id=user_id,
-                            balance=balance,
-                            pool_address=pool_address,
-                            reason=f"Blueprint strategy requires minimum ${MIN_POSITION_AMOUNT * 2} USDC for two positions. Current: {balance:.2f} USDC",
-                            db=db
-                        )
+                    # Blueprint strategies always do 50/50 split with same $40 minimum
+                    logger.info(f"User {user_id} selected blueprint strategy with ${balance:.2f} - opening dual positions")
+                    return await self._generate_dual_position_strategy(
+                        user_id=user_id,
+                        balance=balance,
+                        strategy_config=strategy_config
+                    )
 
                 # Non-blueprint strategies: balance-based logic
                 if balance >= DUAL_POSITION_THRESHOLD:
