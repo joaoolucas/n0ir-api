@@ -60,14 +60,11 @@ class APRSnapshotService:
 
             # Build metadata dict, only including keys that have values
             metadata = {}
-            if pool_data.get("fee_tier") is not None:
-                metadata["fee_tier"] = pool_data.get("fee_tier")
-            if pool_data.get("tick_spacing") is not None:
-                metadata["tick_spacing"] = pool_data.get("tick_spacing")
-            if pool_data.get("is_stable") is not None:
-                metadata["is_stable"] = pool_data.get("is_stable")
-            if pool_data.get("current_tick") is not None:
-                metadata["current_tick"] = pool_data.get("current_tick")
+
+            # Safely add each field if it exists
+            for field in ["fee_tier", "tick_spacing", "is_stable", "current_tick"]:
+                if field in pool_data and pool_data[field] is not None:
+                    metadata[field] = pool_data[field]
 
             # Create snapshot
             snapshot = APRSnapshot(
