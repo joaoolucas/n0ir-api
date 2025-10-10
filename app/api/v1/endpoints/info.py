@@ -986,11 +986,12 @@ async def get_vault_strategy(
     - `n2`: Non-hedged cbBTC/USDC only (direct LP)
     - `n3`: Non-hedged 50/50 WETH and cbBTC (direct LP)
     - `s1`: USDC/EURC stable pair
+    - `s2`: USDC/msUSD stable pair
 
     **Full Names (also supported):**
     - `hedged_weth_only`, `hedged_cbbtc_only`, `hedged_blueprint`
     - `nonhedged_weth_only`, `nonhedged_cbbtc_only`, `nonhedged_blueprint`
-    - `stable_usdc_eurc`
+    - `stable_usdc_eurc`, `stable_usdc_msusd`
 
     **Returns:**
     - contract_params: Ready-to-use parameters for vault.createPosition()

@@ -17,6 +17,7 @@ class StrategyTypeEnum(str, Enum):
     NONHEDGED_CBBTC = "nonhedged_cbbtc_only"
     NONHEDGED_BLUEPRINT = "nonhedged_blueprint"
     STABLE_USDC_EURC = "stable_usdc_eurc"
+    STABLE_USDC_MSUSD = "stable_usdc_msusd"
 
     @property
     def is_hedged(self) -> bool:
@@ -38,6 +39,7 @@ STRATEGY_SHORT_CODES = {
     "n2": "nonhedged_cbbtc_only",
     "n3": "nonhedged_blueprint",
     "s1": "stable_usdc_eurc",
+    "s2": "stable_usdc_msusd",
 }
 
 
