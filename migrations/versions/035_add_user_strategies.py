@@ -83,25 +83,33 @@ def upgrade():
 
     # Create strategy type enum
     op.execute("""
-        CREATE TYPE IF NOT EXISTS strategy_type_enum AS ENUM (
-            'hedged_weth_only',
-            'hedged_cbbtc_only',
-            'hedged_blueprint',
-            'nonhedged_weth_only',
-            'nonhedged_cbbtc_only',
-            'nonhedged_blueprint',
-            'stable_usdc_eurc',
-            'stable_usdc_brz'
-        )
+        DO $$ BEGIN
+            CREATE TYPE strategy_type_enum AS ENUM (
+                'hedged_weth_only',
+                'hedged_cbbtc_only',
+                'hedged_blueprint',
+                'nonhedged_weth_only',
+                'nonhedged_cbbtc_only',
+                'nonhedged_blueprint',
+                'stable_usdc_eurc',
+                'stable_usdc_brz'
+            );
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
     """)
 
     # Create strategy status enum
     op.execute("""
-        CREATE TYPE IF NOT EXISTS strategy_status_enum AS ENUM (
-            'active',
-            'paused',
-            'closed'
-        )
+        DO $$ BEGIN
+            CREATE TYPE strategy_status_enum AS ENUM (
+                'active',
+                'paused',
+                'closed'
+            );
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
     """)
 
     # Create user_strategies table
