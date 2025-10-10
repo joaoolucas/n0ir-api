@@ -584,7 +584,8 @@ async def list_users(
                 'active_positions_count': len(enriched_active_positions),
                 'total_pnl_usdc': total_pnl_usdc,
                 'total_pnl_percentage': total_pnl_percentage,
-                'agent_active': user.agent_status == 'running' if hasattr(user, 'agent_status') and user.agent_status else False
+                'agent_active': user.agent_status == 'running' if hasattr(user, 'agent_status') and user.agent_status else False,
+                'active_strategies': user.active_strategies or {}
             }
 
             enriched_users.append(user_dict)
@@ -601,7 +602,8 @@ async def list_users(
                 'active_positions_count': 0,
                 'total_pnl_usdc': Decimal(0),
                 'total_pnl_percentage': Decimal(0),
-                'agent_active': user.agent_status == 'running' if hasattr(user, 'agent_status') and user.agent_status else False
+                'agent_active': user.agent_status == 'running' if hasattr(user, 'agent_status') and user.agent_status else False,
+                'active_strategies': user.active_strategies or {}
             })
 
     # Commit updates to database

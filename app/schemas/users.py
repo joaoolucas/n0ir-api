@@ -297,6 +297,9 @@ class UserListResponse(BaseModel):
     # Agent status
     agent_active: bool = Field(False, description="Whether agent is active (has CDP wallet)")
 
+    # Strategy configuration
+    active_strategies: Dict[str, Any] = Field(default_factory=dict, description="User's active strategy configurations")
+
 
 class BalanceResponse(BaseModel):
     user_id: str
