@@ -348,3 +348,62 @@ async def deactivate_agent(
             message=str(e)
         )
 
+
+@router.get("/{user_id}/active-strategies")
+async def get_active_strategies(
+    user_id: str,
+    authenticated_wallet: str = Depends(get_authenticated_wallet),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get user's active strategies configuration.
+
+    Returns the user's active_strategies JSONB field containing
+    all strategies the user has activated.
+
+    Example response:
+    {
+        "user_id": "0x123...",
+        "active_strategies": {
+            "h3": {
+                "strategy_type": "hedged_blueprint",
+                "status": "active",
+                "created_at": "2025-10-10T12:00:00Z",
+                "updated_at": "2025-10-10T12:00:00Z"
+            }
+        }
+    }
+    """
+    # Verify user can only access their own strategies
+    if authenticated_wallet.lower() != user_id.lower():
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot access strategies for another wallet"
+        )
+
+    try:
+        service = UserService(db)
+        user = await service.get_user(user_id)
+
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Return active strategies, default to empty dict if None
+        active_strategies = user.active_strategies or {}
+
+        logger.info(f"Retrieved active strategies for {user_id}: {len(active_strategies)} active")
+
+        return {
+            "user_id": user_id,
+            "active_strategies": active_strategies
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching active strategies for {user_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch active strategies: {str(e)}"
+        )
+
