@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, List
 from decimal import Decimal
+from datetime import datetime, timedelta
 from loguru import logger
 
 from app.database.session import get_db
@@ -854,8 +855,32 @@ async def get_performance(
     # Get positions for metrics calculation
     positions = await service.get_user_positions(user_id)
 
+    # Apply period filter if specified
+    cutoff_time = None
+    if period:
+        now = datetime.utcnow()
+        if period == TimePeriod.DAY_1:
+            cutoff_time = now - timedelta(hours=24)
+        elif period == TimePeriod.DAY_7:
+            cutoff_time = now - timedelta(days=7)
+        elif period == TimePeriod.DAY_30:
+            cutoff_time = now - timedelta(days=30)
+        # TimePeriod.ALL_TIME means no filter (cutoff_time stays None)
+
+    # Filter positions based on period
+    if cutoff_time:
+        # Include positions that were active during the period
+        filtered_positions = [
+            p for p in positions
+            if (p.entry_date and p.entry_date >= cutoff_time) or  # Opened in period
+               (p.exit_date and p.exit_date >= cutoff_time) or    # Closed in period
+               (p.status == 'ACTIVE' and p.entry_date and p.entry_date < cutoff_time)  # Active before and during period
+        ]
+    else:
+        filtered_positions = positions
+
     # Batch enrich active positions with blockchain data (avoids N+1 pool queries)
-    active_positions = [p for p in positions if p.status == 'ACTIVE']
+    active_positions = [p for p in filtered_positions if p.status == 'ACTIVE']
     try:
         enriched_active_positions = await batch_enrich_positions(active_positions, db)
     except Exception as e:
@@ -873,7 +898,10 @@ async def get_performance(
 
     # Calculate PnL metrics
     # Realized PnL from closed positions only
-    closed_positions = [p for p in positions if p.status == 'CLOSED']
+    closed_positions = [p for p in filtered_positions if p.status == 'CLOSED']
+    # For closed positions, only count PnL if closed within the period
+    if cutoff_time:
+        closed_positions = [p for p in closed_positions if p.exit_date and p.exit_date >= cutoff_time]
     realized_pnl = sum(p.realized_pnl_usdc for p in closed_positions if p.realized_pnl_usdc)
 
     # Unrealized PnL from active positions (current_value - entry_amount)
@@ -882,15 +910,15 @@ async def get_performance(
         if p.get('unrealized_pnl_usdc') is not None
     )
 
-    # Fees and rewards from all positions
-    total_fees = sum(p.fees_earned_usdc for p in positions if p.fees_earned_usdc)
-    total_rewards = sum(p.rewards_earned_usdc for p in positions if p.rewards_earned_usdc)
+    # Fees and rewards from filtered positions
+    total_fees = sum(p.fees_earned_usdc for p in filtered_positions if p.fees_earned_usdc)
+    total_rewards = sum(p.rewards_earned_usdc for p in filtered_positions if p.rewards_earned_usdc)
 
     # Total PnL = unrealized + realized + fees + rewards
     total_pnl = unrealized_pnl + realized_pnl + total_fees + total_rewards
 
-    # Calculate PnL percentage based on total invested
-    total_invested = sum(p.entry_amount_usdc for p in positions if p.entry_amount_usdc)
+    # Calculate PnL percentage based on total invested (from filtered positions)
+    total_invested = sum(p.entry_amount_usdc for p in filtered_positions if p.entry_amount_usdc)
     if total_invested > 0:
         realized_pnl_pct = (realized_pnl / total_invested) * 100
         total_pnl_percentage = (total_pnl / total_invested) * 100
