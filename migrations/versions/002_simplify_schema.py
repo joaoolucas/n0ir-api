@@ -18,10 +18,16 @@ depends_on = None
 
 def upgrade():
     """Apply schema simplification."""
-    
-    # 1. Remove redundant columns from users table
-    op.drop_column('users', 'cdp_owner_wallet_address')
-    op.drop_column('users', 'cdp_owner_wallet_name')
+
+    # 1. Remove redundant columns from users table (if they exist)
+    connection = op.get_bind()
+    inspector = sa.inspect(connection)
+    columns = [col['name'] for col in inspector.get_columns('users')]
+
+    if 'cdp_owner_wallet_address' in columns:
+        op.drop_column('users', 'cdp_owner_wallet_address')
+    if 'cdp_owner_wallet_name' in columns:
+        op.drop_column('users', 'cdp_owner_wallet_name')
     
     # 2. Add protocol fee tracking to positions table
     op.add_column('positions', 
