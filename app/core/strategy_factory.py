@@ -142,9 +142,18 @@ class StrategyConfig:
         Returns:
             Slippage in basis points (e.g., 300 = 3%)
         """
-        # USDC/EURC (s1) gets 3% slippage due to lower liquidity
+        # USDC/EURC (s1) gets 1.5% slippage due to lower liquidity
         if self.strategy_type == StrategyTypeEnum.STABLE_USDC_EURC:
-            return 300  # 3%
+            return 150  # 1.5%
+
+        # cbBTC altcoin pairs get 2.5% slippage due to lower liquidity
+        if self.strategy_type in [
+            StrategyTypeEnum.NONHEDGED_CBLTC,
+            StrategyTypeEnum.NONHEDGED_CBADA,
+            StrategyTypeEnum.NONHEDGED_CBXRP,
+            StrategyTypeEnum.NONHEDGED_CBDOGE
+        ]:
+            return 250  # 2.5%
 
         # All other strategies get 0.5% slippage
         return 50  # 0.5%
