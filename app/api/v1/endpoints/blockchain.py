@@ -32,7 +32,7 @@ from app.core.pools_service import pools_service
 from app.core.positions_service import positions_service
 from app.core.hedge_service import hedge_service
 from app.core.logger import logger
-from app.core.auth import get_authenticated_wallet
+from app.core.auth import get_authenticated_wallet, verify_bearer_token
 from app.database.session import get_db
 from app.database.models import Position, APRSnapshot
 
@@ -61,7 +61,8 @@ router = APIRouter()
 )
 async def get_pool(
     request: Request,
-    address: str = Path(..., description="Pool contract address", pattern="^0x[a-fA-F0-9]{40}$")
+    address: str = Path(..., description="Pool contract address", pattern="^0x[a-fA-F0-9]{40}$"),
+    _: bool = Depends(verify_bearer_token)
 ):
     """
     Get detailed information for a specific pool.
@@ -118,6 +119,7 @@ async def get_positions(
     pool: Optional[str] = Query(None, description="Filter by pool address", pattern="^0x[a-fA-F0-9]{40}$"),
     in_range: Optional[bool] = Query(None, description="Filter by in-range status"),
     all_active: bool = Query(False, description="Get all active positions (requires authorization)"),
+    _: bool = Depends(verify_bearer_token),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -338,7 +340,8 @@ async def get_positions(
 )
 async def get_token_info(
     request: Request,
-    address: str = Path(..., description="Token contract address", pattern="^0x[a-fA-F0-9]{40}$")
+    address: str = Path(..., description="Token contract address", pattern="^0x[a-fA-F0-9]{40}$"),
+    _: bool = Depends(verify_bearer_token)
 ):
     """
     Get information about a specific token.
@@ -392,7 +395,8 @@ async def get_token_info(
 async def get_hedge_position(
     request: Request,
     token_id: Optional[int] = Query(None, description="Get hedge info for specific position by NFT token ID", ge=1),
-    wallet: Optional[str] = Query(None, description="Get all hedge positions for wallet address", pattern="^0x[a-fA-F0-9]{40}$")
+    wallet: Optional[str] = Query(None, description="Get all hedge positions for wallet address", pattern="^0x[a-fA-F0-9]{40}$"),
+    _: bool = Depends(verify_bearer_token)
 ):
     """
     Get vault hedge positions and account health.

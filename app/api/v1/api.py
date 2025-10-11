@@ -17,11 +17,10 @@ api_router.include_router(
     tags=["Admin"]
 )
 
-# Include blockchain endpoints with Bearer token authentication
+# Include blockchain endpoints (auth handled per-endpoint)
 api_router.include_router(
     blockchain.router,
-    tags=["Blockchain"],
-    dependencies=[Depends(verify_bearer_token)]
+    tags=["Blockchain"]
 )
 
 # Include Core endpoints for essential operations
