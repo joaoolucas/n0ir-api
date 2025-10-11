@@ -12,10 +12,12 @@ class StrategyTypeEnum(str, Enum):
     """Strategy types supported by the platform."""
     HEDGED_WETH = "hedged_weth_only"
     HEDGED_CBBTC = "hedged_cbbtc_only"
-    HEDGED_BLUEPRINT = "hedged_blueprint"
     NONHEDGED_WETH = "nonhedged_weth_only"
     NONHEDGED_CBBTC = "nonhedged_cbbtc_only"
-    NONHEDGED_BLUEPRINT = "nonhedged_blueprint"
+    NONHEDGED_CBLTC = "nonhedged_cbltc_cbbtc"
+    NONHEDGED_CBADA = "nonhedged_cbada_cbbtc"
+    NONHEDGED_CBXRP = "nonhedged_cbxrp_cbbtc"
+    NONHEDGED_CBDOGE = "nonhedged_cbdoge_cbbtc"
     STABLE_USDC_EURC = "stable_usdc_eurc"
     STABLE_USDC_MSUSD = "stable_usdc_msusd"
 
@@ -34,10 +36,12 @@ class StrategyTypeEnum(str, Enum):
 STRATEGY_SHORT_CODES = {
     "h1": "hedged_weth_only",
     "h2": "hedged_cbbtc_only",
-    "h3": "hedged_blueprint",
     "n1": "nonhedged_weth_only",
     "n2": "nonhedged_cbbtc_only",
-    "n3": "nonhedged_blueprint",
+    "n3": "nonhedged_cbltc_cbbtc",
+    "n4": "nonhedged_cbada_cbbtc",
+    "n5": "nonhedged_cbxrp_cbbtc",
+    "n6": "nonhedged_cbdoge_cbbtc",
     "s1": "stable_usdc_eurc",
     "s2": "stable_usdc_msusd",
 }

@@ -6,8 +6,12 @@ from app.schemas.strategy import StrategyTypeEnum
 # Pool address constants
 WETH_USDC_POOL = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59"
 CBBTC_USDC_POOL = "0x4e962bb3889bf030368f56810a9c96b83cb3e778"
-USDC_EURC_POOL = "0xE846373C1a92B167b4E9cd5d8E4d6B1Db9E90EC7"  # Pool 1 from whitelist
-USDC_MSUSD_POOL = "0x7501bc8Bb51616F79bfA524E464fb7B41f0B10fB"  # Pool 2 from whitelist
+USDC_EURC_POOL = "0xE846373C1a92B167b4E9cd5d8E4d6B1Db9E90EC7"
+USDC_MSUSD_POOL = "0x7501bc8Bb51616F79bfA524E464fb7B41f0B10fB"
+CBLTC_CBBTC_POOL = "0x6044c817e55a03dadc5f6b8b7045af1985ae90fa"
+CBADA_CBBTC_POOL = "0x8782d97c8b25b4d17dbfbaa03f25dc18e51e909d"
+CBXRP_CBBTC_POOL = "0x95ff4985af7ed78421215be100c18a2b987f7e90"
+CBDOGE_CBBTC_POOL = "0x363d1607b8da83d6b6ea76d017ceecf1316bb08a"
 
 
 class StrategyConfig:
@@ -44,10 +48,12 @@ class StrategyConfig:
         mapping = {
             StrategyTypeEnum.HEDGED_WETH: [WETH_USDC_POOL],
             StrategyTypeEnum.HEDGED_CBBTC: [CBBTC_USDC_POOL],
-            StrategyTypeEnum.HEDGED_BLUEPRINT: [WETH_USDC_POOL, CBBTC_USDC_POOL],
             StrategyTypeEnum.NONHEDGED_WETH: [WETH_USDC_POOL],
             StrategyTypeEnum.NONHEDGED_CBBTC: [CBBTC_USDC_POOL],
-            StrategyTypeEnum.NONHEDGED_BLUEPRINT: [WETH_USDC_POOL, CBBTC_USDC_POOL],
+            StrategyTypeEnum.NONHEDGED_CBLTC: [CBLTC_CBBTC_POOL],
+            StrategyTypeEnum.NONHEDGED_CBADA: [CBADA_CBBTC_POOL],
+            StrategyTypeEnum.NONHEDGED_CBXRP: [CBXRP_CBBTC_POOL],
+            StrategyTypeEnum.NONHEDGED_CBDOGE: [CBDOGE_CBBTC_POOL],
             StrategyTypeEnum.STABLE_USDC_EURC: [USDC_EURC_POOL],
             StrategyTypeEnum.STABLE_USDC_MSUSD: [USDC_MSUSD_POOL],
         }
