@@ -17,7 +17,7 @@ from app.core.config import settings
 from app.database.models import User
 from app.schemas.users import (
     VaultStrategyResponse,
-    CapitalInfo,
+    DeprecatedCapitalInfo as CapitalInfo,
     ContractParameters,
     PositionParams,
     VaultHedgeSimulation,
