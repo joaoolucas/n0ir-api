@@ -29,34 +29,48 @@ def upgrade():
     if 'cdp_owner_wallet_name' in columns:
         op.drop_column('users', 'cdp_owner_wallet_name')
     
-    # 2. Add protocol fee tracking to positions table
-    op.add_column('positions', 
-        sa.Column('protocol_fee_amount', sa.Numeric(precision=20, scale=6), 
-                  server_default='0', nullable=False))
-    op.add_column('positions', 
-        sa.Column('protocol_fee_collected', sa.Boolean(), 
-                  server_default='false', nullable=False))
-    op.add_column('positions', 
-        sa.Column('protocol_fee_tx_hash', sa.String(), nullable=True))
+    # 2. Add protocol fee tracking to positions table (if columns don't exist)
+    columns = [col['name'] for col in inspector.get_columns('positions')]
+
+    if 'protocol_fee_amount' not in columns:
+        op.add_column('positions',
+            sa.Column('protocol_fee_amount', sa.Numeric(precision=20, scale=6),
+                      server_default='0', nullable=False))
+    if 'protocol_fee_collected' not in columns:
+        op.add_column('positions',
+            sa.Column('protocol_fee_collected', sa.Boolean(),
+                      server_default='false', nullable=False))
+    if 'protocol_fee_tx_hash' not in columns:
+        op.add_column('positions',
+            sa.Column('protocol_fee_tx_hash', sa.String(), nullable=True))
     
-    # 3. Add related position to transactions
-    op.add_column('transactions',
-        sa.Column('related_position_id', sa.Integer(), nullable=True))
+    # 3. Add related position to transactions (if column doesn't exist)
+    trans_columns = [col['name'] for col in inspector.get_columns('transactions')]
+
+    if 'related_position_id' not in trans_columns:
+        op.add_column('transactions',
+            sa.Column('related_position_id', sa.Integer(), nullable=True))
+
+        # Create foreign key after column exists
+        op.create_foreign_key(
+            'fk_transaction_position',
+            'transactions', 'positions',
+            ['related_position_id'], ['nft_token_id']
+        )
     
-    # Create foreign key after column exists
-    op.create_foreign_key(
-        'fk_transaction_position',
-        'transactions', 'positions',
-        ['related_position_id'], ['nft_token_id']
-    )
-    
-    # 4. Create new indexes
-    op.create_index('idx_position_protocol_fee_collected', 
-                    'positions', ['protocol_fee_collected'])
-    op.create_index('idx_position_protocol_fee_tx', 
-                    'positions', ['protocol_fee_tx_hash'])
-    op.create_index('idx_transaction_related_position', 
-                    'transactions', ['related_position_id'])
+    # 4. Create new indexes (if they don't exist)
+    pos_indexes = [idx['name'] for idx in inspector.get_indexes('positions')]
+    trans_indexes = [idx['name'] for idx in inspector.get_indexes('transactions')]
+
+    if 'idx_position_protocol_fee_collected' not in pos_indexes:
+        op.create_index('idx_position_protocol_fee_collected',
+                        'positions', ['protocol_fee_collected'])
+    if 'idx_position_protocol_fee_tx' not in pos_indexes:
+        op.create_index('idx_position_protocol_fee_tx',
+                        'positions', ['protocol_fee_tx_hash'])
+    if 'idx_transaction_related_position' not in trans_indexes:
+        op.create_index('idx_transaction_related_position',
+                        'transactions', ['related_position_id'])
     
     # 5. Migrate data from protocol_fees table if it exists
     connection = op.get_bind()
