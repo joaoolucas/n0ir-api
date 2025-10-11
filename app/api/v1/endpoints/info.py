@@ -263,13 +263,23 @@ async def enrich_position_with_pool_data(
                         pool_info = await pools_service.get_pool(position.pool_address, include_effective_apr=True)
 
                     base_apr = pool_info.get('apr') or 0
-                    # Get standard effective APR from the range options
                     effective_apr_range = pool_info.get('effective_apr_range')
-                    standard_apr = effective_apr_range.get('standard', 0) if effective_apr_range else 0
+
+                    # Use stable APR for USDC/EURC and msUSD/USDC pools, standard for others
+                    USDC_EURC_POOL = "0xE846373C1a92B167b4E9cd5d8E4d6B1Db9E90EC7"
+                    USDC_MSUSD_POOL = "0x7501bc8Bb51616F79bfA524E464fb7B41f0B10fB"
+                    is_stable_pair = position.pool_address.lower() in [USDC_EURC_POOL.lower(), USDC_MSUSD_POOL.lower()]
+
+                    if is_stable_pair and effective_apr_range:
+                        effective_apr = effective_apr_range.get('stable', 0)
+                    elif effective_apr_range:
+                        effective_apr = effective_apr_range.get('standard', 0)
+                    else:
+                        effective_apr = 0
 
                     position_dict['pool_base_apr'] = Decimal(str(base_apr))
-                    position_dict['effective_apr'] = Decimal(str(standard_apr))
-                    logger.debug(f"Position {position.nft_token_id} - Base APR: {base_apr}, Effective APR: {standard_apr}")
+                    position_dict['effective_apr'] = Decimal(str(effective_apr))
+                    logger.debug(f"Position {position.nft_token_id} - Base APR: {base_apr}, Effective APR: {effective_apr} ({'stable' if is_stable_pair else 'standard'})")
                 except Exception as e:
                     logger.warning(f"Could not fetch pool APR for {position.pool_address}: {e}")
                     position_dict['pool_base_apr'] = Decimal(0)
