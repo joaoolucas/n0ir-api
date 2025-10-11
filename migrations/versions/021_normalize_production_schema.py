@@ -55,11 +55,20 @@ def upgrade() -> None:
         DO $$
         BEGIN
             IF EXISTS (
-                SELECT 1 FROM information_schema.columns 
+                SELECT 1 FROM information_schema.columns
                 WHERE table_name = 'positions' AND column_name = 'token_id'
             ) THEN
+                -- Make token_id NOT NULL
                 ALTER TABLE positions ALTER COLUMN token_id SET NOT NULL;
-                ALTER TABLE positions ADD PRIMARY KEY (token_id);
+
+                -- Add primary key only if it doesn't already exist
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conrelid = 'positions'::regclass
+                    AND contype = 'p'
+                ) THEN
+                    ALTER TABLE positions ADD PRIMARY KEY (token_id);
+                END IF;
             END IF;
         END $$;
         """
