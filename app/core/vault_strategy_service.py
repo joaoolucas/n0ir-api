@@ -570,13 +570,16 @@ class VaultStrategyService:
         # Calculate deadline (15 minutes from now)
         deadline = int(datetime.utcnow().timestamp()) + 900
 
+        # Get strategy-specific slippage
+        slippage_bps = strategy_config.slippage_bps if strategy_config else 50
+
         # Build contract parameters
         contract_params = ContractParameters(
             pool=pool_address,
             range_percentage=range_percentage,
             deadline=deadline,
             usdc_amount=Decimal(str(balance)),
-            slippage_bps=50,  # 0.5% slippage
+            slippage_bps=slippage_bps,
             hedge_ratio=optimal_strategy['hedge_ratio'],
             collateral_ratio_bps=optimal_strategy['collateral_ratio_bps']
         )
@@ -685,6 +688,9 @@ class VaultStrategyService:
             hedge_ratio_2 = 0
             collateral_ratio_2 = 0
 
+        # Get strategy-specific slippage
+        slippage_bps = strategy_config.slippage_bps if strategy_config else 50
+
         # Create position params with optimal ratios
         position_1 = PositionParams(
             pool=positions_data[0][1],
@@ -692,7 +698,7 @@ class VaultStrategyService:
             usdc_amount=positions_data[0][3],
             range_percentage=range_percentage,
             deadline=deadline,
-            slippage_bps=50,
+            slippage_bps=slippage_bps,
             hedge_ratio=hedge_ratio_1,
             collateral_ratio_bps=collateral_ratio_1
         )
@@ -703,7 +709,7 @@ class VaultStrategyService:
             usdc_amount=positions_data[1][3],
             range_percentage=range_percentage,
             deadline=deadline,
-            slippage_bps=50,
+            slippage_bps=slippage_bps,
             hedge_ratio=hedge_ratio_2,
             collateral_ratio_bps=collateral_ratio_2
         )

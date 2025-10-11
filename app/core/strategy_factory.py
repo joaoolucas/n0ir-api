@@ -32,6 +32,7 @@ class StrategyConfig:
         self.hedge_ratio = self._get_hedge_ratio()
         self.allocation_split = self._get_allocation_split()
         self.ltv = self._get_ltv()
+        self.slippage_bps = self._get_slippage_bps()
 
     def _get_pools(self) -> List[str]:
         """
@@ -127,6 +128,20 @@ class StrategyConfig:
 
         # Single-pool strategies allocate 100% to that pool
         return {pools[0]: 1.0}
+
+    def _get_slippage_bps(self) -> int:
+        """
+        Return slippage tolerance in basis points for this strategy.
+
+        Returns:
+            Slippage in basis points (e.g., 300 = 3%)
+        """
+        # USDC/EURC (s1) gets 3% slippage due to lower liquidity
+        if self.strategy_type == StrategyTypeEnum.STABLE_USDC_EURC:
+            return 300  # 3%
+
+        # All other strategies get 0.5% slippage
+        return 50  # 0.5%
 
     def get_pool_allocation(self, pool_address: str, total_capital: float) -> float:
         """
