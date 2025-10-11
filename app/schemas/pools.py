@@ -17,6 +17,7 @@ class EffectiveAPRInfo(BaseModel):
     narrow: float = Field(..., description="Effective APR for narrow range (5% total)")
     standard: float = Field(..., description="Effective APR for standard range (10% total)")
     wide: float = Field(..., description="Effective APR for wide range (20% total)")
+    stable: float = Field(..., description="Effective APR for stable range (2% total)")
 
 
 class PoolData(BaseModel):

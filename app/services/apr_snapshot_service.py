@@ -15,8 +15,8 @@ from app.core.logger import logger
 WHITELISTED_POOLS = [
     "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59",  # WETH/USDC
     "0x4e962bb3889bf030368f56810a9c96b83cb3e778",  # cbBTC/USDC
-    "0xE846373C1a92B167b4E9cd5d8E4d6B1Db9E90EC7",  # New pool 1
-    "0xD43Decd5Df4BDFFd5A4Cf35cA1f9557E33B7246C",  # New pool 2
+    "0xE846373C1a92B167b4E9cd5d8E4d6B1Db9E90EC7",  # USDC/EURC
+    "0x7501bc8Bb51616F79bfA524E464fb7B41f0B10fB",  # USDC/msUSD
 ]
 
 
@@ -50,11 +50,13 @@ class APRSnapshotService:
             effective_apr_narrow = None
             effective_apr_standard = None
             effective_apr_wide = None
+            effective_apr_stable = None
 
             if effective_apr_range:
                 effective_apr_narrow = effective_apr_range.get("narrow")
                 effective_apr_standard = effective_apr_range.get("standard")
                 effective_apr_wide = effective_apr_range.get("wide")
+                effective_apr_stable = effective_apr_range.get("stable")
 
             # Create snapshot
             snapshot = APRSnapshot(
@@ -64,6 +66,7 @@ class APRSnapshotService:
                 effective_apr_narrow=Decimal(str(effective_apr_narrow)) if effective_apr_narrow else None,
                 effective_apr_standard=Decimal(str(effective_apr_standard)) if effective_apr_standard else None,
                 effective_apr_wide=Decimal(str(effective_apr_wide)) if effective_apr_wide else None,
+                effective_apr_stable=Decimal(str(effective_apr_stable)) if effective_apr_stable else None,
                 tvl_usd=Decimal(str(pool_data.get("tvl_usd", 0))) if pool_data.get("tvl_usd") else None,
                 volume_24h=Decimal(str(pool_data.get("volume_24h", 0))) if pool_data.get("volume_24h") else None,
                 timestamp=datetime.utcnow(),

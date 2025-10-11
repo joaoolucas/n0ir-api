@@ -25,7 +25,8 @@ class EffectiveAPRCalculator:
     STANDARD_RANGE_WIDTHS = {
         'narrow': 0.05,    # 5% total range - aggressive strategy
         'standard': 0.10,  # 10% total range - balanced strategy
-        'wide': 0.20       # 20% total range - conservative strategy
+        'wide': 0.20,      # 20% total range - conservative strategy
+        'stable': 0.02     # 2% total range - stable pair strategy
     }
     
     def calculate_effective_apr(

@@ -22,6 +22,7 @@ class APRSnapshot(Base):
     effective_apr_narrow = Column(Numeric(precision=10, scale=4), nullable=True)
     effective_apr_standard = Column(Numeric(precision=10, scale=4), nullable=True)
     effective_apr_wide = Column(Numeric(precision=10, scale=4), nullable=True)
+    effective_apr_stable = Column(Numeric(precision=10, scale=4), nullable=True)
 
     # Pool metrics
     tvl_usd = Column(Numeric(precision=20, scale=2), nullable=True)

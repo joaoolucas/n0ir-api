@@ -449,7 +449,8 @@ class PoolsService:
             pool_data["effective_apr_range"] = EffectiveAPRInfo(
                 narrow=effective_apr_ranges.get("narrow", 0),
                 standard=effective_apr_ranges.get("standard", 0),
-                wide=effective_apr_ranges.get("wide", 0)
+                wide=effective_apr_ranges.get("wide", 0),
+                stable=effective_apr_ranges.get("stable", 0)
             )
         
         return pool_data
@@ -1065,7 +1066,8 @@ class PoolsService:
             result["effective_apr_range"] = {
                 "narrow": effective_apr_ranges.get("narrow", 0),
                 "standard": effective_apr_ranges.get("standard", 0),
-                "wide": effective_apr_ranges.get("wide", 0)
+                "wide": effective_apr_ranges.get("wide", 0),
+                "stable": effective_apr_ranges.get("stable", 0)
             }
         else:
             result["effective_apr"] = None
