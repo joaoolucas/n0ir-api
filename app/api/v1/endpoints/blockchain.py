@@ -489,7 +489,7 @@ async def get_display_data(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Get mean APR from snapshots for pools with current TVL and 24h volume.
+    Get mean APR metrics from snapshots for pools with current TVL and 24h volume.
 
     Returns aggregated APR data from historical snapshots combined with
     current pool metrics (TVL and 24h volume).
@@ -501,16 +501,24 @@ async def get_display_data(
     For each pool:
     - pool_address: Pool contract address
     - pool_symbol: Pool token pair symbol
-    - mean_apr: Average APR across all snapshots
+    - mean_apr: Average base APR across all snapshots
+    - mean_effective_apr_narrow: Average effective APR for narrow range positions
+    - mean_effective_apr_standard: Average effective APR for standard range positions
+    - mean_effective_apr_wide: Average effective APR for wide range positions
+    - mean_effective_apr_stable: Average effective APR for stable pools
     - tvl_usd: Current total value locked (from pools service)
     - volume_24h: Current 24h trading volume (from pools service)
     """
     try:
-        # Build query to calculate mean APR per pool
+        # Build query to calculate mean for all APR types per pool
         query = select(
             APRSnapshot.pool_address,
             APRSnapshot.pool_symbol,
-            func.avg(APRSnapshot.apr).label("mean_apr")
+            func.avg(APRSnapshot.apr).label("mean_apr"),
+            func.avg(APRSnapshot.effective_apr_narrow).label("mean_effective_apr_narrow"),
+            func.avg(APRSnapshot.effective_apr_standard).label("mean_effective_apr_standard"),
+            func.avg(APRSnapshot.effective_apr_wide).label("mean_effective_apr_wide"),
+            func.avg(APRSnapshot.effective_apr_stable).label("mean_effective_apr_stable")
         ).group_by(
             APRSnapshot.pool_address,
             APRSnapshot.pool_symbol
@@ -537,6 +545,10 @@ async def get_display_data(
                 "pool_address": row.pool_address,
                 "pool_symbol": row.pool_symbol,
                 "mean_apr": float(row.mean_apr) if row.mean_apr else 0.0,
+                "mean_effective_apr_narrow": float(row.mean_effective_apr_narrow) if row.mean_effective_apr_narrow else None,
+                "mean_effective_apr_standard": float(row.mean_effective_apr_standard) if row.mean_effective_apr_standard else None,
+                "mean_effective_apr_wide": float(row.mean_effective_apr_wide) if row.mean_effective_apr_wide else None,
+                "mean_effective_apr_stable": float(row.mean_effective_apr_stable) if row.mean_effective_apr_stable else None,
                 "tvl_usd": None,
                 "volume_24h": None
             }
