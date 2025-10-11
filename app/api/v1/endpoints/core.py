@@ -159,21 +159,24 @@ async def create_user(
 async def activate_agent(
     user_id: str,
     request: Request,
-    strategy_type: Optional[str] = "h3",
+    strategy_type: Optional[str] = "n1",
+    allocation_usd: Optional[float] = 100.0,
     authenticated_wallet: str = Depends(get_authenticated_wallet),
     db: AsyncSession = Depends(get_db)
 ) -> ActivateResponse:
     """
-    Activate trading agent for user with strategy selection.
+    Activate trading agent for user with strategy selection and capital allocation.
 
     This will:
     1. Validate and store selected strategy type in user.active_strategies
-    2. Start the agent process
-    3. Enable automated trading based on strategy
+    2. Set the allocated capital for this strategy
+    3. Start the agent process
+    4. Enable automated trading based on strategy
 
     Args:
         user_id: User wallet address
-        strategy_type: Strategy short code or full name (h1-h3, n1-n3, s1-s2). Default: h3 (hedged_blueprint)
+        strategy_type: Strategy short code or full name (h1-h2, n1-n6, s1-s2). Default: n1 (nonhedged_weth_only)
+        allocation_usd: Capital allocated to this strategy in USD. Default: 100.0
 
     Requires user to exist with CDP wallet (use /create first).
     """
@@ -216,15 +219,17 @@ async def activate_agent(
                 message="User has no CDP wallet. Please create wallet first with /create endpoint"
             )
 
-        # Store selected strategy in active_strategies
+        # Store selected strategy in active_strategies with allocation
         if not user.active_strategies:
             user.active_strategies = {}
 
-        strategy_key = strategy_type if strategy_type in ["h1", "h2", "h3", "n1", "n2", "n3", "s1", "s2"] else strategy_enum.value.split("_")[1] if "_" in strategy_enum.value else strategy_enum.value
+        strategy_key = strategy_type if strategy_type in ["h1", "h2", "n1", "n2", "n3", "n4", "n5", "n6", "s1", "s2"] else strategy_enum.value.split("_")[1] if "_" in strategy_enum.value else strategy_enum.value
 
         user.active_strategies[strategy_key] = {
             "strategy_type": strategy_enum.value,
             "status": "active",
+            "allocated_capital_usd": float(allocation_usd),
+            "deployed_capital_usd": 0.0,
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat()
         }
