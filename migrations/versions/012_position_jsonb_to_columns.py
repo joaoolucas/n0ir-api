@@ -196,12 +196,22 @@ def upgrade() -> None:
     """)
     
     print("Fixing status values to lowercase...")
-    
+
     # Fix status values to match enum (ACTIVE -> active, CLOSED -> closed, etc.)
+    # Only update if the enum type exists (it may not in a fresh database)
     op.execute("""
-        UPDATE positions
-        SET status = LOWER(status::text)::positionstatus
-        WHERE status::text IN ('ACTIVE', 'CLOSED', 'LIQUIDATED');
+        DO $$
+        BEGIN
+            -- Check if positionstatus enum type exists
+            IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'positionstatus') THEN
+                -- Check if we need to convert (if values are uppercase)
+                IF EXISTS (SELECT 1 FROM positions WHERE status::text IN ('ACTIVE', 'CLOSED', 'LIQUIDATED')) THEN
+                    UPDATE positions
+                    SET status = LOWER(status::text)::positionstatus
+                    WHERE status::text IN ('ACTIVE', 'CLOSED', 'LIQUIDATED');
+                END IF;
+            END IF;
+        END $$;
     """)
     
     print("Creating indexes for new columns...")
