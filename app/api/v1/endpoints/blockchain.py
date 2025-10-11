@@ -3,7 +3,8 @@
 from typing import List, Optional, Union
 from fastapi import APIRouter, HTTPException, Query, Path, Request, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
+from decimal import Decimal
 
 # Import schemas
 from app.schemas.pools import (
@@ -32,7 +33,7 @@ from app.core.positions_service import positions_service
 from app.core.hedge_service import hedge_service
 from app.core.logger import logger
 from app.database.session import get_db
-from app.database.models import Position
+from app.database.models import Position, APRSnapshot
 
 # Whitelisted pools (moved from strategy_service)
 WHITELISTED_POOLS = {
@@ -466,6 +467,103 @@ async def get_hedge_position(
                 "error": {
                     "code": "INTERNAL_ERROR",
                     "message": "Failed to fetch hedge position",
+                    "details": {"error": str(e)}
+                }
+            }
+        )
+
+
+# ============================================================================
+# DISPLAY ENDPOINT
+# ============================================================================
+
+@router.get(
+    "/display",
+    responses={
+        500: {"model": ErrorResponse, "description": "Internal Server Error"}
+    }
+)
+async def get_display_data(
+    request: Request,
+    pool_address: Optional[str] = Query(None, description="Filter by pool address", pattern="^0x[a-fA-F0-9]{40}$"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get mean APR from snapshots for pools with current TVL and 24h volume.
+
+    Returns aggregated APR data from historical snapshots combined with
+    current pool metrics (TVL and 24h volume).
+
+    **Query Parameters:**
+    - pool_address (optional): Filter results for a specific pool
+
+    **Returns:**
+    For each pool:
+    - pool_address: Pool contract address
+    - pool_symbol: Pool token pair symbol
+    - mean_apr: Average APR across all snapshots
+    - tvl_usd: Current total value locked (from pools service)
+    - volume_24h: Current 24h trading volume (from pools service)
+    """
+    try:
+        # Build query to calculate mean APR per pool
+        query = select(
+            APRSnapshot.pool_address,
+            APRSnapshot.pool_symbol,
+            func.avg(APRSnapshot.apr).label("mean_apr")
+        ).group_by(
+            APRSnapshot.pool_address,
+            APRSnapshot.pool_symbol
+        )
+
+        # Apply pool filter if provided
+        if pool_address:
+            query = query.where(APRSnapshot.pool_address == pool_address.lower())
+
+        result = await db.execute(query)
+        snapshot_data = result.all()
+
+        if not snapshot_data:
+            return {
+                "pools": [],
+                "total": 0,
+                "message": "No APR snapshots found" if not pool_address else f"No snapshots found for pool {pool_address}"
+            }
+
+        # Enrich with TVL and volume from pools service
+        pools = []
+        for row in snapshot_data:
+            pool_info = {
+                "pool_address": row.pool_address,
+                "pool_symbol": row.pool_symbol,
+                "mean_apr": float(row.mean_apr) if row.mean_apr else 0.0,
+                "tvl_usd": None,
+                "volume_24h": None
+            }
+
+            # Fetch current pool data for TVL and volume
+            try:
+                pool_data = await pools_service.get_pool(row.pool_address)
+                pool_info["tvl_usd"] = float(pool_data.get("tvl_usd", 0)) if pool_data.get("tvl_usd") else None
+                pool_info["volume_24h"] = float(pool_data.get("volume_24h", 0)) if pool_data.get("volume_24h") else None
+            except Exception as e:
+                logger.warning(f"Could not fetch pool data for {row.pool_address}: {e}")
+
+            pools.append(pool_info)
+
+        return {
+            "pools": pools,
+            "total": len(pools)
+        }
+
+    except Exception as e:
+        logger.error(f"Error fetching display data: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Failed to fetch display data",
                     "details": {"error": str(e)}
                 }
             }
