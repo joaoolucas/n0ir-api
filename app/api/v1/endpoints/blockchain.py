@@ -32,6 +32,7 @@ from app.core.pools_service import pools_service
 from app.core.positions_service import positions_service
 from app.core.hedge_service import hedge_service
 from app.core.logger import logger
+from app.core.auth import get_authenticated_wallet
 from app.database.session import get_db
 from app.database.models import Position, APRSnapshot
 
@@ -486,6 +487,7 @@ async def get_hedge_position(
 async def get_display_data(
     request: Request,
     pool_address: Optional[str] = Query(None, description="Filter by pool address", pattern="^0x[a-fA-F0-9]{40}$"),
+    authenticated_wallet: str = Depends(get_authenticated_wallet),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -493,6 +495,9 @@ async def get_display_data(
 
     Returns aggregated APR data from historical snapshots combined with
     current pool metrics (TVL and 24h volume).
+
+    **Authentication:**
+    Supports both JWT session tokens and API_BEARER_TOKEN.
 
     **Query Parameters:**
     - pool_address (optional): Filter results for a specific pool
