@@ -506,6 +506,7 @@ async def get_display_data(
     - mean_effective_apr_standard: Average effective APR for standard range positions
     - mean_effective_apr_wide: Average effective APR for wide range positions
     - mean_effective_apr_stable: Average effective APR for stable pools
+    - mean_effective_apr_hedged: 65% of mean_effective_apr_standard (hedged position APR)
     - tvl_usd: Current total value locked (from pools service)
     - volume_24h: Current 24h trading volume (from pools service)
     """
@@ -541,14 +542,17 @@ async def get_display_data(
         # Enrich with TVL and volume from pools service
         pools = []
         for row in snapshot_data:
+            mean_standard = float(row.mean_effective_apr_standard) if row.mean_effective_apr_standard else None
+
             pool_info = {
                 "pool_address": row.pool_address,
                 "pool_symbol": row.pool_symbol,
                 "mean_apr": float(row.mean_apr) if row.mean_apr else 0.0,
                 "mean_effective_apr_narrow": float(row.mean_effective_apr_narrow) if row.mean_effective_apr_narrow else None,
-                "mean_effective_apr_standard": float(row.mean_effective_apr_standard) if row.mean_effective_apr_standard else None,
+                "mean_effective_apr_standard": mean_standard,
                 "mean_effective_apr_wide": float(row.mean_effective_apr_wide) if row.mean_effective_apr_wide else None,
                 "mean_effective_apr_stable": float(row.mean_effective_apr_stable) if row.mean_effective_apr_stable else None,
+                "mean_effective_apr_hedged": mean_standard * 0.65 if mean_standard else None,
                 "tvl_usd": None,
                 "volume_24h": None
             }
