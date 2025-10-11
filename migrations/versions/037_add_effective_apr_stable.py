@@ -1,7 +1,7 @@
 """Add effective_apr_stable column
 
 Revision ID: 037_add_effective_apr_stable
-Revises: 036_refactor_to_hybrid_strategy
+Revises: 034_add_apr_snapshots
 Create Date: 2025-10-11
 
 This migration adds effective_apr_stable column to apr_snapshots table.
@@ -11,7 +11,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = '037_add_effective_apr_stable'
-down_revision = '036_refactor_to_hybrid_strategy'
+down_revision = '034_add_apr_snapshots'
 branch_labels = None
 depends_on = None
 
