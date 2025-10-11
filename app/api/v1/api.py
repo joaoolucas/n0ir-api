@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from app.api.v1.endpoints import blockchain, health, core, info, admin
+from app.api.v1.endpoints import blockchain, health, core, info, admin, allocation
 from app.core.auth import verify_bearer_token
 
 api_router = APIRouter()
@@ -36,4 +36,11 @@ api_router.include_router(
 api_router.include_router(
     info.router,
     tags=["Info"]
+)
+
+# Include Allocation endpoints for capital management
+# Auth handled per-endpoint (JWT session tokens)
+api_router.include_router(
+    allocation.router,
+    tags=["Capital Allocation"]
 )

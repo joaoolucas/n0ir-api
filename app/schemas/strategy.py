@@ -85,7 +85,8 @@ class ActiveStrategyInfo(BaseModel):
     """Information about an active strategy in user's active_strategies."""
     strategy_type: str = Field(..., description="Full strategy type name")
     status: str = Field(..., description="Strategy status")
-    capital_allocated_usdc: Optional[Decimal] = Field(None, description="Capital allocated (optional)")
+    allocated_capital_usd: Decimal = Field(..., description="Maximum capital allocated to this strategy")
+    deployed_capital_usd: Decimal = Field(default=Decimal(0), description="Capital currently deployed in active positions")
     created_at: str = Field(..., description="ISO timestamp when strategy was activated")
     updated_at: str = Field(..., description="ISO timestamp when strategy was last updated")
 
@@ -94,7 +95,8 @@ class ActiveStrategyInfo(BaseModel):
             "example": {
                 "strategy_type": "hedged_blueprint",
                 "status": "active",
-                "capital_allocated_usdc": 1000.0,
+                "allocated_capital_usd": 1000.0,
+                "deployed_capital_usd": 300.0,
                 "created_at": "2025-10-10T12:00:00Z",
                 "updated_at": "2025-10-10T12:00:00Z"
             }

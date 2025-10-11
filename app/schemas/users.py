@@ -137,8 +137,8 @@ class StrategyAllocations(BaseModel):
     aerodrome_lp: AerodromeLP
 
 
-class CapitalInfo(BaseModel):
-    """Capital information"""
+class DeprecatedCapitalInfo(BaseModel):
+    """Capital information (deprecated - use app.schemas.capital.CapitalInfo)"""
     total_usd: Decimal = Field(..., description="Total capital in USD")
     base_asset: str = Field(default="USDC", description="Base asset")
 
@@ -180,7 +180,7 @@ class VaultStrategyResponse(BaseModel):
     timestamp: str = Field(..., description="ISO timestamp")
     action: str = Field(..., description="Action: 'open', 'close', 'open_dual', 'no_action'")
 
-    capital: CapitalInfo = Field(..., description="Capital information")
+    capital: Any = Field(..., description="Capital information - can be CapitalInfo from app.schemas.capital or DeprecatedCapitalInfo for backward compatibility")
     contract_params: Optional[ContractParameters] = Field(None, description="Parameters for calling vault contract (null when action='no_action')")
     monitoring: Optional[MonitoringInfo] = Field(None, description="Monitoring information")
     performance: Optional[PerformanceData] = Field(None, description="Performance metrics (when action='no_action')")

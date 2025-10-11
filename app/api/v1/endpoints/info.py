@@ -1022,7 +1022,9 @@ async def get_vault_strategy(
     from app.core.vault_strategy_service import vault_strategy_service
     from app.core.pools_service import pools_service
     from app.core.strategy_factory import StrategyConfig
-    from app.schemas.strategy import parse_strategy_type
+    from app.schemas.strategy import parse_strategy_type, STRATEGY_SHORT_CODES
+    from app.services.capital_allocation_service import get_capital_allocation_service
+    from app.schemas.capital import CapitalInfo as NewCapitalInfo
 
     try:
         # Validate and parse strategy type (supports both short codes and full names)
@@ -1034,13 +1036,138 @@ async def get_vault_strategy(
                 detail=str(e)
             )
 
+        # Get strategy short code for capital allocation lookup
+        strategy_code = strategy_type if strategy_type in STRATEGY_SHORT_CODES else None
+        if not strategy_code:
+            # Try to reverse-map from full name to short code
+            for code, full_name in STRATEGY_SHORT_CODES.items():
+                if full_name == strategy_enum.value:
+                    strategy_code = code
+                    break
+
         # Create strategy configuration
         strategy_config = StrategyConfig(strategy_enum)
 
         logger.info(f"Generating {strategy_enum.value} strategy for user {user_id}")
 
+        # STEP 1: Check capital allocation constraints
+        capital_service = get_capital_allocation_service(db)
+        try:
+            allocated, deployed, available, wallet_balance = await capital_service.calculate_available_capital(
+                user_id, strategy_code
+            )
+
+            # Calculate max deployable: min of available allocation and wallet balance
+            max_deployable = min(available, wallet_balance)
+
+            # Build capital info object
+            capital_info = NewCapitalInfo(
+                total_usd=max_deployable,
+                allocated_for_strategy=allocated,
+                already_deployed=deployed,
+                available_to_deploy=available,
+                wallet_balance=wallet_balance,
+                reason=None if max_deployable > 0 else (
+                    "allocation_exhausted" if available <= 0 else "insufficient_balance"
+                )
+            )
+
+            logger.info(
+                f"Capital constraints for {user_id}/{strategy_code}: "
+                f"max_deployable={max_deployable}, allocated={allocated}, "
+                f"deployed={deployed}, available={available}, wallet={wallet_balance}"
+            )
+
+            # If no capital available, return no_action with performance data
+            if max_deployable <= 0:
+                logger.info(
+                    f"No capital available for {user_id}/{strategy_code}: "
+                    f"reason={capital_info.reason}"
+                )
+
+                # Get performance data for no_action response
+                from sqlalchemy import select
+                from app.database.models import User
+                from app.core.blockchain_service import blockchain_service
+
+                stmt = select(User).where(User.user_id == user_id)
+                result = await db.execute(stmt)
+                user = result.scalar_one_or_none()
+
+                if not user:
+                    raise ValueError(f"User {user_id} not found")
+
+                # Get positions for metrics
+                service = UserService(db)
+                positions = await service.get_user_positions(user_id)
+                active_positions = [p for p in positions if p.status == 'ACTIVE']
+
+                # Batch enrich for APR calculation
+                enriched_active = await batch_enrich_positions(active_positions, db)
+
+                # Calculate weighted average APR
+                apr = Decimal(0)
+                if enriched_active:
+                    weighted_apr_sum = Decimal(0)
+                    total_value = Decimal(0)
+                    for pos in enriched_active:
+                        net_apr = pos.get('net_apr')
+                        current_value = pos.get('current_value_usdc')
+                        if net_apr and current_value and current_value > 0:
+                            weighted_apr_sum += Decimal(str(net_apr)) * Decimal(str(current_value))
+                            total_value += Decimal(str(current_value))
+                    if total_value > 0:
+                        apr = weighted_apr_sum / total_value
+
+                # Calculate positions value
+                positions_value = sum(
+                    Decimal(str(p.get('current_value_usdc', 0))) for p in enriched_active
+                    if p.get('current_value_usdc')
+                )
+
+                # Calculate PnL
+                closed_positions = [p for p in positions if p.status == 'CLOSED']
+                realized_pnl = sum(p.realized_pnl_usdc for p in closed_positions if p.realized_pnl_usdc)
+                unrealized_pnl = sum(
+                    Decimal(str(p.get('unrealized_pnl_usdc', 0))) for p in enriched_active
+                    if p.get('unrealized_pnl_usdc') is not None
+                )
+                total_fees = sum(p.fees_earned_usdc for p in positions if p.fees_earned_usdc)
+                total_rewards = sum(p.rewards_earned_usdc for p in positions if p.rewards_earned_usdc)
+                total_pnl = unrealized_pnl + realized_pnl + total_fees + total_rewards
+                total_invested = sum(p.entry_amount_usdc for p in positions if p.entry_amount_usdc)
+
+                performance_data = PerformanceData(
+                    apr=apr,
+                    wallet_balance=wallet_balance,
+                    positions_value=positions_value,
+                    total_balance=wallet_balance + positions_value,
+                    active_positions=len(active_positions),
+                    realized_pnl_usdc=realized_pnl,
+                    realized_pnl_pct=(realized_pnl / total_invested * 100) if total_invested > 0 else Decimal(0),
+                    pnl_usdc=total_pnl,
+                    pnl_pct=(total_pnl / total_invested * 100) if total_invested > 0 else Decimal(0)
+                )
+
+                return VaultStrategyResponse(
+                    user_id=user_id,
+                    strategy_type=strategy_enum.value,
+                    timestamp=datetime.utcnow().isoformat(),
+                    action="no_action",
+                    capital=capital_info.model_dump(),
+                    contract_params=None,
+                    monitoring=None,
+                    performance=performance_data
+                )
+
+        except ValueError as e:
+            # Strategy not active or user not found - this is a fatal error for capital tracking
+            logger.error(f"Capital allocation check failed: {e}")
+            raise HTTPException(status_code=404, detail=str(e))
+
+        # STEP 2: Select pool based on strategy type
         # For blueprint strategies, use the existing dual-position logic
-        # For single-pool strategies, use the specified pool
+        # For single-pool strategies, use the configured pool
         if "blueprint" in strategy_enum.value:
             # Blueprint: Use existing logic that selects pool by APR
             WETH_USDC_POOL = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59"
@@ -1065,13 +1192,16 @@ async def get_vault_strategy(
             pool_address = strategy_config.pools[0]
             logger.debug(f"Using configured pool {pool_address} for {strategy_enum.value}")
 
-        # Generate strategy with configuration
+        # STEP 3: Generate strategy with configuration and capital constraint
         strategy = await vault_strategy_service.generate_strategy(
             user_id=user_id,
             db=db,
             pool_address=pool_address,
             strategy_config=strategy_config
         )
+
+        # STEP 4: Override capital info in strategy response with allocation-aware version
+        strategy.capital = capital_info.model_dump()
 
         if strategy.monitoring and strategy.monitoring.alerts:
             logger.warning(f"  ⚠️ {len(strategy.monitoring.alerts)} position(s) need attention")
