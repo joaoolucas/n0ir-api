@@ -95,18 +95,29 @@ def upgrade():
         # Drop the protocol_fees table
         op.drop_table('protocol_fees')
     
-    # 6. Update transaction type enum
-    # First, create new enum type
-    op.execute("CREATE TYPE transactiontype_new AS ENUM ('deposit', 'withdraw', 'position_entry', 'position_exit', 'protocol_fee')")
-    
-    # Convert column to new enum
-    op.execute("ALTER TABLE transactions ALTER COLUMN transaction_type TYPE transactiontype_new USING transaction_type::text::transactiontype_new")
-    
-    # Drop old enum
-    op.execute("DROP TYPE IF EXISTS transactiontype CASCADE")
-    
-    # Rename new enum
-    op.execute("ALTER TYPE transactiontype_new RENAME TO transactiontype")
+    # 6. Update transaction type enum (only if transactions table exists and has transaction_type column)
+    connection = op.get_bind()
+    inspector = sa.inspect(connection)
+
+    if 'transactions' in inspector.get_table_names():
+        trans_columns = [col['name'] for col in inspector.get_columns('transactions')]
+
+        if 'transaction_type' in trans_columns:
+            # First, create new enum type with lowercase values
+            op.execute("CREATE TYPE transactiontype_new AS ENUM ('deposit', 'withdraw', 'position_entry', 'position_exit', 'protocol_fee')")
+
+            # Convert column to new enum, converting uppercase to lowercase
+            op.execute("""
+                ALTER TABLE transactions
+                ALTER COLUMN transaction_type TYPE transactiontype_new
+                USING LOWER(transaction_type::text)::transactiontype_new
+            """)
+
+            # Drop old enum
+            op.execute("DROP TYPE IF EXISTS transactiontype CASCADE")
+
+            # Rename new enum
+            op.execute("ALTER TYPE transactiontype_new RENAME TO transactiontype")
     
     # 7. Drop old indexes if they exist
     connection = op.get_bind()
