@@ -163,7 +163,9 @@ async def create_user(
 @router.post("/{user_id}/activate", response_model=ActivateResponse)
 async def activate_agent(
     user_id: str,
-    activate_request: ActivateRequest,
+    activate_request: Optional[ActivateRequest] = None,
+    strategy_type: Optional[str] = Query(None, description="Strategy code (h1-h2, n1-n6, s1-s2)"),
+    allocation_usd: Optional[float] = Query(None, description="Capital allocated to this strategy in USD"),
     authenticated_wallet: str = Depends(get_authenticated_wallet),
     db: AsyncSession = Depends(get_db)
 ) -> ActivateResponse:
@@ -194,13 +196,26 @@ async def activate_agent(
         )
 
     try:
-        # Extract params from request body
-        strategy_type = activate_request.strategy_type
-        allocation_usd = activate_request.allocation_usd
+        # Support both query params and request body
+        # Priority: query params > request body > defaults
+        final_strategy_type = strategy_type
+        final_allocation_usd = allocation_usd
+
+        if activate_request:
+            if not final_strategy_type:
+                final_strategy_type = activate_request.strategy_type
+            if not final_allocation_usd:
+                final_allocation_usd = activate_request.allocation_usd
+
+        # Apply defaults if still not set
+        if not final_strategy_type:
+            final_strategy_type = "n1"
+        if not final_allocation_usd:
+            final_allocation_usd = 100.0
 
         # Validate strategy type
         try:
-            strategy_enum = parse_strategy_type(strategy_type)
+            strategy_enum = parse_strategy_type(final_strategy_type)
         except ValueError as e:
             return ActivateResponse(
                 user_id=user_id,
@@ -230,12 +245,12 @@ async def activate_agent(
         if not user.active_strategies:
             user.active_strategies = {}
 
-        strategy_key = strategy_type if strategy_type in ["h1", "h2", "n1", "n2", "n3", "n4", "n5", "n6", "s1", "s2"] else strategy_enum.value.split("_")[1] if "_" in strategy_enum.value else strategy_enum.value
+        strategy_key = final_strategy_type if final_strategy_type in ["h1", "h2", "n1", "n2", "n3", "n4", "n5", "n6", "s1", "s2"] else strategy_enum.value.split("_")[1] if "_" in strategy_enum.value else strategy_enum.value
 
         user.active_strategies[strategy_key] = {
             "strategy_type": strategy_enum.value,
             "status": "active",
-            "allocated_capital_usd": float(allocation_usd),
+            "allocated_capital_usd": float(final_allocation_usd),
             "deployed_capital_usd": 0.0,
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat()
