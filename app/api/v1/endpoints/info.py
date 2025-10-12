@@ -1028,11 +1028,63 @@ async def get_vault_strategy(
     from app.schemas.capital import CapitalInfo as NewCapitalInfo
 
     try:
-        # Validate strategy_type is provided
+        # If no strategy_type specified, check all active strategies
         if not strategy_type:
-            raise HTTPException(
-                status_code=400,
-                detail="strategy_type is required. Valid values: h1, h2, h3, n1, n2, n3, n4, n5, n6, s1, s2"
+            from sqlalchemy import select
+            from app.database.models import User
+
+            stmt = select(User).where(User.user_id == user_id)
+            result = await db.execute(stmt)
+            user = result.scalar_one_or_none()
+
+            if not user or not user.active_strategies:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No active strategies found. Please activate a strategy first or specify strategy_type parameter."
+                )
+
+            # Check each active strategy and return the first one that needs action
+            for strategy_code in user.active_strategies.keys():
+                if strategy_code in STRATEGY_SHORT_CODES:
+                    full_name = STRATEGY_SHORT_CODES[strategy_code]
+                    try:
+                        strategy_enum = parse_strategy_type(strategy_code)
+                        strategy_config = StrategyConfig(strategy_enum)
+
+                        # Generate strategy for this active strategy
+                        logger.info(f"Checking active strategy {strategy_code} for user {user_id}")
+
+                        # Get pool address from strategy config
+                        pool_address = strategy_config.pools[0] if strategy_config.pools else None
+
+                        # Generate the strategy
+                        result = await vault_strategy_service.generate_strategy(
+                            user_id=user_id,
+                            balance=None,  # Will fetch in generate_strategy
+                            pool_address=pool_address,
+                            db=db,
+                            strategy_config=strategy_config
+                        )
+
+                        # If this strategy needs action (not no_action), return it
+                        if result.action != "no_action":
+                            return result
+                    except Exception as e:
+                        logger.warning(f"Error checking strategy {strategy_code}: {e}")
+                        continue
+
+            # If no strategy needs action, return no_action for the first strategy
+            first_strategy_code = list(user.active_strategies.keys())[0]
+            strategy_enum = parse_strategy_type(first_strategy_code)
+            strategy_config = StrategyConfig(strategy_enum)
+            pool_address = strategy_config.pools[0] if strategy_config.pools else None
+
+            return await vault_strategy_service.generate_strategy(
+                user_id=user_id,
+                balance=None,
+                pool_address=pool_address,
+                db=db,
+                strategy_config=strategy_config
             )
 
         # Validate and parse strategy type (supports both short codes and full names)
