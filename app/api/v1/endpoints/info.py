@@ -1060,9 +1060,8 @@ async def get_vault_strategy(
                         # Generate the strategy
                         result = await vault_strategy_service.generate_strategy(
                             user_id=user_id,
-                            balance=None,  # Will fetch in generate_strategy
-                            pool_address=pool_address,
                             db=db,
+                            pool_address=pool_address,
                             strategy_config=strategy_config
                         )
 
@@ -1081,9 +1080,8 @@ async def get_vault_strategy(
 
             return await vault_strategy_service.generate_strategy(
                 user_id=user_id,
-                balance=None,
-                pool_address=pool_address,
                 db=db,
+                pool_address=pool_address,
                 strategy_config=strategy_config
             )
 
