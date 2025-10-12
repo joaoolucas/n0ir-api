@@ -349,7 +349,7 @@ async def deactivate_agent(
 
         # Case 1: Deactivate specific strategy
         if strategy_type:
-            from app.schemas.strategy import parse_strategy_type
+            from app.schemas.strategy import parse_strategy_type, STRATEGY_SHORT_CODES
 
             # Validate strategy type
             try:
@@ -362,7 +362,7 @@ async def deactivate_agent(
                 )
 
             # Get strategy key (short code)
-            strategy_key = strategy_type if strategy_type in ["h1", "h2", "h3", "n1", "n2", "n3", "s1", "s2"] else strategy_enum.value.split("_")[1] if "_" in strategy_enum.value else strategy_enum.value
+            strategy_key = strategy_type if strategy_type in STRATEGY_SHORT_CODES else strategy_enum.value.split("_")[1] if "_" in strategy_enum.value else strategy_enum.value
 
             # Check if strategy exists and is active
             if not user.active_strategies or strategy_key not in user.active_strategies:
