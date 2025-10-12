@@ -46,6 +46,53 @@ STRATEGY_SHORT_CODES = {
     "s2": "stable_usdc_msusd",
 }
 
+# Mapping from pool address to strategy short code
+# Each strategy only opens positions in specific pools
+POOL_TO_STRATEGY = {
+    "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59": ["h1", "n1"],  # WETH/USDC (hedged or non-hedged)
+    "0x4e962bb3889bf030368f56810a9c96b83cb3e778": ["h2", "n2"],  # cbBTC/USDC (hedged or non-hedged)
+    "0xe846373c1a92b167b4e9cd5d8e4d6b1db9e90ec7": ["s1"],  # USDC/EURC
+    "0x7501bc8bb51616f79bfa524e464fb7b41f0b10fb": ["s2"],  # USDC/msUSD
+    "0x6044c817e55a03dadc5f6b8b7045af1985ae90fa": ["n3"],  # cbLTC/cbBTC
+    "0x8782d97c8b25b4d17dbfbaa03f25dc18e51e909d": ["n4"],  # cbADA/cbBTC
+    "0x95ff4985af7ed78421215be100c18a2b987f7e90": ["n5"],  # cbXRP/cbBTC
+    "0x363d1607b8da83d6b6ea76d017ceecf1316bb08a": ["n6"],  # cbDOGE/cbBTC
+}
+
+
+def infer_strategy_from_pool(pool_address: str, active_strategies: dict) -> Optional[str]:
+    """
+    Infer which strategy opened a position based on pool address.
+
+    Args:
+        pool_address: Pool contract address (case-insensitive)
+        active_strategies: User's active_strategies dict {strategy_code: {...}}
+
+    Returns:
+        Strategy short code (e.g., "s1") or None if cannot determine
+
+    Example:
+        If pool is EURC/USDC and user has s1 active → returns "s1"
+        If pool is WETH/USDC and user has both h1 and n1 active → returns None (ambiguous)
+    """
+    pool_lower = pool_address.lower()
+
+    # Get possible strategies for this pool
+    possible_strategies = POOL_TO_STRATEGY.get(pool_lower, [])
+
+    if not possible_strategies:
+        return None
+
+    # Filter to only strategies that are active for this user
+    active_matches = [s for s in possible_strategies if s in active_strategies]
+
+    # If exactly one match, we know which strategy opened it
+    if len(active_matches) == 1:
+        return active_matches[0]
+
+    # Ambiguous (multiple active strategies for same pool) or no active match
+    return None
+
 
 def parse_strategy_type(strategy_input: str) -> StrategyTypeEnum:
     """
