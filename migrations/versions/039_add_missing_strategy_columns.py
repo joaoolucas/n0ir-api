@@ -1,12 +1,14 @@
-"""Add missing strategy columns to users and transactions
+"""Add missing strategy columns to users, transactions, and positions
 
 Revision ID: 039_add_missing_strategy_columns
-Revises: 038_add_capital_allocation
+Revises: 037_add_effective_apr_stable
 Create Date: 2025-10-12
 
-This migration adds the active_strategies column to users table and
-strategy_type column to transactions table that are required by the code
-but missing in production.
+This migration adds:
+- active_strategies column to users table
+- strategy_type column to transactions table
+- strategy_type column to positions table (with indexes)
+These columns are required by the code but missing in production.
 """
 
 from alembic import op
@@ -49,6 +51,19 @@ def upgrade():
     else:
         print("⚠️  transactions.strategy_type column already exists, skipping")
 
+    # Step 3: Add strategy_type column to positions table if it doesn't exist
+    print("📝 Step 3: Checking positions.strategy_type column...")
+    positions_columns = [col['name'] for col in inspector.get_columns('positions')]
+
+    if 'strategy_type' not in positions_columns:
+        print("➕ Adding positions.strategy_type column...")
+        op.add_column('positions', sa.Column('strategy_type', sa.String(50), nullable=True))
+        op.create_index('idx_positions_strategy_type', 'positions', ['strategy_type'], unique=False)
+        op.create_index('idx_positions_user_strategy', 'positions', ['user_id', 'strategy_type'], unique=False)
+        print("✅ Added positions.strategy_type column with indexes")
+    else:
+        print("⚠️  positions.strategy_type column already exists, skipping")
+
     print("✅ Migration 039 complete!")
 
 
@@ -58,6 +73,14 @@ def downgrade():
     inspector = inspect(conn)
 
     print("⏮️  Rolling back migration 039...")
+
+    # Remove strategy_type from positions
+    positions_columns = [col['name'] for col in inspector.get_columns('positions')]
+    if 'strategy_type' in positions_columns:
+        op.drop_index('idx_positions_user_strategy', table_name='positions')
+        op.drop_index('idx_positions_strategy_type', table_name='positions')
+        op.drop_column('positions', 'strategy_type')
+        print("✅ Dropped positions.strategy_type column")
 
     # Remove strategy_type from transactions
     transactions_columns = [col['name'] for col in inspector.get_columns('transactions')]
