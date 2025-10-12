@@ -435,7 +435,7 @@ async def deactivate_agent(
             user.status = 'SUSPENDED'
             user.agent_status = 'stopped'
             user.agent_stopped_at = datetime.utcnow()
-            user.active_strategies = {}
+            user.active_strategies.clear()  # Use clear() to mutate existing dict
             attributes.flag_modified(user, 'active_strategies')
             attributes.flag_modified(user, 'user_metadata')
 
