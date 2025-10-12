@@ -148,14 +148,14 @@ class VaultStrategyService:
             # Case: 1 active position
             elif position_count == 1:
                 if balance >= MIN_POSITION_AMOUNT:
-                    # Open second position in the OTHER pool
+                    # Open second position using the pool_address from strategy_config
+                    # This supports multi-strategy system (h1, h2, n1-n6, s1, s2)
                     existing_pool = position_pools[0]
-                    other_pool = USDC_CBBTC_POOL if existing_pool.lower() == WETH_USDC_POOL.lower() else WETH_USDC_POOL
-                    logger.info(f"User {user_id} has 1 position in {existing_pool}, opening second in {other_pool}")
+                    logger.info(f"User {user_id} has 1 position in {existing_pool}, opening second in {pool_address}")
                     return await self._generate_single_position_strategy(
                         user_id=user_id,
                         balance=balance,
-                        pool_address=other_pool,
+                        pool_address=pool_address,  # Use the pool from strategy_config, not hardcoded logic
                         db=db,
                         strategy_config=strategy_config
                     )
