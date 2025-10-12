@@ -380,6 +380,13 @@ async def deactivate_agent(
 
         # Case 2: Deactivate all strategies and stop agent
         else:
+            # Reset all strategy capitals to 0 before clearing
+            if user.active_strategies:
+                for strategy_key in list(user.active_strategies.keys()):
+                    if isinstance(user.active_strategies[strategy_key], dict):
+                        user.active_strategies[strategy_key]['allocated_capital_usd'] = 0
+                        user.active_strategies[strategy_key]['deployed_capital_usd'] = 0
+
             # Always clear strategies and update status first (even if agent service fails)
             user.status = 'SUSPENDED'
             user.agent_status = 'stopped'
