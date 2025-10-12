@@ -372,15 +372,19 @@ async def deactivate_agent(
                     message=f"Strategy {strategy_type} is not active for this user"
                 )
 
-            # Reset capital allocation to 0 before removing
-            strategy_data = user.active_strategies[strategy_key]
-            if isinstance(strategy_data, dict):
-                strategy_data['allocated_capital_usd'] = 0
-                strategy_data['deployed_capital_usd'] = 0
-                user.active_strategies[strategy_key] = strategy_data
+            # Create a new dict to ensure SQLAlchemy detects the change (JSONB mutation tracking issue)
+            new_strategies = dict(user.active_strategies)
 
-            # Remove strategy from active_strategies
-            user.active_strategies.pop(strategy_key, None)
+            # Reset capital allocation to 0 before removing
+            if strategy_key in new_strategies and isinstance(new_strategies[strategy_key], dict):
+                new_strategies[strategy_key]['allocated_capital_usd'] = 0
+                new_strategies[strategy_key]['deployed_capital_usd'] = 0
+
+            # Remove strategy from the new dict
+            new_strategies.pop(strategy_key, None)
+
+            # Reassign to trigger SQLAlchemy change detection
+            user.active_strategies = new_strategies
             attributes.flag_modified(user, 'active_strategies')
 
             # Send command to agent manager to stop executing this strategy
@@ -424,18 +428,21 @@ async def deactivate_agent(
             logger.info(f"Deactivating all strategies for {user_id}")
             logger.info(f"Current active_strategies before clear: {user.active_strategies}")
 
-            # Reset all strategy capitals to 0 before clearing
+            # Reset all strategy capitals to 0 in a new dict (JSONB mutation tracking issue)
+            new_strategies = {}
             if user.active_strategies:
                 for strategy_key in list(user.active_strategies.keys()):
                     if isinstance(user.active_strategies[strategy_key], dict):
-                        user.active_strategies[strategy_key]['allocated_capital_usd'] = 0
-                        user.active_strategies[strategy_key]['deployed_capital_usd'] = 0
+                        strategy_data = dict(user.active_strategies[strategy_key])
+                        strategy_data['allocated_capital_usd'] = 0
+                        strategy_data['deployed_capital_usd'] = 0
+                        new_strategies[strategy_key] = strategy_data
 
             # Always clear strategies and update status first (even if agent service fails)
             user.status = 'SUSPENDED'
             user.agent_status = 'stopped'
             user.agent_stopped_at = datetime.utcnow()
-            user.active_strategies.clear()  # Use clear() to mutate existing dict
+            user.active_strategies = {}  # Assign empty dict to clear all strategies
             attributes.flag_modified(user, 'active_strategies')
             attributes.flag_modified(user, 'user_metadata')
 
