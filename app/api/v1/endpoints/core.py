@@ -33,6 +33,11 @@ class LoginRequest(BaseModel):
     message: str
 
 
+class ActivateRequest(BaseModel):
+    strategy_type: Optional[str] = "n1"
+    allocation_usd: Optional[float] = 100.0
+
+
 @router.post("/auth/login")
 async def login(request: LoginRequest):
     """
@@ -158,9 +163,7 @@ async def create_user(
 @router.post("/{user_id}/activate", response_model=ActivateResponse)
 async def activate_agent(
     user_id: str,
-    request: Request,
-    strategy_type: Optional[str] = Query("n1", description="Strategy code (h1-h2, n1-n6, s1-s2)"),
-    allocation_usd: Optional[float] = Query(100.0, description="Capital allocated to this strategy in USD"),
+    activate_request: ActivateRequest,
     authenticated_wallet: str = Depends(get_authenticated_wallet),
     db: AsyncSession = Depends(get_db)
 ) -> ActivateResponse:
@@ -191,6 +194,10 @@ async def activate_agent(
         )
 
     try:
+        # Extract params from request body
+        strategy_type = activate_request.strategy_type
+        allocation_usd = activate_request.allocation_usd
+
         # Validate strategy type
         try:
             strategy_enum = parse_strategy_type(strategy_type)
