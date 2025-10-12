@@ -372,8 +372,9 @@ async def deactivate_agent(
                     message=f"Strategy {strategy_type} is not active for this user"
                 )
 
-            # Create a new dict to ensure SQLAlchemy detects the change (JSONB mutation tracking issue)
-            new_strategies = dict(user.active_strategies)
+            # Create a new dict with deep copies to ensure SQLAlchemy detects the change (JSONB mutation tracking issue)
+            import copy
+            new_strategies = copy.deepcopy(user.active_strategies) if user.active_strategies else {}
 
             # Reset capital allocation to 0 before removing
             if strategy_key in new_strategies and isinstance(new_strategies[strategy_key], dict):
@@ -386,6 +387,9 @@ async def deactivate_agent(
             # Reassign to trigger SQLAlchemy change detection
             user.active_strategies = new_strategies
             attributes.flag_modified(user, 'active_strategies')
+
+            # Force flush to database before commit
+            await db.flush()
 
             # Send command to agent manager to stop executing this strategy
             agent_service = get_agent_service()
@@ -428,16 +432,6 @@ async def deactivate_agent(
             logger.info(f"Deactivating all strategies for {user_id}")
             logger.info(f"Current active_strategies before clear: {user.active_strategies}")
 
-            # Reset all strategy capitals to 0 in a new dict (JSONB mutation tracking issue)
-            new_strategies = {}
-            if user.active_strategies:
-                for strategy_key in list(user.active_strategies.keys()):
-                    if isinstance(user.active_strategies[strategy_key], dict):
-                        strategy_data = dict(user.active_strategies[strategy_key])
-                        strategy_data['allocated_capital_usd'] = 0
-                        strategy_data['deployed_capital_usd'] = 0
-                        new_strategies[strategy_key] = strategy_data
-
             # Always clear strategies and update status first (even if agent service fails)
             user.status = 'SUSPENDED'
             user.agent_status = 'stopped'
@@ -446,7 +440,12 @@ async def deactivate_agent(
             attributes.flag_modified(user, 'active_strategies')
             attributes.flag_modified(user, 'user_metadata')
 
-            logger.info(f"Active_strategies after clear (before commit): {user.active_strategies}")
+            logger.info(f"Active_strategies after clear (before flush): {user.active_strategies}")
+
+            # Force flush to database before commit
+            await db.flush()
+
+            logger.info(f"Active_strategies after flush (before commit): {user.active_strategies}")
 
             # Commit DB changes first to ensure state is updated
             await db.commit()
