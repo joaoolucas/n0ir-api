@@ -444,3 +444,97 @@ async def deactivate_agent(
             message=str(e)
         )
 
+
+
+class PositionEventRequest(BaseModel):
+    event_type: str  # "opened" or "closed"
+    capital_usd: float
+    token_id: int
+    tx_hash: str
+
+
+@router.post("/{user_id}/strategies/{strategy_code}/positions/events")
+async def report_position_event(
+    user_id: str,
+    strategy_code: str,
+    event: PositionEventRequest,
+    authenticated_wallet: str = Depends(get_authenticated_wallet),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Report position opened/closed event for capital tracking.
+
+    Called by agent manager when positions are opened or closed to update deployed_capital_usd.
+    """
+    # Verify user can only report for their own positions
+    if authenticated_wallet.lower() != user_id.lower():
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot report position events for another wallet"
+        )
+
+    from sqlalchemy import select
+
+    try:
+        # Get user
+        result = await db.execute(
+            select(User).where(User.user_id == user_id)
+        )
+        user = result.scalar_one_or_none()
+
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        if not user.active_strategies:
+            logger.warning(f"No active strategies for user {user_id}")
+            return {"success": False, "message": "No active strategies"}
+
+        # Check if strategy exists
+        if strategy_code not in user.active_strategies:
+            logger.warning(f"Strategy {strategy_code} not found for user {user_id}")
+            return {"success": False, "message": f"Strategy {strategy_code} not active"}
+
+        # Update deployed capital based on event type
+        strategy_data = user.active_strategies[strategy_code]
+
+        if event.event_type == "opened":
+            # Increase deployed capital
+            current_deployed = float(strategy_data.get('deployed_capital_usd', 0))
+            new_deployed = current_deployed + event.capital_usd
+            strategy_data['deployed_capital_usd'] = new_deployed
+
+            logger.info(
+                f"Position opened for {strategy_code}: +${event.capital_usd} "
+                f"(deployed: ${current_deployed} -> ${new_deployed})"
+            )
+
+        elif event.event_type == "closed":
+            # Decrease deployed capital
+            current_deployed = float(strategy_data.get('deployed_capital_usd', 0))
+            new_deployed = max(0, current_deployed - event.capital_usd)
+            strategy_data['deployed_capital_usd'] = new_deployed
+
+            logger.info(
+                f"Position closed for {strategy_code}: -${event.capital_usd} "
+                f"(deployed: ${current_deployed} -> ${new_deployed})"
+            )
+        else:
+            raise HTTPException(status_code=400, detail=f"Invalid event_type: {event.event_type}")
+
+        # Update strategy and commit
+        user.active_strategies[strategy_code] = strategy_data
+        attributes.flag_modified(user, 'active_strategies')
+        await db.commit()
+
+        logger.info(
+            f"Updated deployed capital for {user_id}/{strategy_code}: "
+            f"${strategy_data['deployed_capital_usd']}"
+        )
+
+        return {"success": True, "deployed_capital_usd": strategy_data['deployed_capital_usd']}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error reporting position event for {user_id}/{strategy_code}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
