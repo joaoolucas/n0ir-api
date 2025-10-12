@@ -560,6 +560,43 @@ class AgentManagementService:
             logger.error(f"Error sending activate command: {e}")
             return {'success': False, 'error': str(e)}
 
+    async def deactivate_strategy(self, user_id: str, strategy_type: str) -> Dict:
+        """
+        Send command to deactivate a specific strategy.
+
+        This tells the agent manager to stop opening new positions for this strategy,
+        but does not close existing positions.
+
+        Args:
+            user_id: User wallet address
+            strategy_type: Strategy short code (e.g., 'h2', 'n4', 's1')
+
+        Returns:
+            Dict with success status
+        """
+        await self._ensure_initialized()
+        if not self.redis_client:
+            return {'success': False, 'error': 'Redis not available'}
+
+        command = {
+            'action': 'deactivate',
+            'user_id': user_id,
+            'metadata': json.dumps({'strategy_type': strategy_type}),
+            'timestamp': datetime.utcnow().isoformat()
+        }
+
+        try:
+            stream_id = await self.async_redis_client.xadd('agent:commands:stream', command)
+            logger.info(f"Sent deactivate strategy command for {user_id}/{strategy_type}: stream_id={stream_id}")
+
+            return {
+                'success': True,
+                'message': f'Strategy {strategy_type} deactivation command sent'
+            }
+        except Exception as e:
+            logger.error(f"Error sending deactivate strategy command: {e}")
+            return {'success': False, 'error': str(e)}
+
     async def deactivate_agent(self, user_id: str, withdraw_funds: bool = True) -> Dict:
         """Send explicit deactivate command to agent manager. Always withdraws all funds."""
         await self._ensure_initialized()

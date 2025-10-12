@@ -383,7 +383,15 @@ async def deactivate_agent(
             user.active_strategies.pop(strategy_key, None)
             attributes.flag_modified(user, 'active_strategies')
 
-            # If no more active strategies, also stop the agent
+            # Send command to agent manager to stop executing this strategy
+            agent_service = get_agent_service()
+            strategy_result = await agent_service.deactivate_strategy(
+                user_id=user_id,
+                strategy_type=strategy_key
+            )
+            logger.info(f"Deactivate strategy command sent for {user_id}/{strategy_key}: {strategy_result}")
+
+            # If no more active strategies, also stop the agent completely
             if not user.active_strategies or len(user.active_strategies) == 0:
                 agent_service = get_agent_service()
                 agent_result = await agent_service.deactivate_agent(
