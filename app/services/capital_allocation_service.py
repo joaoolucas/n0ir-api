@@ -267,6 +267,14 @@ class CapitalAllocationService:
             user_id, strategy_code, delta, event.tx_hash
         )
 
+        # Adjust allocation with PnL for closed positions
+        if event.type == "closed" and event.pnl_usd:
+            pnl = Decimal(str(event.pnl_usd))
+            if pnl != 0:
+                await self.adjust_allocation_with_pnl(
+                    user_id, strategy_code, pnl
+                )
+
         return new_deployed, new_available
 
     async def validate_allocation_change(
@@ -353,6 +361,73 @@ class CapitalAllocationService:
         )
 
         return new_allocation, deployed, new_available
+
+    async def adjust_allocation_with_pnl(
+        self,
+        user_id: str,
+        strategy_code: str,
+        pnl: Decimal
+    ) -> Decimal:
+        """
+        Adjust allocated capital based on position PnL.
+        Profits increase allocation, losses decrease it.
+
+        Args:
+            user_id: User wallet address
+            strategy_code: Strategy short code
+            pnl: Profit/loss amount (positive = profit, negative = loss)
+
+        Returns:
+            New allocation amount
+
+        Example:
+            - Initial allocation: $50, deployed: $50
+            - Close with +$1 profit: allocation becomes $51
+            - Close with -$1 loss: allocation becomes $49
+        """
+        # Get user with row lock
+        stmt = select(User).where(User.user_id == user_id).with_for_update()
+        result = await self.db.execute(stmt)
+        user = result.scalar_one_or_none()
+
+        if not user:
+            raise ValueError(f"User {user_id} not found")
+
+        if not user.active_strategies or strategy_code not in user.active_strategies:
+            raise ValueError(f"Strategy {strategy_code} is not active for user {user_id}")
+
+        # Get current allocation
+        strategy_info = user.active_strategies[strategy_code]
+        current_allocation = Decimal(str(strategy_info.get('allocated_capital_usd', 0)))
+        deployed = Decimal(str(strategy_info.get('deployed_capital_usd', 0)))
+
+        # Calculate new allocation
+        new_allocation = current_allocation + pnl
+
+        # Prevent allocation from going below deployed capital
+        if new_allocation < deployed:
+            logger.warning(
+                f"PnL adjustment would set allocation below deployed capital. "
+                f"Setting to deployed amount. (user={user_id}, strategy={strategy_code}, "
+                f"pnl={pnl}, current_allocation={current_allocation}, deployed={deployed})"
+            )
+            new_allocation = deployed
+
+        # Update allocation
+        strategy_info['allocated_capital_usd'] = float(new_allocation)
+        strategy_info['updated_at'] = datetime.utcnow().isoformat()
+
+        # Mark JSONB field as modified
+        attributes.flag_modified(user, 'active_strategies')
+
+        await self.db.commit()
+
+        logger.info(
+            f"Adjusted allocation with PnL for {user_id}/{strategy_code}: "
+            f"{current_allocation} -> {new_allocation} (pnl: {pnl:+.2f})"
+        )
+
+        return new_allocation
 
 
 # Singleton pattern for easy access
