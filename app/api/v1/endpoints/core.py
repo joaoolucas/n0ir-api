@@ -373,7 +373,18 @@ async def deactivate_agent(
 
         # Case 2: Deactivate all strategies and stop agent
         else:
-            # Send deactivate command to agent manager (always withdraws funds)
+            # Always clear strategies and update status first (even if agent service fails)
+            user.status = 'SUSPENDED'
+            user.agent_status = 'stopped'
+            user.agent_stopped_at = datetime.utcnow()
+            user.active_strategies = {}
+            attributes.flag_modified(user, 'active_strategies')
+            attributes.flag_modified(user, 'user_metadata')
+
+            # Commit DB changes first to ensure state is updated
+            await db.commit()
+
+            # Then send deactivate command to agent manager (always withdraws funds)
             agent_service = get_agent_service()
             result = await agent_service.deactivate_agent(
                 user_id=user_id,
@@ -381,16 +392,6 @@ async def deactivate_agent(
             )
 
             if result.get('success'):
-                # Update user status to SUSPENDED and set agent_status to stopped
-                user.status = 'SUSPENDED'
-                user.agent_status = 'stopped'
-                user.agent_stopped_at = datetime.utcnow()
-                # Clear all active strategies
-                user.active_strategies = {}
-                attributes.flag_modified(user, 'active_strategies')
-                attributes.flag_modified(user, 'user_metadata')
-                await db.commit()
-
                 return DeactivateResponse(
                     user_id=user_id,
                     status="deactivated" if result.get('was_active') else "already_inactive",
@@ -399,10 +400,12 @@ async def deactivate_agent(
                     message=result.get('message', 'Agent deactivated successfully')
                 )
             else:
+                # Even if agent service fails, DB state was updated
+                logger.warning(f"Agent service deactivation failed for {user_id}, but DB state updated")
                 return DeactivateResponse(
                     user_id=user_id,
-                    status="error",
-                    message=result.get('error', 'Failed to deactivate agent')
+                    status="deactivated",
+                    message=f"Strategies cleared. Agent service: {result.get('error', 'Failed to contact agent')}"
                 )
 
     except Exception as e:
