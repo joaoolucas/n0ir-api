@@ -980,8 +980,8 @@ async def get_performance(
 async def get_vault_strategy(
     user_id: str,
     strategy_type: Optional[str] = Query(
-        default="h3",
-        description="Strategy type (short code or full name): h1, h2, h3 (default), n1, n2, n3, s1, s2"
+        default=None,
+        description="Strategy type (short code or full name): h1, h2, h3, n1-n6, s1, s2. REQUIRED."
     ),
     _: bool = Depends(verify_bearer_token),
     db: AsyncSession = Depends(get_db)
@@ -1028,6 +1028,13 @@ async def get_vault_strategy(
     from app.schemas.capital import CapitalInfo as NewCapitalInfo
 
     try:
+        # Validate strategy_type is provided
+        if not strategy_type:
+            raise HTTPException(
+                status_code=400,
+                detail="strategy_type is required. Valid values: h1, h2, h3, n1, n2, n3, n4, n5, n6, s1, s2"
+            )
+
         # Validate and parse strategy type (supports both short codes and full names)
         try:
             strategy_enum = parse_strategy_type(strategy_type)
