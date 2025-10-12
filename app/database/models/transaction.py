@@ -26,7 +26,10 @@ class Transaction(Base):
     # Foreign keys
     user_id = Column(String(42), ForeignKey("users.user_id"), nullable=False, index=True)
     position_id = Column(Integer, ForeignKey("positions.token_id"), nullable=True, index=True)
-    
+
+    # Strategy type (optional, for tracking which strategy this transaction belongs to)
+    strategy_type = Column(String(50), nullable=True)
+
     # Transaction type - simplified to core types
     tx_type = Column(String(50), nullable=False, index=True)
     # Types:

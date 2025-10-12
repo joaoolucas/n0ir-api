@@ -16,8 +16,8 @@ from app.core.pools_service import pools_service
 from app.core.config import settings
 from app.database.models import User
 from app.schemas.users import (
-    MoonwellStrategyResponse,
-    CapitalInfo,
+    VaultStrategyResponse,
+    DeprecatedCapitalInfo as CapitalInfo,
     ContractParameters,
     PositionParams,
     VaultHedgeSimulation,
@@ -36,15 +36,17 @@ class VaultStrategyService:
         self,
         user_id: str,
         db: AsyncSession,
-        pool_address: str = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59"  # Default to WETH/USDC pool
-    ) -> MoonwellStrategyResponse:
+        pool_address: str = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59",  # Default to WETH/USDC pool
+        strategy_config: Optional['StrategyConfig'] = None  # Optional strategy configuration
+    ) -> VaultStrategyResponse:
         """
-        Generate vault-based delta-neutral strategy for user.
+        Generate vault-based strategy for user with optional strategy configuration.
 
         Args:
             user_id: User ID
             db: Database session
             pool_address: Pool address
+            strategy_config: Optional StrategyConfig for multi-strategy support
 
         Returns:
             Strategy response with allocations
@@ -111,20 +113,35 @@ class VaultStrategyService:
                         db=db
                     )
 
+                # Check if user selected a blueprint strategy (50/50 dual positions)
+                is_blueprint = strategy_config and "blueprint" in strategy_config.strategy_type.value
+
+                if is_blueprint:
+                    # Blueprint strategies always do 50/50 split with same $40 minimum
+                    logger.info(f"User {user_id} selected blueprint strategy with ${balance:.2f} - opening dual positions")
+                    return await self._generate_dual_position_strategy(
+                        user_id=user_id,
+                        balance=balance,
+                        strategy_config=strategy_config
+                    )
+
+                # Non-blueprint strategies: balance-based logic
                 if balance >= DUAL_POSITION_THRESHOLD:
                     logger.info(f"User {user_id} balance ${balance:.2f} >= ${DUAL_POSITION_THRESHOLD} - recommending dual positions")
                     return await self._generate_dual_position_strategy(
                         user_id=user_id,
-                        balance=balance
+                        balance=balance,
+                        strategy_config=strategy_config
                     )
 
-                # Single position for balance between $40-$499 - always WETH/USDC first
-                logger.info(f"User {user_id} opening single position in WETH/USDC with ${balance:.2f}")
+                # Single position for balance between $40-$999
+                logger.info(f"User {user_id} opening single position with ${balance:.2f}")
                 return await self._generate_single_position_strategy(
                     user_id=user_id,
                     balance=balance,
-                    pool_address=WETH_USDC_POOL,
-                    db=db
+                    pool_address=pool_address,
+                    db=db,
+                    strategy_config=strategy_config
                 )
 
             # Case: 1 active position
@@ -138,7 +155,8 @@ class VaultStrategyService:
                         user_id=user_id,
                         balance=balance,
                         pool_address=other_pool,
-                        db=db
+                        db=db,
+                        strategy_config=strategy_config
                     )
                 else:
                     logger.info(f"User {user_id} has 1 position but insufficient balance for second: ${balance:.2f}")
@@ -386,7 +404,7 @@ class VaultStrategyService:
         balance: float,
         pool_address: str,
         monitoring_info: MonitoringInfo
-    ) -> MoonwellStrategyResponse:
+    ) -> VaultStrategyResponse:
         """
         Generate a monitoring-only strategy response when positions need attention.
         This returns alerts without requiring minimum balance.
@@ -401,7 +419,7 @@ class VaultStrategyService:
             positions_to_close=positions_to_close
         )
 
-        return MoonwellStrategyResponse(
+        return VaultStrategyResponse(
             user_id=user_id,
             strategy_type="delta_neutral",
             timestamp=datetime.utcnow().isoformat(),
@@ -419,7 +437,7 @@ class VaultStrategyService:
         pool_address: str,
         reason: str,
         db: AsyncSession
-    ) -> MoonwellStrategyResponse:
+    ) -> VaultStrategyResponse:
         """
         Generate a no_action strategy response when balance is insufficient.
         Returns performance data instead of contract params.
@@ -459,7 +477,7 @@ class VaultStrategyService:
                 pnl_pct=None
             )
 
-        return MoonwellStrategyResponse(
+        return VaultStrategyResponse(
             user_id=user_id,
             strategy_type="delta_neutral",
             timestamp=datetime.utcnow().isoformat(),
@@ -477,8 +495,9 @@ class VaultStrategyService:
         user_id: str,
         balance: float,
         pool_address: str,
-        db: AsyncSession
-    ) -> MoonwellStrategyResponse:
+        db: AsyncSession,
+        strategy_config: Optional['StrategyConfig'] = None
+    ) -> VaultStrategyResponse:
         """
         Generate single position strategy.
 
@@ -515,51 +534,60 @@ class VaultStrategyService:
         # Calculate suggested range based on pool metrics
         range_percentage = self._calculate_optimal_range(pool_metrics)
 
-        # Find optimal strategy using vault contract
-        try:
-            optimal_strategy = vault_contract.find_optimal_strategy(
-                usdc_amount=float(balance),
-                pool_address=pool_address,
-                range_percentage=range_percentage
-            )
+        # Check if this strategy should use hedging
+        should_hedge = True
+        if strategy_config:
+            # Non-hedged strategies: no Aave borrowing
+            # Stable strategies: no need for hedging (already stable)
+            should_hedge = strategy_config.hedged and not strategy_config.is_stable
+            logger.info(f"Strategy config: hedged={strategy_config.hedged}, stable={strategy_config.is_stable}, should_hedge={should_hedge}")
 
-            if not optimal_strategy or 'simulation' not in optimal_strategy:
-                raise ValueError("Invalid optimal strategy returned from vault contract")
+        # Find optimal strategy using vault contract (only if hedging)
+        if should_hedge:
+            try:
+                optimal_strategy = vault_contract.find_optimal_strategy(
+                    usdc_amount=float(balance),
+                    pool_address=pool_address,
+                    range_percentage=range_percentage
+                )
+            except Exception as e:
+                logger.error(f"Error finding optimal strategy: {e}")
+                logger.warning("Vault contract simulations failed - using default hedging strategy")
+                optimal_strategy = {
+                    'hedge_ratio': 9500,
+                    'collateral_ratio_bps': 6500,
+                    'simulation': None
+                }
+        else:
+            # Non-hedged or stable: no Aave borrowing
+            logger.info(f"Skipping hedge optimization - using direct LP strategy")
+            optimal_strategy = {
+                'hedge_ratio': 0,  # No hedging
+                'collateral_ratio_bps': 0,  # No Aave collateral
+                'simulation': None
+            }
 
-            # Calculate deadline (15 minutes from now)
-            deadline = int(datetime.utcnow().timestamp()) + 900
+        # Calculate deadline (15 minutes from now)
+        deadline = int(datetime.utcnow().timestamp()) + 900
 
-            # Build contract parameters
-            contract_params = ContractParameters(
-                pool=pool_address,
-                range_percentage=range_percentage,
-                deadline=deadline,
-                usdc_amount=Decimal(str(balance)),
-                slippage_bps=50,  # 0.5% slippage
-                hedge_ratio=optimal_strategy['hedge_ratio'],
-                collateral_ratio_bps=optimal_strategy['collateral_ratio_bps']
-            )
+        # Get strategy-specific slippage
+        slippage_bps = strategy_config.slippage_bps if strategy_config else 50
 
-            logger.info(f"Generated single position strategy for {user_id}: pool={pool_address}, amount=${balance}")
+        # Build contract parameters
+        contract_params = ContractParameters(
+            pool=pool_address,
+            range_percentage=range_percentage,
+            deadline=deadline,
+            usdc_amount=Decimal(str(balance)),
+            slippage_bps=slippage_bps,
+            hedge_ratio=optimal_strategy['hedge_ratio'],
+            collateral_ratio_bps=optimal_strategy['collateral_ratio_bps']
+        )
 
-        except Exception as e:
-            logger.error(f"Error finding optimal strategy: {e}")
-            logger.warning("Vault contract simulations failed - using default strategy estimation")
-
-            deadline = int(datetime.utcnow().timestamp()) + 900
-
-            contract_params = ContractParameters(
-                pool=pool_address,
-                range_percentage=range_percentage,
-                deadline=deadline,
-                usdc_amount=Decimal(str(balance)),
-                slippage_bps=50,
-                hedge_ratio=9500,
-                collateral_ratio_bps=6500
-            )
+        logger.info(f"Generated single position strategy for {user_id}: pool={pool_address}, amount=${balance}, hedge_ratio={optimal_strategy['hedge_ratio']}, collateral_ratio={optimal_strategy['collateral_ratio_bps']}")
 
         # Build response
-        return MoonwellStrategyResponse(
+        return VaultStrategyResponse(
             user_id=user_id,
             strategy_type="delta_neutral",
             timestamp=datetime.utcnow().isoformat(),
@@ -576,8 +604,9 @@ class VaultStrategyService:
     async def _generate_dual_position_strategy(
         self,
         user_id: str,
-        balance: float
-    ) -> MoonwellStrategyResponse:
+        balance: float,
+        strategy_config: Optional['StrategyConfig'] = None
+    ) -> VaultStrategyResponse:
         """
         Generate dual position strategy for balances >= $1000.
         Fixed allocation: WETH/USDC 70%, USDC/cbBTC 30%
@@ -586,56 +615,81 @@ class VaultStrategyService:
         WETH_USDC_POOL = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59"
         USDC_CBBTC_POOL = "0x4e962BB3889Bf030368F56810A9c96B83CB3E778"
 
-        # Fixed allocation: WETH/USDC gets 70%, USDC/cbBTC gets 30%
-        WETH_ALLOCATION_PCT = 70
-        CBBTC_ALLOCATION_PCT = 30
+        # Use strategy config allocation split if provided, otherwise default 70/30
+        if strategy_config:
+            # Get allocations from strategy config (should be 50/50 for blueprint)
+            weth_allocation_pct = strategy_config.allocation_split.get(WETH_USDC_POOL, 0.5)
+            cbbtc_allocation_pct = strategy_config.allocation_split.get(USDC_CBBTC_POOL, 0.5)
+        else:
+            # Default allocation: WETH/USDC gets 70%, USDC/cbBTC gets 30%
+            weth_allocation_pct = 0.7
+            cbbtc_allocation_pct = 0.3
 
         # Calculate allocations
         total_balance = Decimal(str(balance))
-        weth_allocation = total_balance * Decimal(str(WETH_ALLOCATION_PCT)) / Decimal("100")
-        cbbtc_allocation = total_balance * Decimal(str(CBBTC_ALLOCATION_PCT)) / Decimal("100")
+        weth_allocation = total_balance * Decimal(str(weth_allocation_pct))
+        cbbtc_allocation = total_balance * Decimal(str(cbbtc_allocation_pct))
 
-        logger.info(f"Dual position allocation: WETH/USDC {WETH_ALLOCATION_PCT}% (${weth_allocation}), USDC/cbBTC {CBBTC_ALLOCATION_PCT}% (${cbbtc_allocation})")
+        logger.info(f"Dual position allocation: WETH/USDC {weth_allocation_pct*100}% (${weth_allocation}), USDC/cbBTC {cbbtc_allocation_pct*100}% (${cbbtc_allocation})")
 
         # Build position params (order by allocation percentage - highest first)
         positions_data = [
-            ("WETH/USDC", WETH_USDC_POOL, WETH_ALLOCATION_PCT, weth_allocation),
-            ("USDC/cbBTC", USDC_CBBTC_POOL, CBBTC_ALLOCATION_PCT, cbbtc_allocation)
+            ("WETH/USDC", WETH_USDC_POOL, weth_allocation_pct, weth_allocation),
+            ("USDC/cbBTC", USDC_CBBTC_POOL, cbbtc_allocation_pct, cbbtc_allocation)
         ]
         positions_data.sort(key=lambda x: x[2], reverse=True)  # Sort by allocation % descending
 
         deadline = int(datetime.utcnow().timestamp()) + 900
         range_percentage = 10
 
-        # Calculate optimal strategy for position 1
-        try:
-            optimal_strategy_1 = vault_contract.find_optimal_strategy(
-                usdc_amount=float(positions_data[0][3]),
-                pool_address=positions_data[0][1],
-                range_percentage=range_percentage
-            )
-            hedge_ratio_1 = optimal_strategy_1['hedge_ratio']
-            collateral_ratio_1 = optimal_strategy_1['collateral_ratio_bps']
-            logger.info(f"Position 1 optimal ratios: hedge={hedge_ratio_1}, collateral={collateral_ratio_1}")
-        except Exception as e:
-            logger.warning(f"Failed to find optimal strategy for position 1: {e}, using defaults")
-            hedge_ratio_1 = 9500
-            collateral_ratio_1 = 6500
+        # Check if this strategy should use hedging
+        should_hedge = True
+        if strategy_config:
+            should_hedge = strategy_config.hedged and not strategy_config.is_stable
+            logger.info(f"Strategy config: hedged={strategy_config.hedged}, stable={strategy_config.is_stable}, should_hedge={should_hedge}")
 
-        # Calculate optimal strategy for position 2
-        try:
-            optimal_strategy_2 = vault_contract.find_optimal_strategy(
-                usdc_amount=float(positions_data[1][3]),
-                pool_address=positions_data[1][1],
-                range_percentage=range_percentage
-            )
-            hedge_ratio_2 = optimal_strategy_2['hedge_ratio']
-            collateral_ratio_2 = optimal_strategy_2['collateral_ratio_bps']
-            logger.info(f"Position 2 optimal ratios: hedge={hedge_ratio_2}, collateral={collateral_ratio_2}")
-        except Exception as e:
-            logger.warning(f"Failed to find optimal strategy for position 2: {e}, using defaults")
-            hedge_ratio_2 = 9500
-            collateral_ratio_2 = 6500
+        # Calculate optimal strategy for position 1 (only if hedging)
+        if should_hedge:
+            try:
+                optimal_strategy_1 = vault_contract.find_optimal_strategy(
+                    usdc_amount=float(positions_data[0][3]),
+                    pool_address=positions_data[0][1],
+                    range_percentage=range_percentage
+                )
+                hedge_ratio_1 = optimal_strategy_1['hedge_ratio']
+                collateral_ratio_1 = optimal_strategy_1['collateral_ratio_bps']
+                logger.info(f"Position 1 optimal ratios: hedge={hedge_ratio_1}, collateral={collateral_ratio_1}")
+            except Exception as e:
+                logger.warning(f"Failed to find optimal strategy for position 1: {e}, using defaults")
+                hedge_ratio_1 = 9500
+                collateral_ratio_1 = 6500
+        else:
+            logger.info(f"Skipping hedge optimization for position 1 - using direct LP strategy")
+            hedge_ratio_1 = 0
+            collateral_ratio_1 = 0
+
+        # Calculate optimal strategy for position 2 (only if hedging)
+        if should_hedge:
+            try:
+                optimal_strategy_2 = vault_contract.find_optimal_strategy(
+                    usdc_amount=float(positions_data[1][3]),
+                    pool_address=positions_data[1][1],
+                    range_percentage=range_percentage
+                )
+                hedge_ratio_2 = optimal_strategy_2['hedge_ratio']
+                collateral_ratio_2 = optimal_strategy_2['collateral_ratio_bps']
+                logger.info(f"Position 2 optimal ratios: hedge={hedge_ratio_2}, collateral={collateral_ratio_2}")
+            except Exception as e:
+                logger.warning(f"Failed to find optimal strategy for position 2: {e}, using defaults")
+                hedge_ratio_2 = 9500
+                collateral_ratio_2 = 6500
+        else:
+            logger.info(f"Skipping hedge optimization for position 2 - using direct LP strategy")
+            hedge_ratio_2 = 0
+            collateral_ratio_2 = 0
+
+        # Get strategy-specific slippage
+        slippage_bps = strategy_config.slippage_bps if strategy_config else 50
 
         # Create position params with optimal ratios
         position_1 = PositionParams(
@@ -644,7 +698,7 @@ class VaultStrategyService:
             usdc_amount=positions_data[0][3],
             range_percentage=range_percentage,
             deadline=deadline,
-            slippage_bps=50,
+            slippage_bps=slippage_bps,
             hedge_ratio=hedge_ratio_1,
             collateral_ratio_bps=collateral_ratio_1
         )
@@ -655,7 +709,7 @@ class VaultStrategyService:
             usdc_amount=positions_data[1][3],
             range_percentage=range_percentage,
             deadline=deadline,
-            slippage_bps=50,
+            slippage_bps=slippage_bps,
             hedge_ratio=hedge_ratio_2,
             collateral_ratio_bps=collateral_ratio_2
         )
@@ -665,7 +719,7 @@ class VaultStrategyService:
             position_2=position_2
         )
 
-        return MoonwellStrategyResponse(
+        return VaultStrategyResponse(
             user_id=user_id,
             strategy_type="delta_neutral",
             timestamp=datetime.utcnow().isoformat(),

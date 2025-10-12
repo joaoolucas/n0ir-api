@@ -122,23 +122,23 @@ class VaultHedgeSimulation(BaseModel):
 
 
 
-# Deprecated models (kept for backward compatibility with moonwell_strategy_service)
+# Deprecated models (kept for backward compatibility)
 class MoonwellAllocation(BaseModel):
-    """Moonwell allocation details (deprecated)"""
-    protocol: str = Field(default="moonwell")
+    """Aave allocation details via vault (deprecated, renamed from Moonwell)"""
+    protocol: str = Field(default="aave")
     collateral: MoonwellCollateral
     borrow: MoonwellBorrow
 
 
 class StrategyAllocations(BaseModel):
     """Strategy allocations (deprecated)"""
-    moonwell: Optional[MoonwellAllocation] = Field(None, description="Moonwell allocation (deprecated)")
+    moonwell: Optional[MoonwellAllocation] = Field(None, description="Aave allocation via vault (deprecated)")
     vault: Optional[Dict] = Field(None, description="Vault allocation (deprecated)")
     aerodrome_lp: AerodromeLP
 
 
-class CapitalInfo(BaseModel):
-    """Capital information"""
+class DeprecatedCapitalInfo(BaseModel):
+    """Capital information (deprecated - use app.schemas.capital.CapitalInfo)"""
     total_usd: Decimal = Field(..., description="Total capital in USD")
     base_asset: str = Field(default="USDC", description="Base asset")
 
@@ -173,17 +173,21 @@ class PerformanceData(BaseModel):
     pnl_pct: Optional[Decimal] = Field(None, description="Total PnL percentage")
 
 
-class MoonwellStrategyResponse(BaseModel):
-    """Delta-neutral strategy response with contract parameters"""
+class VaultStrategyResponse(BaseModel):
+    """Delta-neutral strategy response with vault contract parameters (uses Aave for hedging)"""
     user_id: str = Field(..., description="User ID")
     strategy_type: str = Field(default="delta_neutral", description="Strategy type")
     timestamp: str = Field(..., description="ISO timestamp")
     action: str = Field(..., description="Action: 'open', 'close', 'open_dual', 'no_action'")
 
-    capital: CapitalInfo = Field(..., description="Capital information")
+    capital: Any = Field(..., description="Capital information - can be CapitalInfo from app.schemas.capital or DeprecatedCapitalInfo for backward compatibility")
     contract_params: Optional[ContractParameters] = Field(None, description="Parameters for calling vault contract (null when action='no_action')")
     monitoring: Optional[MonitoringInfo] = Field(None, description="Monitoring information")
     performance: Optional[PerformanceData] = Field(None, description="Performance metrics (when action='no_action')")
+
+
+# Backward compatibility alias
+MoonwellStrategyResponse = VaultStrategyResponse
 
 
 
@@ -292,6 +296,9 @@ class UserListResponse(BaseModel):
     
     # Agent status
     agent_active: bool = Field(False, description="Whether agent is active (has CDP wallet)")
+
+    # Strategy configuration
+    active_strategies: Dict[str, Any] = Field(default_factory=dict, description="User's active strategy configurations")
 
 
 class BalanceResponse(BaseModel):

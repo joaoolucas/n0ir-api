@@ -21,21 +21,27 @@ depends_on = None
 
 def upgrade():
     """Add has_deposited_50_usdc field to users table."""
-    # Add the new column with default value False
-    op.add_column(
-        'users',
-        sa.Column('has_deposited_50_usdc', sa.Boolean(), nullable=False, server_default='false')
-    )
-    
-    # Update existing users based on their NET deposits (deposits - withdrawals)
-    # Set to True for users who have net deposits of 50+ USDC
-    op.execute("""
-        UPDATE users 
-        SET has_deposited_50_usdc = TRUE 
-        WHERE (total_deposits_usdc - total_withdrawals_usdc) >= 50
-    """)
-    
-    print("✅ Added has_deposited_50_usdc field to users table")
+    # Check if column already exists
+    connection = op.get_bind()
+    inspector = sa.inspect(connection)
+    columns = [col['name'] for col in inspector.get_columns('users')]
+
+    if 'has_deposited_50_usdc' not in columns:
+        # Add the new column with default value False
+        op.add_column(
+            'users',
+            sa.Column('has_deposited_50_usdc', sa.Boolean(), nullable=False, server_default='false')
+        )
+
+        # Update existing users based on their NET deposits (deposits - withdrawals)
+        # Set to True for users who have net deposits of 50+ USDC
+        op.execute("""
+            UPDATE users
+            SET has_deposited_50_usdc = TRUE
+            WHERE (total_deposits_usdc - total_withdrawals_usdc) >= 50
+        """)
+
+        print("✅ Added has_deposited_50_usdc field to users table")
 
 
 def downgrade():

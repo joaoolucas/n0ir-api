@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional, TYPE_CHECKING, List
 from sqlalchemy import Column, String, DateTime, ForeignKey, Index, Numeric, Integer, Boolean
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship, Mapped
 from sqlalchemy.ext.hybrid import hybrid_property
 from app.database.base import Base
@@ -23,7 +23,10 @@ class Position(Base):
     
     # Foreign key to user
     user_id = Column(String(42), ForeignKey("users.user_id"), nullable=False, index=True)
-    
+
+    # Strategy type (hybrid approach - stored as metadata on position)
+    strategy_type = Column(String(50), nullable=True, index=True)
+
     # Pool information
     pool_address = Column(String(42), nullable=False, index=True)
     pool_name = Column(String(100), nullable=True)
@@ -78,6 +81,8 @@ class Position(Base):
     __table_args__ = (
         Index("idx_positions_user_status", "user_id", "status"),
         Index("idx_positions_status", "status"),
+        Index("idx_positions_strategy_type", "strategy_type"),
+        Index("idx_positions_user_strategy", "user_id", "strategy_type"),
     )
     
     # Removed JSONB hybrid properties - not needed

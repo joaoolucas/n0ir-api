@@ -17,7 +17,7 @@ from app.schemas.users import (
     CreateResponse,
     ActivateResponse,
     DeactivateResponse,
-    MoonwellStrategyResponse
+    VaultStrategyResponse
 )
 from app.database.models import User
 from app.core.auth import get_authenticated_wallet, create_session_token
@@ -159,19 +159,29 @@ async def create_user(
 async def activate_agent(
     user_id: str,
     request: Request,
+    strategy_type: Optional[str] = "n1",
+    allocation_usd: Optional[float] = 100.0,
     authenticated_wallet: str = Depends(get_authenticated_wallet),
     db: AsyncSession = Depends(get_db)
 ) -> ActivateResponse:
     """
-    Activate trading agent for user.
+    Activate trading agent for user with strategy selection and capital allocation.
 
     This will:
-    1. Start the agent process
-    2. Enable automated trading based on strategy
+    1. Validate and store selected strategy type in user.active_strategies
+    2. Set the allocated capital for this strategy
+    3. Start the agent process
+    4. Enable automated trading based on strategy
+
+    Args:
+        user_id: User wallet address
+        strategy_type: Strategy short code or full name (h1-h2, n1-n6, s1-s2). Default: n1 (nonhedged_weth_only)
+        allocation_usd: Capital allocated to this strategy in USD. Default: 100.0
 
     Requires user to exist with CDP wallet (use /create first).
     """
     from app.services.agent_management_service import get_agent_service
+    from app.schemas.strategy import parse_strategy_type
 
     # Verify user can only activate their own agent
     if authenticated_wallet.lower() != user_id.lower():
@@ -181,6 +191,16 @@ async def activate_agent(
         )
 
     try:
+        # Validate strategy type
+        try:
+            strategy_enum = parse_strategy_type(strategy_type)
+        except ValueError as e:
+            return ActivateResponse(
+                user_id=user_id,
+                status="error",
+                message=str(e)
+            )
+
         # Check user exists with wallet
         service = UserService(db)
         user = await service.get_user(user_id)
@@ -199,14 +219,30 @@ async def activate_agent(
                 message="User has no CDP wallet. Please create wallet first with /create endpoint"
             )
 
+        # Store selected strategy in active_strategies with allocation
+        if not user.active_strategies:
+            user.active_strategies = {}
+
+        strategy_key = strategy_type if strategy_type in ["h1", "h2", "n1", "n2", "n3", "n4", "n5", "n6", "s1", "s2"] else strategy_enum.value.split("_")[1] if "_" in strategy_enum.value else strategy_enum.value
+
+        user.active_strategies[strategy_key] = {
+            "strategy_type": strategy_enum.value,
+            "status": "active",
+            "allocated_capital_usd": float(allocation_usd),
+            "deployed_capital_usd": 0.0,
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        attributes.flag_modified(user, 'active_strategies')
+
         # Sync blockchain data before activation
         await service.sync_blockchain_data(user_id)
 
-        # Send activate command to agent manager (always use delta_neutral strategy)
+        # Send activate command to agent manager with selected strategy
         agent_service = get_agent_service()
         result = await agent_service.activate_agent(
             user_id=user_id,
-            strategy_type="delta_neutral"
+            strategy_type=strategy_enum.value
         )
 
         if result.get('success'):
@@ -245,16 +281,22 @@ async def activate_agent(
 async def deactivate_agent(
     user_id: str,
     request: Request,
+    strategy_type: Optional[str] = None,
     authenticated_wallet: str = Depends(get_authenticated_wallet),
     db: AsyncSession = Depends(get_db)
 ) -> DeactivateResponse:
     """
     Deactivate trading agent for user.
 
+    Args:
+        user_id: User wallet address
+        strategy_type: Optional strategy short code (h1-h3, n1-n3, s1-s2)
+                      If provided, only deactivates that specific strategy
+                      If None, deactivates all strategies and stops agent
+
     This will:
-    1. Stop the agent process
-    2. Close all open positions
-    3. Withdraw all funds to user's wallet
+    1. If strategy_type provided: Remove that strategy from active_strategies
+    2. If no strategy_type: Stop agent process, close all positions, withdraw funds
     """
     # Verify user can only deactivate their own agent
     if authenticated_wallet.lower() != user_id.lower():
@@ -279,35 +321,92 @@ async def deactivate_agent(
                 message="User not found"
             )
 
-        # Send deactivate command to agent manager (always withdraws funds)
-        agent_service = get_agent_service()
-        result = await agent_service.deactivate_agent(
-            user_id=user_id,
-            withdraw_funds=True  # Always withdraw all funds
-        )
+        # Case 1: Deactivate specific strategy
+        if strategy_type:
+            from app.schemas.strategy import parse_strategy_type
 
-        if result.get('success'):
-            # Update user status to SUSPENDED and set agent_status to stopped
-            user.status = 'SUSPENDED'
-            user.agent_status = 'stopped'
-            user.agent_stopped_at = datetime.utcnow()
-            # Mark JSONB field as modified so SQLAlchemy commits the changes
-            attributes.flag_modified(user, 'user_metadata')
+            # Validate strategy type
+            try:
+                strategy_enum = parse_strategy_type(strategy_type)
+            except ValueError as e:
+                return DeactivateResponse(
+                    user_id=user_id,
+                    status="error",
+                    message=str(e)
+                )
+
+            # Get strategy key (short code)
+            strategy_key = strategy_type if strategy_type in ["h1", "h2", "h3", "n1", "n2", "n3", "s1", "s2"] else strategy_enum.value.split("_")[1] if "_" in strategy_enum.value else strategy_enum.value
+
+            # Check if strategy exists and is active
+            if not user.active_strategies or strategy_key not in user.active_strategies:
+                return DeactivateResponse(
+                    user_id=user_id,
+                    status="error",
+                    message=f"Strategy {strategy_type} is not active for this user"
+                )
+
+            # Remove strategy from active_strategies
+            user.active_strategies.pop(strategy_key, None)
+            attributes.flag_modified(user, 'active_strategies')
+
+            # If no more active strategies, also stop the agent
+            if not user.active_strategies or len(user.active_strategies) == 0:
+                agent_service = get_agent_service()
+                agent_result = await agent_service.deactivate_agent(
+                    user_id=user_id,
+                    withdraw_funds=True
+                )
+
+                user.status = 'SUSPENDED'
+                user.agent_status = 'stopped'
+                user.agent_stopped_at = datetime.utcnow()
+                attributes.flag_modified(user, 'user_metadata')
+
             await db.commit()
 
             return DeactivateResponse(
                 user_id=user_id,
-                status="deactivated" if result.get('was_active') else "already_inactive",
-                withdrawn_amount=Decimal(str(result.get('withdrawn_amount', 0))) if result.get('withdrawn_amount') else None,
-                tx_hash=result.get('tx_hash'),
-                message=result.get('message', 'Agent deactivated successfully')
+                status="deactivated",
+                message=f"Strategy {strategy_type} deactivated successfully"
             )
+
+        # Case 2: Deactivate all strategies and stop agent
         else:
-            return DeactivateResponse(
+            # Always clear strategies and update status first (even if agent service fails)
+            user.status = 'SUSPENDED'
+            user.agent_status = 'stopped'
+            user.agent_stopped_at = datetime.utcnow()
+            user.active_strategies = {}
+            attributes.flag_modified(user, 'active_strategies')
+            attributes.flag_modified(user, 'user_metadata')
+
+            # Commit DB changes first to ensure state is updated
+            await db.commit()
+
+            # Then send deactivate command to agent manager (always withdraws funds)
+            agent_service = get_agent_service()
+            result = await agent_service.deactivate_agent(
                 user_id=user_id,
-                status="error",
-                message=result.get('error', 'Failed to deactivate agent')
+                withdraw_funds=True  # Always withdraw all funds
             )
+
+            if result.get('success'):
+                return DeactivateResponse(
+                    user_id=user_id,
+                    status="deactivated" if result.get('was_active') else "already_inactive",
+                    withdrawn_amount=Decimal(str(result.get('withdrawn_amount', 0))) if result.get('withdrawn_amount') else None,
+                    tx_hash=result.get('tx_hash'),
+                    message=result.get('message', 'Agent deactivated successfully')
+                )
+            else:
+                # Even if agent service fails, DB state was updated
+                logger.warning(f"Agent service deactivation failed for {user_id}, but DB state updated")
+                return DeactivateResponse(
+                    user_id=user_id,
+                    status="deactivated",
+                    message=f"Strategies cleared. Agent service: {result.get('error', 'Failed to contact agent')}"
+                )
 
     except Exception as e:
         logger.error(f"Error deactivating agent for {user_id}: {e}")

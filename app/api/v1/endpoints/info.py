@@ -25,7 +25,7 @@ from app.schemas.users import (
     TransactionStatus,
     PositionStatus,
     TimePeriod,
-    MoonwellStrategyResponse
+    VaultStrategyResponse
 )
 
 # Enums for database compatibility
@@ -263,13 +263,23 @@ async def enrich_position_with_pool_data(
                         pool_info = await pools_service.get_pool(position.pool_address, include_effective_apr=True)
 
                     base_apr = pool_info.get('apr') or 0
-                    # Get standard effective APR from the range options
                     effective_apr_range = pool_info.get('effective_apr_range')
-                    standard_apr = effective_apr_range.get('standard', 0) if effective_apr_range else 0
+
+                    # Use stable APR for USDC/EURC and msUSD/USDC pools, standard for others
+                    USDC_EURC_POOL = "0xE846373C1a92B167b4E9cd5d8E4d6B1Db9E90EC7"
+                    USDC_MSUSD_POOL = "0x7501bc8Bb51616F79bfA524E464fb7B41f0B10fB"
+                    is_stable_pair = position.pool_address.lower() in [USDC_EURC_POOL.lower(), USDC_MSUSD_POOL.lower()]
+
+                    if is_stable_pair and effective_apr_range:
+                        effective_apr = effective_apr_range.get('stable', 0)
+                    elif effective_apr_range:
+                        effective_apr = effective_apr_range.get('standard', 0)
+                    else:
+                        effective_apr = 0
 
                     position_dict['pool_base_apr'] = Decimal(str(base_apr))
-                    position_dict['effective_apr'] = Decimal(str(standard_apr))
-                    logger.debug(f"Position {position.nft_token_id} - Base APR: {base_apr}, Effective APR: {standard_apr}")
+                    position_dict['effective_apr'] = Decimal(str(effective_apr))
+                    logger.debug(f"Position {position.nft_token_id} - Base APR: {base_apr}, Effective APR: {effective_apr} ({'stable' if is_stable_pair else 'standard'})")
                 except Exception as e:
                     logger.warning(f"Could not fetch pool APR for {position.pool_address}: {e}")
                     position_dict['pool_base_apr'] = Decimal(0)
@@ -584,7 +594,8 @@ async def list_users(
                 'active_positions_count': len(enriched_active_positions),
                 'total_pnl_usdc': total_pnl_usdc,
                 'total_pnl_percentage': total_pnl_percentage,
-                'agent_active': user.agent_status == 'running' if hasattr(user, 'agent_status') and user.agent_status else False
+                'agent_active': user.agent_status == 'running' if hasattr(user, 'agent_status') and user.agent_status else False,
+                'active_strategies': user.active_strategies or {}
             }
 
             enriched_users.append(user_dict)
@@ -601,7 +612,8 @@ async def list_users(
                 'active_positions_count': 0,
                 'total_pnl_usdc': Decimal(0),
                 'total_pnl_percentage': Decimal(0),
-                'agent_active': user.agent_status == 'running' if hasattr(user, 'agent_status') and user.agent_status else False
+                'agent_active': user.agent_status == 'running' if hasattr(user, 'agent_status') and user.agent_status else False,
+                'active_strategies': user.active_strategies or {}
             })
 
     # Commit updates to database
@@ -963,63 +975,233 @@ async def get_performance(
     )
 
 
-@router.post("/{user_id}/strategy", response_model=MoonwellStrategyResponse)
+@router.post("/{user_id}/strategy", response_model=VaultStrategyResponse)
 async def get_vault_strategy(
     user_id: str,
+    strategy_type: Optional[str] = Query(
+        default="h3",
+        description="Strategy type (short code or full name): h1, h2, h3 (default), n1, n2, n3, s1, s2"
+    ),
     _: bool = Depends(verify_bearer_token),
     db: AsyncSession = Depends(get_db)
-) -> MoonwellStrategyResponse:
+) -> VaultStrategyResponse:
     """
-    Generate vault-based delta-neutral strategy for a user.
+    Generate vault-based strategy for a user with configurable strategy type.
 
-    This endpoint generates a strategy and returns all parameters needed
-    to call the vault contract's createPosition function:
+    **Strategy Types (Short Codes):**
+    - `h1`: Hedged WETH/USDC only (uses Aave)
+    - `h2`: Hedged cbBTC/USDC only (uses Aave)
+    - `h3`: Hedged 50/50 WETH and cbBTC (default, uses Aave)
+    - `n1`: Non-hedged WETH/USDC only (direct LP)
+    - `n2`: Non-hedged cbBTC/USDC only (direct LP)
+    - `n3`: Non-hedged 50/50 WETH and cbBTC (direct LP)
+    - `s1`: USDC/EURC stable pair
+    - `s2`: USDC/msUSD stable pair
 
-    Returns:
+    **Full Names (also supported):**
+    - `hedged_weth_only`, `hedged_cbbtc_only`, `hedged_blueprint`
+    - `nonhedged_weth_only`, `nonhedged_cbbtc_only`, `nonhedged_blueprint`
+    - `stable_usdc_eurc`, `stable_usdc_msusd`
+
+    **Returns:**
     - contract_params: Ready-to-use parameters for vault.createPosition()
       - pool: Aerodrome pool address
       - rangePercentage: Position range (e.g., 10 = ±5%)
       - deadline: Transaction deadline timestamp
       - usdcAmount: USDC amount to deploy
       - slippageBps: Slippage tolerance (default 50 = 0.5%)
-      - hedgeRatio: Hedge ratio in bps (e.g., 9200 = 92%)
+      - hedgeRatio: Hedge ratio in bps (e.g., 10000 = 100% for hedged, 0 for non-hedged)
       - collateralRatioBps: Collateral ratio in bps (e.g., 6500 = 65%)
 
     - simulation: Expected results from the strategy
       - Health factor, liquidation price, delta-neutral score
       - Collateral, borrow, and LP amounts
 
-    - aerodrome_pool: Pool details and expected APR
     - monitoring: Range break alerts if applicable
     """
     from app.core.vault_strategy_service import vault_strategy_service
     from app.core.pools_service import pools_service
+    from app.core.strategy_factory import StrategyConfig
+    from app.schemas.strategy import parse_strategy_type, STRATEGY_SHORT_CODES
+    from app.services.capital_allocation_service import get_capital_allocation_service
+    from app.schemas.capital import CapitalInfo as NewCapitalInfo
 
     try:
-        # Select pool with highest APR from supported pools
-        WETH_USDC_POOL = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59"  # WETH/USDC
-        USDC_CBBTC_POOL = "0x4e962BB3889Bf030368F56810A9c96B83CB3E778"  # USDC/cbBTC
+        # Validate and parse strategy type (supports both short codes and full names)
+        try:
+            strategy_enum = parse_strategy_type(strategy_type)
+        except ValueError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=str(e)
+            )
 
-        # Fetch APR for both pools
-        weth_pool_data = await pools_service.get_pool(WETH_USDC_POOL)
-        cbbtc_pool_data = await pools_service.get_pool(USDC_CBBTC_POOL)
+        # Get strategy short code for capital allocation lookup
+        strategy_code = strategy_type if strategy_type in STRATEGY_SHORT_CODES else None
+        if not strategy_code:
+            # Try to reverse-map from full name to short code
+            for code, full_name in STRATEGY_SHORT_CODES.items():
+                if full_name == strategy_enum.value:
+                    strategy_code = code
+                    break
 
-        weth_apr = weth_pool_data.get('apr', 0) or 0
-        cbbtc_apr = cbbtc_pool_data.get('apr', 0) or 0
+        # Create strategy configuration
+        strategy_config = StrategyConfig(strategy_enum)
 
-        # Select pool with higher APR
-        if cbbtc_apr > weth_apr:
-            pool_address = USDC_CBBTC_POOL
-            logger.debug(f"Selected USDC/cbBTC pool with APR {cbbtc_apr:.2f}% (vs WETH/USDC {weth_apr:.2f}%)")
+        logger.info(f"Generating {strategy_enum.value} strategy for user {user_id}")
+
+        # STEP 1: Check capital allocation constraints
+        capital_service = get_capital_allocation_service(db)
+        try:
+            allocated, deployed, available, wallet_balance = await capital_service.calculate_available_capital(
+                user_id, strategy_code
+            )
+
+            # Calculate max deployable: min of available allocation and wallet balance
+            max_deployable = min(available, wallet_balance)
+
+            # Build capital info object
+            capital_info = NewCapitalInfo(
+                total_usd=max_deployable,
+                allocated_for_strategy=allocated,
+                already_deployed=deployed,
+                available_to_deploy=available,
+                wallet_balance=wallet_balance,
+                reason=None if max_deployable > 0 else (
+                    "allocation_exhausted" if available <= 0 else "insufficient_balance"
+                )
+            )
+
+            logger.info(
+                f"Capital constraints for {user_id}/{strategy_code}: "
+                f"max_deployable={max_deployable}, allocated={allocated}, "
+                f"deployed={deployed}, available={available}, wallet={wallet_balance}"
+            )
+
+            # If no capital available, return no_action with performance data
+            if max_deployable <= 0:
+                logger.info(
+                    f"No capital available for {user_id}/{strategy_code}: "
+                    f"reason={capital_info.reason}"
+                )
+
+                # Get performance data for no_action response
+                from sqlalchemy import select
+                from app.database.models import User
+                from app.core.blockchain_service import blockchain_service
+
+                stmt = select(User).where(User.user_id == user_id)
+                result = await db.execute(stmt)
+                user = result.scalar_one_or_none()
+
+                if not user:
+                    raise ValueError(f"User {user_id} not found")
+
+                # Get positions for metrics
+                service = UserService(db)
+                positions = await service.get_user_positions(user_id)
+                active_positions = [p for p in positions if p.status == 'ACTIVE']
+
+                # Batch enrich for APR calculation
+                enriched_active = await batch_enrich_positions(active_positions, db)
+
+                # Calculate weighted average APR
+                apr = Decimal(0)
+                if enriched_active:
+                    weighted_apr_sum = Decimal(0)
+                    total_value = Decimal(0)
+                    for pos in enriched_active:
+                        net_apr = pos.get('net_apr')
+                        current_value = pos.get('current_value_usdc')
+                        if net_apr and current_value and current_value > 0:
+                            weighted_apr_sum += Decimal(str(net_apr)) * Decimal(str(current_value))
+                            total_value += Decimal(str(current_value))
+                    if total_value > 0:
+                        apr = weighted_apr_sum / total_value
+
+                # Calculate positions value
+                positions_value = sum(
+                    Decimal(str(p.get('current_value_usdc', 0))) for p in enriched_active
+                    if p.get('current_value_usdc')
+                )
+
+                # Calculate PnL
+                closed_positions = [p for p in positions if p.status == 'CLOSED']
+                realized_pnl = sum(p.realized_pnl_usdc for p in closed_positions if p.realized_pnl_usdc)
+                unrealized_pnl = sum(
+                    Decimal(str(p.get('unrealized_pnl_usdc', 0))) for p in enriched_active
+                    if p.get('unrealized_pnl_usdc') is not None
+                )
+                total_fees = sum(p.fees_earned_usdc for p in positions if p.fees_earned_usdc)
+                total_rewards = sum(p.rewards_earned_usdc for p in positions if p.rewards_earned_usdc)
+                total_pnl = unrealized_pnl + realized_pnl + total_fees + total_rewards
+                total_invested = sum(p.entry_amount_usdc for p in positions if p.entry_amount_usdc)
+
+                performance_data = PerformanceData(
+                    apr=apr,
+                    wallet_balance=wallet_balance,
+                    positions_value=positions_value,
+                    total_balance=wallet_balance + positions_value,
+                    active_positions=len(active_positions),
+                    realized_pnl_usdc=realized_pnl,
+                    realized_pnl_pct=(realized_pnl / total_invested * 100) if total_invested > 0 else Decimal(0),
+                    pnl_usdc=total_pnl,
+                    pnl_pct=(total_pnl / total_invested * 100) if total_invested > 0 else Decimal(0)
+                )
+
+                return VaultStrategyResponse(
+                    user_id=user_id,
+                    strategy_type=strategy_enum.value,
+                    timestamp=datetime.utcnow().isoformat(),
+                    action="no_action",
+                    capital=capital_info.model_dump(),
+                    contract_params=None,
+                    monitoring=None,
+                    performance=performance_data
+                )
+
+        except ValueError as e:
+            # Strategy not active or user not found - this is a fatal error for capital tracking
+            logger.error(f"Capital allocation check failed: {e}")
+            raise HTTPException(status_code=404, detail=str(e))
+
+        # STEP 2: Select pool based on strategy type
+        # For blueprint strategies, use the existing dual-position logic
+        # For single-pool strategies, use the configured pool
+        if "blueprint" in strategy_enum.value:
+            # Blueprint: Use existing logic that selects pool by APR
+            WETH_USDC_POOL = "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59"
+            USDC_CBBTC_POOL = "0x4e962BB3889Bf030368F56810A9c96B83CB3E778"
+
+            # Fetch APR for both pools
+            weth_pool_data = await pools_service.get_pool(WETH_USDC_POOL)
+            cbbtc_pool_data = await pools_service.get_pool(USDC_CBBTC_POOL)
+
+            weth_apr = weth_pool_data.get('apr', 0) or 0
+            cbbtc_apr = cbbtc_pool_data.get('apr', 0) or 0
+
+            # Select pool with higher APR for primary position
+            if cbbtc_apr > weth_apr:
+                pool_address = USDC_CBBTC_POOL
+                logger.debug(f"Selected USDC/cbBTC pool with APR {cbbtc_apr:.2f}% (vs WETH/USDC {weth_apr:.2f}%)")
+            else:
+                pool_address = WETH_USDC_POOL
+                logger.debug(f"Selected WETH/USDC pool with APR {weth_apr:.2f}% (vs USDC/cbBTC {cbbtc_apr:.2f}%)")
         else:
-            pool_address = WETH_USDC_POOL
-            logger.debug(f"Selected WETH/USDC pool with APR {weth_apr:.2f}% (vs USDC/cbBTC {cbbtc_apr:.2f}%)")
+            # Single pool strategy: Use the configured pool
+            pool_address = strategy_config.pools[0]
+            logger.debug(f"Using configured pool {pool_address} for {strategy_enum.value}")
 
+        # STEP 3: Generate strategy with configuration and capital constraint
         strategy = await vault_strategy_service.generate_strategy(
             user_id=user_id,
             db=db,
-            pool_address=pool_address
+            pool_address=pool_address,
+            strategy_config=strategy_config
         )
+
+        # STEP 4: Override capital info in strategy response with allocation-aware version
+        strategy.capital = capital_info.model_dump()
 
         if strategy.monitoring and strategy.monitoring.alerts:
             logger.warning(f"  ⚠️ {len(strategy.monitoring.alerts)} position(s) need attention")
@@ -1028,6 +1210,8 @@ async def get_vault_strategy(
 
         return strategy
 
+    except HTTPException:
+        raise
     except ValueError as e:
         # User not found or no CDP wallet
         raise HTTPException(status_code=404, detail=str(e))

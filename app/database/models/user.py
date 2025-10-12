@@ -60,6 +60,10 @@ class User(Base):
     # - total_volume: USD volume
     # - tags: array of labels
     # - preferences: user settings
+
+    # Active strategies tracking (hybrid approach)
+    active_strategies = Column(JSONB, nullable=True)
+    # Structure: { "h3": { "strategy_type": "hedged_blueprint", "capital_allocated_usdc": 1000.0, "status": "active", "created_at": "...", "updated_at": "..." } }
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
@@ -72,7 +76,7 @@ class User(Base):
         cascade="all, delete-orphan",
         lazy="select"
     )
-    
+
     positions: Mapped[List["Position"]] = relationship(
         "Position",
         back_populates="user",

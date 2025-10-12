@@ -17,6 +17,20 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Check if tables already exist - if so, skip migration
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+
+    if 'users' in inspector.get_table_names():
+        # Tables already exist, skip migration
+        return
+
+    # Create enum types using raw SQL to avoid async issues
+    op.execute("CREATE TYPE IF NOT EXISTS userstatus AS ENUM ('ACTIVE', 'SUSPENDED', 'CLOSED')")
+    op.execute("CREATE TYPE IF NOT EXISTS transactiontype AS ENUM ('DEPOSIT', 'WITHDRAW', 'POSITION_ENTRY', 'POSITION_EXIT', 'FEE_COLLECTION')")
+    op.execute("CREATE TYPE IF NOT EXISTS transactionstatus AS ENUM ('PENDING', 'CONFIRMED', 'FAILED', 'CANCELLED')")
+    op.execute("CREATE TYPE IF NOT EXISTS positionstatus AS ENUM ('ACTIVE', 'CLOSED', 'LIQUIDATED')")
+
     # Create users table
     op.create_table('users',
         sa.Column('user_id', sa.String(), nullable=False),
@@ -24,7 +38,7 @@ def upgrade() -> None:
         sa.Column('cdp_wallet_name', sa.String(), nullable=False),
         sa.Column('cdp_owner_wallet_address', sa.String(), nullable=False),
         sa.Column('cdp_owner_wallet_name', sa.String(), nullable=False),
-        sa.Column('status', sa.Enum('ACTIVE', 'SUSPENDED', 'CLOSED', name='userstatus'), nullable=False),
+        sa.Column('status', sa.Enum('ACTIVE', 'SUSPENDED', 'CLOSED', name='userstatus', create_type=False), nullable=False),
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
         sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint('user_id')
@@ -39,13 +53,13 @@ def upgrade() -> None:
     op.create_table('transactions',
         sa.Column('transaction_id', postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column('user_id', sa.String(), nullable=False),
-        sa.Column('transaction_type', sa.Enum('DEPOSIT', 'WITHDRAW', 'POSITION_ENTRY', 'POSITION_EXIT', 'FEE_COLLECTION', name='transactiontype'), nullable=False),
+        sa.Column('transaction_type', sa.Enum('DEPOSIT', 'WITHDRAW', 'POSITION_ENTRY', 'POSITION_EXIT', 'FEE_COLLECTION', name='transactiontype', create_type=False), nullable=False),
         sa.Column('amount_usdc', sa.Numeric(precision=20, scale=6), nullable=False),
         sa.Column('tx_hash', sa.String(), nullable=True),
         sa.Column('block_number', sa.Integer(), nullable=True),
         sa.Column('gas_used', sa.Integer(), nullable=True),
         sa.Column('gas_price', sa.Numeric(precision=20, scale=9), nullable=True),
-        sa.Column('status', sa.Enum('PENDING', 'CONFIRMED', 'FAILED', 'CANCELLED', name='transactionstatus'), nullable=False),
+        sa.Column('status', sa.Enum('PENDING', 'CONFIRMED', 'FAILED', 'CANCELLED', name='transactionstatus', create_type=False), nullable=False),
         sa.Column('tx_metadata', sa.String(), nullable=True),
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
         sa.Column('confirmed_at', sa.DateTime(timezone=True), nullable=True),
@@ -80,7 +94,7 @@ def upgrade() -> None:
         sa.Column('unrealized_pnl_usdc', sa.Numeric(precision=20, scale=6), nullable=False),
         sa.Column('fees_earned_usdc', sa.Numeric(precision=20, scale=6), nullable=False),
         sa.Column('rewards_earned_usdc', sa.Numeric(precision=20, scale=6), nullable=False),
-        sa.Column('status', sa.Enum('ACTIVE', 'CLOSED', 'LIQUIDATED', name='positionstatus'), nullable=False),
+        sa.Column('status', sa.Enum('ACTIVE', 'CLOSED', 'LIQUIDATED', name='positionstatus', create_type=False), nullable=False),
         sa.Column('entry_tx_hash', sa.String(), nullable=True),
         sa.Column('exit_tx_hash', sa.String(), nullable=True),
         sa.Column('entry_date', sa.DateTime(timezone=True), nullable=False),

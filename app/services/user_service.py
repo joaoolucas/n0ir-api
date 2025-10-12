@@ -1399,6 +1399,9 @@ class UserService:
             sync_result["positions_updated"] = positions_updated
             sync_result["success"] = True
 
+            # Recalculate deployed capital from active positions
+            await self._recalculate_deployed_capital(user_id)
+
             # Mark sync as completed and cache the result
             await cache_manager.mark_sync_completed(user_id)
             await cache_manager.cache_sync_result(user_id, sync_result)
@@ -1410,3 +1413,60 @@ class UserService:
             sync_result["error"] = str(e)
 
         return sync_result
+
+    async def _recalculate_deployed_capital(self, user_id: str) -> None:
+        """
+        Recalculate deployed_capital_usd for each active strategy based on actual positions.
+
+        This is called after blockchain sync to ensure capital tracking stays accurate.
+        It infers which strategy owns each position based on pool address.
+
+        Args:
+            user_id: User wallet address
+        """
+        from app.schemas.strategy import infer_strategy_from_pool
+        from sqlalchemy.orm import attributes
+
+        try:
+            # Get user with active strategies
+            user = await self.get_user(user_id)
+            if not user or not user.active_strategies:
+                return
+
+            # Get all active positions
+            active_positions = await self.get_user_positions(user_id, status=PositionStatus.ACTIVE)
+
+            # Calculate deployed capital per strategy
+            deployed_by_strategy = {}
+
+            for position in active_positions:
+                # Infer strategy from pool address
+                strategy_code = infer_strategy_from_pool(
+                    position.pool_address,
+                    user.active_strategies
+                )
+
+                if strategy_code:
+                    # Use entry_amount_usdc as the deployed capital for this position
+                    deployed_amount = position.entry_amount_usdc or Decimal(0)
+                    deployed_by_strategy[strategy_code] = deployed_by_strategy.get(strategy_code, Decimal(0)) + deployed_amount
+
+            # Update deployed_capital_usd for each active strategy
+            for strategy_code, strategy_info in user.active_strategies.items():
+                new_deployed = float(deployed_by_strategy.get(strategy_code, Decimal(0)))
+                old_deployed = strategy_info.get('deployed_capital_usd', 0.0)
+
+                if new_deployed != old_deployed:
+                    strategy_info['deployed_capital_usd'] = new_deployed
+                    strategy_info['updated_at'] = datetime.utcnow().isoformat()
+                    logger.info(
+                        f"Recalculated deployed capital for {user_id}/{strategy_code}: "
+                        f"{old_deployed} -> {new_deployed}"
+                    )
+
+            # Mark JSONB field as modified
+            attributes.flag_modified(user, 'active_strategies')
+            await self.db.commit()
+
+        except Exception as e:
+            logger.error(f"Error recalculating deployed capital for {user_id}: {e}")

@@ -17,6 +17,10 @@ WHITELISTED_POOLS = [
     "0x4e962bb3889bf030368f56810a9c96b83cb3e778",  # cbBTC/USDC
     "0xE846373C1a92B167b4E9cd5d8E4d6B1Db9E90EC7",  # USDC/EURC
     "0x7501bc8Bb51616F79bfA524E464fb7B41f0B10fB",  # USDC/msUSD
+    "0x363d1607b8DA83d6B6EA76D017CeEcf1316BB08A",  # cbBTC/cbDOGE
+    "0x8782d97C8b25B4d17dBFbaa03f25dC18e51e909D",  # cbBTC/cbADA
+    "0x95Ff4985af7ED78421215be100c18a2b987f7E90",  # cbBTC/cbXRP
+    "0x6044c817e55A03DAdc5F6b8B7045aF1985aE90fA",  # cbBTC/cbLTC
 ]
 
 
@@ -45,6 +49,11 @@ class APRSnapshotService:
                 include_effective_apr=True
             )
 
+            # Validate pool_data is a dict
+            if not isinstance(pool_data, dict):
+                logger.error(f"Invalid pool_data type for {pool_address}: {type(pool_data)}")
+                return None
+
             # Extract effective APR ranges
             effective_apr_range = pool_data.get("effective_apr_range")
             effective_apr_narrow = None
@@ -52,11 +61,22 @@ class APRSnapshotService:
             effective_apr_wide = None
             effective_apr_stable = None
 
-            if effective_apr_range:
+            if effective_apr_range and isinstance(effective_apr_range, dict):
                 effective_apr_narrow = effective_apr_range.get("narrow")
                 effective_apr_standard = effective_apr_range.get("standard")
                 effective_apr_wide = effective_apr_range.get("wide")
                 effective_apr_stable = effective_apr_range.get("stable")
+
+            # Build metadata dict, only including keys that have values
+            metadata = {}
+            if pool_data.get("fee_tier") is not None:
+                metadata["fee_tier"] = pool_data.get("fee_tier")
+            if pool_data.get("tick_spacing") is not None:
+                metadata["tick_spacing"] = pool_data.get("tick_spacing")
+            if pool_data.get("is_stable") is not None:
+                metadata["is_stable"] = pool_data.get("is_stable")
+            if pool_data.get("current_tick") is not None:
+                metadata["current_tick"] = pool_data.get("current_tick")
 
             # Create snapshot
             snapshot = APRSnapshot(
@@ -70,12 +90,7 @@ class APRSnapshotService:
                 tvl_usd=Decimal(str(pool_data.get("tvl_usd", 0))) if pool_data.get("tvl_usd") else None,
                 volume_24h=Decimal(str(pool_data.get("volume_24h", 0))) if pool_data.get("volume_24h") else None,
                 timestamp=datetime.utcnow(),
-                pool_metadata={
-                    "fee_tier": pool_data.get("fee_tier"),
-                    "tick_spacing": pool_data.get("tick_spacing"),
-                    "is_stable": pool_data.get("is_stable"),
-                    "current_tick": pool_data.get("current_tick"),
-                }
+                pool_metadata=metadata if metadata else None
             )
 
             db.add(snapshot)

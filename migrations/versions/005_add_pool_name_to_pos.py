@@ -18,9 +18,15 @@ depends_on = None
 
 def upgrade() -> None:
     """Add pool_name column to positions table."""
-    op.add_column('positions', 
-        sa.Column('pool_name', sa.String(), nullable=True)
-    )
+    # Check if column already exists
+    connection = op.get_bind()
+    inspector = sa.inspect(connection)
+    columns = [col['name'] for col in inspector.get_columns('positions')]
+
+    if 'pool_name' not in columns:
+        op.add_column('positions',
+            sa.Column('pool_name', sa.String(), nullable=True)
+        )
 
 
 def downgrade() -> None:

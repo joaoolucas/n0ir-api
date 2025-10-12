@@ -17,5 +17,5 @@ Base = declarative_base(metadata=metadata)
 def import_all_models():
     """Import all models to register them with SQLAlchemy - Unified 3-table schema."""
     from app.database.models import (
-        User, Position, Transaction
+        User, Position, Transaction, APRSnapshot
     )
