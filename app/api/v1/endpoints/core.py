@@ -346,6 +346,13 @@ async def deactivate_agent(
                     message=f"Strategy {strategy_type} is not active for this user"
                 )
 
+            # Reset capital allocation to 0 before removing
+            strategy_data = user.active_strategies[strategy_key]
+            if isinstance(strategy_data, dict):
+                strategy_data['allocated_capital_usd'] = 0
+                strategy_data['deployed_capital_usd'] = 0
+                user.active_strategies[strategy_key] = strategy_data
+
             # Remove strategy from active_strategies
             user.active_strategies.pop(strategy_key, None)
             attributes.flag_modified(user, 'active_strategies')
