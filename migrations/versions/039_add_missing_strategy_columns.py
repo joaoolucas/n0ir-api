@@ -58,9 +58,19 @@ def upgrade():
     if 'strategy_type' not in positions_columns:
         print("➕ Adding positions.strategy_type column...")
         op.add_column('positions', sa.Column('strategy_type', sa.String(50), nullable=True))
-        op.create_index('idx_positions_strategy_type', 'positions', ['strategy_type'], unique=False)
-        op.create_index('idx_positions_user_strategy', 'positions', ['user_id', 'strategy_type'], unique=False)
-        print("✅ Added positions.strategy_type column with indexes")
+
+        # Check if indexes already exist before creating them
+        existing_indexes = [idx['name'] for idx in inspector.get_indexes('positions')]
+
+        if 'idx_positions_strategy_type' not in existing_indexes:
+            op.create_index('idx_positions_strategy_type', 'positions', ['strategy_type'], unique=False)
+            print("✅ Created index idx_positions_strategy_type")
+
+        if 'idx_positions_user_strategy' not in existing_indexes:
+            op.create_index('idx_positions_user_strategy', 'positions', ['user_id', 'strategy_type'], unique=False)
+            print("✅ Created index idx_positions_user_strategy")
+
+        print("✅ Added positions.strategy_type column")
     else:
         print("⚠️  positions.strategy_type column already exists, skipping")
 
