@@ -1440,13 +1440,24 @@ class UserService:
             deployed_by_strategy = {}
 
             for position in active_positions:
-                # Infer strategy from pool address
-                strategy_code = infer_strategy_from_pool(
-                    position.pool_address,
-                    user.active_strategies
-                )
+                # Use stored strategy_type if available, otherwise infer from pool
+                strategy_code = position.strategy_type
 
-                if strategy_code:
+                if not strategy_code:
+                    # Fallback: infer strategy from pool address
+                    strategy_code = infer_strategy_from_pool(
+                        position.pool_address,
+                        user.active_strategies
+                    )
+
+                    # Store inferred strategy_type for future syncs
+                    if strategy_code:
+                        position.strategy_type = strategy_code
+                        logger.info(
+                            f"Inferred and stored strategy_type={strategy_code} for position {position.token_id}"
+                        )
+
+                if strategy_code and strategy_code in user.active_strategies:
                     # Use entry_amount_usdc as the deployed capital for this position
                     deployed_amount = position.entry_amount_usdc or Decimal(0)
                     deployed_by_strategy[strategy_code] = deployed_by_strategy.get(strategy_code, Decimal(0)) + deployed_amount
