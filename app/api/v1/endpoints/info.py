@@ -1191,6 +1191,7 @@ async def get_vault_strategy(
         else:
             # Single pool strategy: Use the configured pool
             pool_address = strategy_config.pools[0]
+            logger.info(f"[POOL-DEBUG] Strategy {strategy_enum.value} -> pool_address={pool_address} (from strategy_config.pools[0])")
             logger.debug(f"Using configured pool {pool_address} for {strategy_enum.value}")
 
         # STEP 3: Generate strategy with configuration and capital constraint

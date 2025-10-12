@@ -52,6 +52,7 @@ class VaultStrategyService:
             Strategy response with allocations
         """
         try:
+            logger.info(f"[POOL-DEBUG] generate_strategy called with pool_address={pool_address}, strategy_type={strategy_config.strategy_type.value if strategy_config else 'None'}")
             # Get user and validate
             user = await self._get_user(user_id, db)
             if not user:
