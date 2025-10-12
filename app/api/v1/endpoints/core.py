@@ -159,8 +159,8 @@ async def create_user(
 async def activate_agent(
     user_id: str,
     request: Request,
-    strategy_type: Optional[str] = "n1",
-    allocation_usd: Optional[float] = 100.0,
+    strategy_type: Optional[str] = Query("n1", description="Strategy code (h1-h2, n1-n6, s1-s2)"),
+    allocation_usd: Optional[float] = Query(100.0, description="Capital allocated to this strategy in USD"),
     authenticated_wallet: str = Depends(get_authenticated_wallet),
     db: AsyncSession = Depends(get_db)
 ) -> ActivateResponse:
