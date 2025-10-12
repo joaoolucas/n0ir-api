@@ -242,6 +242,10 @@ async def activate_agent(
         }
         attributes.flag_modified(user, 'active_strategies')
 
+        # Commit active_strategies to database BEFORE sending command to agent
+        # This ensures the executor sees the updated strategies when it calls get_active_strategies
+        await db.commit()
+
         # Sync blockchain data before activation
         await service.sync_blockchain_data(user_id)
 
