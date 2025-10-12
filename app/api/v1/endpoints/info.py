@@ -20,6 +20,7 @@ from app.schemas.users import (
     TransactionResponse,
     PositionListResponse,
     PerformanceResponse,
+    PerformanceData,
     PositionResponse,
     TransactionType,
     TransactionStatus,
