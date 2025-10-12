@@ -242,12 +242,15 @@ async def activate_agent(
             )
 
         # Store selected strategy in active_strategies with allocation
-        if user.active_strategies is None:
-            user.active_strategies = {}
+        # Use deep copy to ensure JSONB mutation tracking works
+        import copy
+        from app.schemas.strategy import STRATEGY_SHORT_CODES
 
-        strategy_key = final_strategy_type if final_strategy_type in ["h1", "h2", "n1", "n2", "n3", "n4", "n5", "n6", "s1", "s2"] else strategy_enum.value.split("_")[1] if "_" in strategy_enum.value else strategy_enum.value
+        current_strategies = copy.deepcopy(user.active_strategies) if user.active_strategies else {}
 
-        user.active_strategies[strategy_key] = {
+        strategy_key = final_strategy_type if final_strategy_type in STRATEGY_SHORT_CODES else strategy_enum.value.split("_")[1] if "_" in strategy_enum.value else strategy_enum.value
+
+        current_strategies[strategy_key] = {
             "strategy_type": strategy_enum.value,
             "status": "active",
             "allocated_capital_usd": float(final_allocation_usd),
@@ -255,7 +258,13 @@ async def activate_agent(
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat()
         }
+
+        # Reassign to trigger SQLAlchemy change detection
+        user.active_strategies = current_strategies
         attributes.flag_modified(user, 'active_strategies')
+
+        # Flush to database before commit
+        await db.flush()
 
         # Commit active_strategies to database BEFORE sending command to agent
         # This ensures the executor sees the updated strategies when it calls get_active_strategies
