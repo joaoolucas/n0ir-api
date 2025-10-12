@@ -428,8 +428,10 @@ async def deactivate_agent(
 
             # Commit DB changes first to ensure state is updated
             await db.commit()
+            await db.refresh(user)
 
             logger.info(f"Deactivate commit completed for {user_id}")
+            logger.info(f"Active_strategies after refresh: {user.active_strategies}")
 
             # Then send deactivate command to agent manager (always withdraws funds)
             agent_service = get_agent_service()
