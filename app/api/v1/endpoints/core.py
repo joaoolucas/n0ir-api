@@ -242,7 +242,7 @@ async def activate_agent(
             )
 
         # Store selected strategy in active_strategies with allocation
-        if not user.active_strategies:
+        if user.active_strategies is None:
             user.active_strategies = {}
 
         strategy_key = final_strategy_type if final_strategy_type in ["h1", "h2", "n1", "n2", "n3", "n4", "n5", "n6", "s1", "s2"] else strategy_enum.value.split("_")[1] if "_" in strategy_enum.value else strategy_enum.value
