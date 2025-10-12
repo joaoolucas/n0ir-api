@@ -380,6 +380,9 @@ async def deactivate_agent(
 
         # Case 2: Deactivate all strategies and stop agent
         else:
+            logger.info(f"Deactivating all strategies for {user_id}")
+            logger.info(f"Current active_strategies before clear: {user.active_strategies}")
+
             # Reset all strategy capitals to 0 before clearing
             if user.active_strategies:
                 for strategy_key in list(user.active_strategies.keys()):
@@ -395,8 +398,12 @@ async def deactivate_agent(
             attributes.flag_modified(user, 'active_strategies')
             attributes.flag_modified(user, 'user_metadata')
 
+            logger.info(f"Active_strategies after clear (before commit): {user.active_strategies}")
+
             # Commit DB changes first to ensure state is updated
             await db.commit()
+
+            logger.info(f"Deactivate commit completed for {user_id}")
 
             # Then send deactivate command to agent manager (always withdraws funds)
             agent_service = get_agent_service()
