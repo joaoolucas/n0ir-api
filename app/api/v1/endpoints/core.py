@@ -439,7 +439,7 @@ async def deactivate_agent(
             await db.commit()
 
             # Force expire the attribute before refresh to ensure we get fresh data
-            await db.expire(user, ['active_strategies'])
+            db.expire(user, ['active_strategies'])
             await db.refresh(user)
 
             logger.info(f"Deactivate commit completed for {user_id}")
