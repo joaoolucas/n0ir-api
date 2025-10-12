@@ -397,6 +397,7 @@ async def deactivate_agent(
                 attributes.flag_modified(user, 'user_metadata')
 
             await db.commit()
+            await db.refresh(user)
 
             return DeactivateResponse(
                 user_id=user_id,
