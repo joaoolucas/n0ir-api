@@ -5,7 +5,7 @@ Handles user creation, activation, and strategy generation.
 from typing import Optional
 from decimal import Decimal
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import attributes
 from loguru import logger
@@ -281,7 +281,7 @@ async def activate_agent(
 async def deactivate_agent(
     user_id: str,
     request: Request,
-    strategy_type: Optional[str] = None,
+    strategy_type: Optional[str] = Query(None, description="Strategy code to deactivate (e.g., h1, h2). If not provided, deactivates all strategies."),
     authenticated_wallet: str = Depends(get_authenticated_wallet),
     db: AsyncSession = Depends(get_db)
 ) -> DeactivateResponse:
