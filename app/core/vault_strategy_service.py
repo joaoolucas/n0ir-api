@@ -259,6 +259,18 @@ class VaultStrategyService:
         volume_24h = pool_metrics.get('volume_24h', 0)
         tvl = pool_metrics.get('tvl_usd', 0)
         is_stable = pool_metrics.get('is_stable', False)
+        pool_address = pool_metrics.get('pool_address', '').lower()
+
+        # cbBTC altcoin pools - wider range due to higher volatility and lower liquidity
+        CBBTC_ALTCOIN_POOLS = [
+            '0x6044c817e55a03dadc5f6b8b7045af1985ae90fa',  # cbBTC/cbLTC
+            '0x8782d97c8b25b4d17dbfbaa03f25dc18e51e909d',  # cbBTC/cbADA
+            '0x95ff4985af7ed78421215be100c18a2b987f7e90',  # cbBTC/cbXRP
+            '0x363d1607b8da83d6b6ea76d017ceecf1316bb08a',  # cbBTC/cbDOGE
+        ]
+
+        if pool_address in CBBTC_ALTCOIN_POOLS:
+            return 40  # ±20% for volatile altcoin pairs
 
         turnover = volume_24h / tvl if tvl > 0 else 0
 
@@ -515,6 +527,7 @@ class VaultStrategyService:
         try:
             pool_data = await pools_service.get_pool(pool_address)
             pool_metrics = {
+                'pool_address': pool_address,
                 'apr': pool_data.get('apr', 20),
                 'volume_24h': pool_data.get('volume_24h', 0),
                 'tvl_usd': pool_data.get('tvl_usd', 0),
