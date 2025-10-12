@@ -405,7 +405,13 @@ async def deactivate_agent(
                 attributes.flag_modified(user, 'user_metadata')
 
             await db.commit()
+
+            # Force expire and refresh to ensure changes persist
+            db.expire(user, ['active_strategies'])
             await db.refresh(user)
+
+            logger.info(f"Single strategy deactivation complete for {user_id}/{strategy_key}")
+            logger.info(f"Active_strategies after refresh: {user.active_strategies}")
 
             return DeactivateResponse(
                 user_id=user_id,
