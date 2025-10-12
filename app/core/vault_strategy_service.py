@@ -71,10 +71,35 @@ class VaultStrategyService:
             USDC_CBBTC_POOL = "0x4e962BB3889Bf030368F56810A9c96B83CB3E778"
 
             # Get active positions count and pools
-            active_positions, position_pools = await self._get_active_positions_info(user_id, db)
+            all_active_positions, all_position_pools = await self._get_active_positions_info(user_id, db)
+
+            # Filter positions to only those belonging to THIS strategy
+            from app.schemas.strategy import POOL_TO_STRATEGY
+            strategy_short_code = None
+            if strategy_config:
+                # Get short code for current strategy
+                from app.schemas.strategy import STRATEGY_SHORT_CODES
+                for code, full_name in STRATEGY_SHORT_CODES.items():
+                    if full_name == strategy_config.strategy_type.value:
+                        strategy_short_code = code
+                        break
+
+            # Filter positions by strategy
+            if strategy_short_code and all_active_positions:
+                active_positions = []
+                for pos in all_active_positions:
+                    pool_lower = pos.pool_address.lower()
+                    possible_strategies = POOL_TO_STRATEGY.get(pool_lower, [])
+                    if strategy_short_code in possible_strategies:
+                        active_positions.append(pos)
+                position_pools = [pos.pool_address for pos in active_positions]
+            else:
+                active_positions = all_active_positions
+                position_pools = all_position_pools
+
             position_count = len(active_positions)
 
-            logger.info(f"User {user_id} has {position_count} active positions in pools: {position_pools}")
+            logger.info(f"User {user_id} has {position_count} active positions for strategy {strategy_short_code} in pools: {position_pools} (total across all strategies: {len(all_active_positions)})")
 
             # Check active positions for monitoring alerts FIRST
             monitoring_info = await self._check_positions_monitoring(user_id, db)
