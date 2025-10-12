@@ -437,10 +437,19 @@ async def deactivate_agent(
 
             # Commit DB changes first to ensure state is updated
             await db.commit()
+
+            # Force expire the attribute before refresh to ensure we get fresh data
+            await db.expire(user, ['active_strategies'])
             await db.refresh(user)
 
             logger.info(f"Deactivate commit completed for {user_id}")
             logger.info(f"Active_strategies after refresh: {user.active_strategies}")
+
+            # Verify the clear was successful
+            if user.active_strategies:
+                logger.error(f"ERROR: active_strategies not cleared! Still contains: {user.active_strategies}")
+            else:
+                logger.info(f"SUCCESS: active_strategies cleared successfully")
 
             # Then send deactivate command to agent manager (always withdraws funds)
             agent_service = get_agent_service()
