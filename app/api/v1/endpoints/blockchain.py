@@ -495,9 +495,9 @@ async def get_display_data(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Get mean APR metrics from snapshots for pools with current TVL and 24h volume.
+    Get mean APR metrics from snapshots (last 12 hours) for pools with current TVL and 24h volume.
 
-    Returns aggregated APR data from historical snapshots combined with
+    Returns aggregated APR data from recent historical snapshots combined with
     current pool metrics (TVL and 24h volume).
 
     **Authentication:**
@@ -510,7 +510,7 @@ async def get_display_data(
     For each pool:
     - pool_address: Pool contract address
     - pool_symbol: Pool token pair symbol
-    - mean_apr: Average base APR across all snapshots
+    - mean_apr: Average base APR across snapshots from last 12 hours
     - mean_effective_apr_narrow: Average effective APR for narrow range positions
     - mean_effective_apr_standard: Average effective APR for standard range positions
     - mean_effective_apr_wide: Average effective APR for wide range positions
@@ -520,7 +520,12 @@ async def get_display_data(
     - volume_24h: Current 24h trading volume (from pools service)
     """
     try:
-        # Build query to calculate mean for all APR types per pool
+        from datetime import datetime, timedelta
+
+        # Calculate 12-hour cutoff
+        twelve_hours_ago = datetime.utcnow() - timedelta(hours=12)
+
+        # Build query to calculate mean for all APR types per pool (last 12 hours only)
         query = select(
             APRSnapshot.pool_address,
             APRSnapshot.pool_symbol,
@@ -529,6 +534,8 @@ async def get_display_data(
             func.avg(APRSnapshot.effective_apr_standard).label("mean_effective_apr_standard"),
             func.avg(APRSnapshot.effective_apr_wide).label("mean_effective_apr_wide"),
             func.avg(APRSnapshot.effective_apr_stable).label("mean_effective_apr_stable")
+        ).where(
+            APRSnapshot.timestamp >= twelve_hours_ago
         ).group_by(
             APRSnapshot.pool_address,
             APRSnapshot.pool_symbol
