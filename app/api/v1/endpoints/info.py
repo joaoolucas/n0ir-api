@@ -1036,31 +1036,54 @@ async def get_vault_strategy(
     from app.schemas.capital import CapitalInfo as NewCapitalInfo
 
     try:
-        # If no strategy_type specified, check all active strategies
+        # If no strategy_type specified, prioritize strategies with allocated capital but no positions
         if not strategy_type:
-            from sqlalchemy import select
-            from app.database.models import User
+            from app.services.strategy_service import StrategyService
 
-            stmt = select(User).where(User.user_id == user_id)
-            result = await db.execute(stmt)
-            user = result.scalar_one_or_none()
+            strategy_service = StrategyService(db)
+            active_strategies = await strategy_service.get_active_strategies(user_id)
 
-            if not user or not user.active_strategies:
+            if not active_strategies or len(active_strategies) == 0:
                 raise HTTPException(
                     status_code=400,
                     detail="No active strategies found. Please activate a strategy first or specify strategy_type parameter."
                 )
 
-            # Check each active strategy and return the first one that needs action
-            for strategy_code in user.active_strategies.keys():
+            # PRIORITY 1: Strategies with allocated capital but zero deployed (need initial position)
+            # Sort by highest allocated capital first
+            strategies_need_deployment = [
+                s for s in active_strategies
+                if s.allocated_capital_usd > 0 and s.deployed_capital_usd == 0
+            ]
+            strategies_need_deployment.sort(key=lambda s: s.allocated_capital_usd, reverse=True)
+
+            # PRIORITY 2: Strategies with deployed capital (may need rebalancing)
+            strategies_have_positions = [
+                s for s in active_strategies
+                if s.deployed_capital_usd > 0
+            ]
+
+            # Check strategies needing deployment first, then those with positions
+            strategies_to_check = strategies_need_deployment + strategies_have_positions
+
+            logger.info(f"Checking {len(strategies_to_check)} active strategies for user {user_id}")
+            logger.info(f"  - {len(strategies_need_deployment)} need initial deployment")
+            logger.info(f"  - {len(strategies_have_positions)} have positions")
+
+            # Check each strategy in priority order
+            for strategy in strategies_to_check:
+                strategy_code = strategy.strategy_code
                 if strategy_code in STRATEGY_SHORT_CODES:
-                    full_name = STRATEGY_SHORT_CODES[strategy_code]
                     try:
                         strategy_enum = parse_strategy_type(strategy_code)
                         strategy_config = StrategyConfig(strategy_enum)
 
                         # Generate strategy for this active strategy
-                        logger.info(f"Checking active strategy {strategy_code} for user {user_id}")
+                        logger.info(
+                            f"Checking strategy {strategy_code}: "
+                            f"allocated=${strategy.allocated_capital_usd}, "
+                            f"deployed=${strategy.deployed_capital_usd}"
+                        )
 
                         # Get pool address from strategy config
                         pool_address = strategy_config.pools[0] if strategy_config.pools else None
@@ -1075,17 +1098,20 @@ async def get_vault_strategy(
 
                         # If this strategy needs action (not no_action), return it
                         if result.action != "no_action":
+                            logger.info(f"Returning strategy {strategy_code} with action: {result.action}")
                             return result
                     except Exception as e:
                         logger.warning(f"Error checking strategy {strategy_code}: {e}")
                         continue
 
-            # If no strategy needs action, return no_action for the first strategy
-            first_strategy_code = list(user.active_strategies.keys())[0]
-            strategy_enum = parse_strategy_type(first_strategy_code)
+            # If no strategy needs action, return no_action for the first prioritized strategy
+            first_strategy = strategies_to_check[0]
+            strategy_code = first_strategy.strategy_code
+            strategy_enum = parse_strategy_type(strategy_code)
             strategy_config = StrategyConfig(strategy_enum)
             pool_address = strategy_config.pools[0] if strategy_config.pools else None
 
+            logger.info(f"No strategies need action, returning no_action for {strategy_code}")
             return await vault_strategy_service.generate_strategy(
                 user_id=user_id,
                 db=db,
