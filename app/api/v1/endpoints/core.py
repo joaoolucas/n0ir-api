@@ -8,6 +8,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import attributes
+from sqlalchemy import text
 from loguru import logger
 
 from app.database.session import get_db
@@ -397,8 +398,19 @@ async def deactivate_agent(
             user.active_strategies = new_strategies
             attributes.flag_modified(user, 'active_strategies')
 
+            logger.info(f"[DEACTIVATE {strategy_key}] Active_strategies before flush: {user.active_strategies}")
+            logger.info(f"[DEACTIVATE {strategy_key}] Object ID: {id(user.active_strategies)}")
+            logger.info(f"[DEACTIVATE {strategy_key}] Is modified: {db.is_modified(user)}, In dirty: {user in db.dirty}")
+
             # Force flush to database before commit
             await db.flush()
+
+            logger.info(f"[DEACTIVATE {strategy_key}] Active_strategies after flush: {user.active_strategies}")
+
+            from sqlalchemy import inspect
+            state = inspect(user)
+            logger.info(f"[DEACTIVATE {strategy_key}] State: pending={state.pending}, persistent={state.persistent}")
+            logger.info(f"[DEACTIVATE {strategy_key}] History: {state.attrs.active_strategies.history}")
 
             # Send command to agent manager to stop executing this strategy
             agent_service = get_agent_service()
@@ -423,8 +435,18 @@ async def deactivate_agent(
 
             await db.commit()
 
+            logger.info(f"[DEACTIVATE {strategy_key}] Commit completed")
+            logger.info(f"[DEACTIVATE {strategy_key}] Active_strategies after commit: {user.active_strategies}")
+
+            # Verify database state directly with raw query
+            result = await db.execute(
+                text("SELECT active_strategies FROM users WHERE user_id = :user_id"),
+                {"user_id": user_id}
+            )
+            db_value = result.scalar()
+            logger.info(f"[DEACTIVATE {strategy_key}] Database raw query result: {db_value}")
+
             logger.info(f"Single strategy deactivation complete for {user_id}/{strategy_key}")
-            logger.info(f"Active_strategies after commit: {user.active_strategies}")
             # Don't refresh - avoids loading stale data from race conditions
 
             return DeactivateResponse(
