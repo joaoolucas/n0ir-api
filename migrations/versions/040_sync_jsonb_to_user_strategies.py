@@ -36,9 +36,92 @@ STRATEGY_CODE_TO_TYPE = {
 
 def upgrade():
     """Sync JSONB active_strategies to user_strategies table."""
+    from sqlalchemy import inspect
     conn = op.get_bind()
+    inspector = inspect(conn)
 
     print("🔄 Starting JSONB to relational table sync...")
+
+    # Check if user_strategies table exists
+    if 'user_strategies' not in inspector.get_table_names():
+        print("⚠️  user_strategies table does not exist, creating it now...")
+
+        # Ensure enums exist
+        conn.execute(text("""
+            DO $$ BEGIN
+                CREATE TYPE strategy_type_enum AS ENUM (
+                    'hedged_weth_only',
+                    'hedged_cbbtc_only',
+                    'hedged_blueprint',
+                    'nonhedged_weth_only',
+                    'nonhedged_cbbtc_only',
+                    'nonhedged_blueprint',
+                    'nonhedged_cbltc_cbbtc',
+                    'nonhedged_cbada_cbbtc',
+                    'nonhedged_cbxrp_cbbtc',
+                    'nonhedged_cbdoge_cbbtc',
+                    'stable_usdc_eurc',
+                    'stable_usdc_brz',
+                    'stable_usdc_msusd'
+                );
+            EXCEPTION
+                WHEN duplicate_object THEN null;
+            END $$;
+        """))
+
+        conn.execute(text("""
+            DO $$ BEGIN
+                CREATE TYPE strategy_status_enum AS ENUM (
+                    'active',
+                    'paused',
+                    'closed'
+                );
+            EXCEPTION
+                WHEN duplicate_object THEN null;
+            END $$;
+        """))
+
+        # Create the table
+        op.create_table(
+            'user_strategies',
+            sa.Column('strategy_id', postgresql.UUID(as_uuid=True), primary_key=True, server_default=sa.text('gen_random_uuid()')),
+            sa.Column('user_id', sa.String(42), sa.ForeignKey('users.user_id', ondelete='CASCADE'), nullable=False),
+            sa.Column('strategy_type', postgresql.ENUM(
+                'hedged_weth_only',
+                'hedged_cbbtc_only',
+                'hedged_blueprint',
+                'nonhedged_weth_only',
+                'nonhedged_cbbtc_only',
+                'nonhedged_blueprint',
+                'nonhedged_cbltc_cbbtc',
+                'nonhedged_cbada_cbbtc',
+                'nonhedged_cbxrp_cbbtc',
+                'nonhedged_cbdoge_cbbtc',
+                'stable_usdc_eurc',
+                'stable_usdc_brz',
+                'stable_usdc_msusd',
+                name='strategy_type_enum',
+                create_type=False
+            ), nullable=False),
+            sa.Column('status', postgresql.ENUM(
+                'active',
+                'paused',
+                'closed',
+                name='strategy_status_enum',
+                create_type=False
+            ), nullable=False, server_default='active'),
+            sa.Column('allocated_capital_usd', sa.Numeric(precision=20, scale=6), nullable=False, default=0),
+            sa.Column('deployed_capital_usd', sa.Numeric(precision=20, scale=6), nullable=False, default=0),
+            sa.Column('created_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.text('CURRENT_TIMESTAMP')),
+            sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.text('CURRENT_TIMESTAMP'))
+        )
+
+        # Create indexes
+        op.create_index('idx_user_strategies_user_id', 'user_strategies', ['user_id'])
+        op.create_index('idx_user_strategies_status', 'user_strategies', ['status'])
+        op.create_index('idx_user_strategies_user_status', 'user_strategies', ['user_id', 'status'])
+
+        print("✅ Created user_strategies table with indexes")
 
     # Get all users with active_strategies in JSONB
     result = conn.execute(text("""
