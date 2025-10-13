@@ -195,16 +195,20 @@ def upgrade():
             else:
                 # Insert new strategy
                 try:
+                    # Use raw SQL without type casts to avoid parameter mixing issues
                     conn.execute(text("""
                         INSERT INTO user_strategies (
                             user_id, strategy_type, status,
                             allocated_capital_usd, deployed_capital_usd,
                             created_at, updated_at
                         ) VALUES (
-                            :user_id, :strategy_type::strategy_type_enum, :status::strategy_status_enum,
-                            :allocated_capital, :deployed_capital,
-                            COALESCE(:created_at::timestamp, CURRENT_TIMESTAMP),
-                            COALESCE(:updated_at::timestamp, CURRENT_TIMESTAMP)
+                            :user_id,
+                            CAST(:strategy_type AS strategy_type_enum),
+                            CAST(:status AS strategy_status_enum),
+                            :allocated_capital,
+                            :deployed_capital,
+                            COALESCE(CAST(:created_at AS timestamp with time zone), CURRENT_TIMESTAMP),
+                            COALESCE(CAST(:updated_at AS timestamp with time zone), CURRENT_TIMESTAMP)
                         )
                     """), {
                         "user_id": user_id,
