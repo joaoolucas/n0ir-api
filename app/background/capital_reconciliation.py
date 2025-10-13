@@ -31,11 +31,13 @@ class CapitalReconciliationService:
         self.db = db
 
     async def get_users_with_active_strategies(self) -> List[User]:
-        """Get all users with active strategies."""
-        stmt = select(User).where(
-            User.active_strategies.isnot(None),
-            User.active_strategies != text("'{}'::jsonb")
-        )
+        """Get all users with active strategies from relational table."""
+        from app.database.models import UserStrategy
+
+        # Get distinct user_ids from user_strategies table where status is active
+        stmt = select(User).join(UserStrategy).where(
+            UserStrategy.status == 'active'
+        ).distinct()
         result = await self.db.execute(stmt)
         return result.scalars().all()
 
@@ -84,11 +86,15 @@ class CapitalReconciliationService:
         Returns:
             Tuple of (needs_correction, message, db_deployed, onchain_deployed)
         """
-        if not user.active_strategies or strategy_code not in user.active_strategies:
+        # Get strategy from relational table
+        from app.services.strategy_service import StrategyService
+        strategy_service = StrategyService(self.db)
+
+        strategy = await strategy_service.get_strategy_by_code(user.user_id, strategy_code)
+        if not strategy or strategy.status != 'active':
             return False, "Strategy not active", Decimal(0), Decimal(0)
 
-        strategy_info = user.active_strategies[strategy_code]
-        db_deployed = Decimal(str(strategy_info.get('deployed_capital_usd', 0)))
+        db_deployed = Decimal(str(strategy.deployed_capital_usd))
 
         # Get actual on-chain capital
         onchain_deployed = await self.get_onchain_capital_for_strategy(
@@ -125,17 +131,25 @@ class CapitalReconciliationService:
             strategy_code: Strategy short code
             correct_value: Correct value from on-chain
         """
-        from sqlalchemy.orm import attributes
+        # Get strategy from relational table with row lock
+        from app.services.strategy_service import StrategyService
+        strategy_service = StrategyService(self.db)
 
-        strategy_info = user.active_strategies[strategy_code]
-        old_value = strategy_info.get('deployed_capital_usd', 0)
+        strategy = await strategy_service.get_strategy_by_code(
+            user.user_id,
+            strategy_code,
+            lock_for_update=True
+        )
+
+        if not strategy:
+            logger.warning(f"Strategy {strategy_code} not found for user {user.user_id}")
+            return
+
+        old_value = strategy.deployed_capital_usd
 
         # Update to correct value
-        strategy_info['deployed_capital_usd'] = float(correct_value)
-        strategy_info['updated_at'] = datetime.utcnow().isoformat()
-
-        # Mark JSONB field as modified
-        attributes.flag_modified(user, 'active_strategies')
+        strategy.deployed_capital_usd = correct_value
+        strategy.updated_at = datetime.utcnow()
 
         await self.db.commit()
 
@@ -167,11 +181,15 @@ class CapitalReconciliationService:
         }
 
         for user in users:
-            if not user.active_strategies:
-                continue
+            # Get user's active strategies from relational table
+            from app.services.strategy_service import StrategyService
+            strategy_service = StrategyService(self.db)
+            strategies = await strategy_service.get_active_strategies(user.user_id)
 
-            for strategy_code in user.active_strategies.keys():
+            for strategy in strategies:
                 results["total_strategies"] += 1
+
+                strategy_code = strategy.strategy_code
 
                 try:
                     needs_correction, message, db_deployed, onchain_deployed = await self.reconcile_user_strategy(

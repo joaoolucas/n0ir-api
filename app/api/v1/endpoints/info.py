@@ -581,6 +581,11 @@ async def list_users(
             # NOTE: Don't update user object here to avoid race conditions with other endpoints
             # that modify critical fields like active_strategies. This is a read-only endpoint.
 
+            # Get active strategies from relational table (new source of truth)
+            from app.services.strategy_service import StrategyService
+            strategy_service = StrategyService(db)
+            active_strategies = await strategy_service.get_active_strategies_dict(user.user_id)
+
             # Build response
             user_dict = {
                 'user_id': user.user_id,
@@ -592,7 +597,7 @@ async def list_users(
                 'total_pnl_usdc': total_pnl_usdc,
                 'total_pnl_percentage': total_pnl_percentage,
                 'agent_active': user.agent_status == 'running' if hasattr(user, 'agent_status') and user.agent_status else False,
-                'active_strategies': user.active_strategies or {}
+                'active_strategies': active_strategies
             }
 
             enriched_users.append(user_dict)
@@ -600,6 +605,13 @@ async def list_users(
         except Exception as e:
             logger.error(f"Error enriching user {user.user_id}: {e}")
             # Return basic data if enrichment fails
+            try:
+                from app.services.strategy_service import StrategyService
+                strategy_service = StrategyService(db)
+                active_strategies = await strategy_service.get_active_strategies_dict(user.user_id)
+            except:
+                active_strategies = {}
+
             enriched_users.append({
                 'user_id': user.user_id,
                 'cdp_wallet_address': user.cdp_wallet_address,
@@ -610,7 +622,7 @@ async def list_users(
                 'total_pnl_usdc': Decimal(0),
                 'total_pnl_percentage': Decimal(0),
                 'agent_active': user.agent_status == 'running' if hasattr(user, 'agent_status') and user.agent_status else False,
-                'active_strategies': user.active_strategies or {}
+                'active_strategies': active_strategies
             })
 
     # Don't commit - this is a read-only endpoint

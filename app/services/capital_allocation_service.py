@@ -36,25 +36,32 @@ class CapitalAllocationService:
         Raises:
             ValueError: If user not found or strategy not active
         """
-        # Get user with active_strategies
-        stmt = select(User).where(User.user_id == user_id).with_for_update()
+        # Get strategy from relational table (new source of truth)
+        from app.services.strategy_service import StrategyService
+        strategy_service = StrategyService(self.db)
+
+        strategy = await strategy_service.get_strategy_by_code(
+            user_id,
+            strategy_code,
+            lock_for_update=True
+        )
+
+        if not strategy:
+            raise ValueError(f"Strategy {strategy_code} is not active for user {user_id}")
+
+        # Extract capital allocation info
+        allocated = Decimal(str(strategy.allocated_capital_usd))
+        deployed = Decimal(str(strategy.deployed_capital_usd))
+        available = allocated - deployed
+
+        # Get wallet balance
+        stmt = select(User).where(User.user_id == user_id)
         result = await self.db.execute(stmt)
         user = result.scalar_one_or_none()
 
         if not user:
             raise ValueError(f"User {user_id} not found")
 
-        if not user.active_strategies or strategy_code not in user.active_strategies:
-            raise ValueError(f"Strategy {strategy_code} is not active for user {user_id}")
-
-        strategy_info = user.active_strategies[strategy_code]
-
-        # Extract capital allocation info
-        allocated = Decimal(str(strategy_info.get('allocated_capital_usd', 0)))
-        deployed = Decimal(str(strategy_info.get('deployed_capital_usd', 0)))
-        available = allocated - deployed
-
-        # Get wallet balance (stored in user.usdc_balance)
         wallet_balance = Decimal(str(user.usdc_balance or 0))
 
         logger.debug(
@@ -98,21 +105,22 @@ class CapitalAllocationService:
             allocated, deployed, available, _ = await self.calculate_available_capital(user_id, strategy_code)
             return deployed, available
 
-        # Get user with row lock
-        stmt = select(User).where(User.user_id == user_id).with_for_update()
-        result = await self.db.execute(stmt)
-        user = result.scalar_one_or_none()
+        # Get strategy from relational table with row lock
+        from app.services.strategy_service import StrategyService
+        strategy_service = StrategyService(self.db)
 
-        if not user:
-            raise ValueError(f"User {user_id} not found")
+        strategy = await strategy_service.get_strategy_by_code(
+            user_id,
+            strategy_code,
+            lock_for_update=True
+        )
 
-        if not user.active_strategies or strategy_code not in user.active_strategies:
+        if not strategy:
             raise ValueError(f"Strategy {strategy_code} is not active for user {user_id}")
 
         # Get current values
-        strategy_info = user.active_strategies[strategy_code]
-        allocated = Decimal(str(strategy_info.get('allocated_capital_usd', 0)))
-        current_deployed = Decimal(str(strategy_info.get('deployed_capital_usd', 0)))
+        allocated = Decimal(str(strategy.allocated_capital_usd))
+        current_deployed = Decimal(str(strategy.deployed_capital_usd))
 
         # Calculate new deployed amount
         new_deployed = current_deployed + delta
@@ -124,12 +132,9 @@ class CapitalAllocationService:
                 f"Current: {current_deployed}, delta: {delta}, would result in: {new_deployed}"
             )
 
-        # Update deployed_capital_usd in active_strategies
-        strategy_info['deployed_capital_usd'] = float(new_deployed)
-        strategy_info['updated_at'] = datetime.utcnow().isoformat()
-
-        # Mark JSONB field as modified for SQLAlchemy
-        attributes.flag_modified(user, 'active_strategies')
+        # Update deployed capital in relational table
+        strategy.deployed_capital_usd = new_deployed
+        strategy.updated_at = datetime.utcnow()
 
         # Calculate new available
         new_available = allocated - new_deployed

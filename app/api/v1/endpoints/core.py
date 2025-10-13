@@ -242,33 +242,29 @@ async def activate_agent(
                 message="User has no CDP wallet. Please create wallet first with /create endpoint"
             )
 
-        # Store selected strategy in active_strategies with allocation
-        # Use deep copy to ensure JSONB mutation tracking works
-        import copy
-        from app.schemas.strategy import STRATEGY_SHORT_CODES
+        # Activate strategy in relational table (new source of truth)
+        from app.services.strategy_service import StrategyService
+        strategy_service = StrategyService(db)
 
-        current_strategies = copy.deepcopy(user.active_strategies) if user.active_strategies else {}
+        try:
+            strategy = await strategy_service.activate_strategy(
+                user_id=user_id,
+                strategy_type=strategy_enum.value,
+                allocated_capital_usd=final_allocation_usd
+            )
+            logger.info(f"Activated strategy in user_strategies table: {strategy}")
+        except ValueError as e:
+            logger.error(f"Failed to activate strategy: {e}")
+            return ActivateResponse(
+                user_id=user_id,
+                status="error",
+                message=str(e)
+            )
 
-        strategy_key = final_strategy_type if final_strategy_type in STRATEGY_SHORT_CODES else strategy_enum.value.split("_")[1] if "_" in strategy_enum.value else strategy_enum.value
+        # Sync to JSONB for backward compatibility during migration
+        await strategy_service.sync_to_jsonb(user_id)
 
-        current_strategies[strategy_key] = {
-            "strategy_type": strategy_enum.value,
-            "status": "active",
-            "allocated_capital_usd": float(final_allocation_usd),
-            "deployed_capital_usd": 0.0,
-            "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat()
-        }
-
-        # Reassign to trigger SQLAlchemy change detection
-        user.active_strategies = current_strategies
-        attributes.flag_modified(user, 'active_strategies')
-
-        # Flush to database before commit
-        await db.flush()
-
-        # Commit active_strategies to database BEFORE sending command to agent
-        # This ensures the executor sees the updated strategies when it calls get_active_strategies
+        # Commit to database BEFORE sending command to agent
         await db.commit()
 
         # Sync blockchain data before activation
@@ -374,43 +370,26 @@ async def deactivate_agent(
             # Get strategy key (short code)
             strategy_key = strategy_type if strategy_type in STRATEGY_SHORT_CODES else strategy_enum.value.split("_")[1] if "_" in strategy_enum.value else strategy_enum.value
 
-            # Check if strategy exists and is active
-            if not user.active_strategies or strategy_key not in user.active_strategies:
+            # Deactivate strategy in relational table (new source of truth)
+            from app.services.strategy_service import StrategyService
+            strategy_service = StrategyService(db)
+
+            try:
+                success = await strategy_service.deactivate_strategy(
+                    user_id=user_id,
+                    strategy_code=strategy_key
+                )
+                logger.info(f"Deactivated strategy {strategy_key} in user_strategies table: {success}")
+            except ValueError as e:
+                logger.error(f"Failed to deactivate strategy: {e}")
                 return DeactivateResponse(
                     user_id=user_id,
                     status="error",
-                    message=f"Strategy {strategy_type} is not active for this user"
+                    message=str(e)
                 )
 
-            # Create a new dict with deep copies to ensure SQLAlchemy detects the change (JSONB mutation tracking issue)
-            import copy
-            new_strategies = copy.deepcopy(user.active_strategies) if user.active_strategies else {}
-
-            # Reset capital allocation to 0 before removing
-            if strategy_key in new_strategies and isinstance(new_strategies[strategy_key], dict):
-                new_strategies[strategy_key]['allocated_capital_usd'] = 0
-                new_strategies[strategy_key]['deployed_capital_usd'] = 0
-
-            # Remove strategy from the new dict
-            new_strategies.pop(strategy_key, None)
-
-            # Reassign to trigger SQLAlchemy change detection
-            user.active_strategies = new_strategies
-            attributes.flag_modified(user, 'active_strategies')
-
-            logger.info(f"[DEACTIVATE {strategy_key}] Active_strategies before flush: {user.active_strategies}")
-            logger.info(f"[DEACTIVATE {strategy_key}] Object ID: {id(user.active_strategies)}")
-            logger.info(f"[DEACTIVATE {strategy_key}] Is modified: {db.is_modified(user)}, In dirty: {user in db.dirty}")
-
-            # Force flush to database before commit
-            await db.flush()
-
-            logger.info(f"[DEACTIVATE {strategy_key}] Active_strategies after flush: {user.active_strategies}")
-
-            from sqlalchemy import inspect
-            state = inspect(user)
-            logger.info(f"[DEACTIVATE {strategy_key}] State: pending={state.pending}, persistent={state.persistent}")
-            logger.info(f"[DEACTIVATE {strategy_key}] History: {state.attrs.active_strategies.history}")
+            # Sync to JSONB for backward compatibility
+            await strategy_service.sync_to_jsonb(user_id)
 
             # Send command to agent manager to stop executing this strategy
             agent_service = get_agent_service()
@@ -420,8 +399,11 @@ async def deactivate_agent(
             )
             logger.info(f"Deactivate strategy command sent for {user_id}/{strategy_key}: {strategy_result}")
 
+            # Check if there are any remaining active strategies
+            remaining_strategies = await strategy_service.get_active_strategies(user_id)
+
             # If no more active strategies, also stop the agent completely
-            if not user.active_strategies or len(user.active_strategies) == 0:
+            if not remaining_strategies or len(remaining_strategies) == 0:
                 agent_service = get_agent_service()
                 agent_result = await agent_service.deactivate_agent(
                     user_id=user_id,
@@ -435,19 +417,7 @@ async def deactivate_agent(
 
             await db.commit()
 
-            logger.info(f"[DEACTIVATE {strategy_key}] Commit completed")
-            logger.info(f"[DEACTIVATE {strategy_key}] Active_strategies after commit: {user.active_strategies}")
-
-            # Verify database state directly with raw query
-            result = await db.execute(
-                text("SELECT active_strategies FROM users WHERE user_id = :user_id"),
-                {"user_id": user_id}
-            )
-            db_value = result.scalar()
-            logger.info(f"[DEACTIVATE {strategy_key}] Database raw query result: {db_value}")
-
             logger.info(f"Single strategy deactivation complete for {user_id}/{strategy_key}")
-            # Don't refresh - avoids loading stale data from race conditions
 
             return DeactivateResponse(
                 user_id=user_id,
@@ -458,25 +428,34 @@ async def deactivate_agent(
         # Case 2: Deactivate all strategies and stop agent
         else:
             logger.info(f"Deactivating all strategies for {user_id}")
-            logger.info(f"Current active_strategies before clear: {user.active_strategies}")
 
-            # Always clear strategies and update status first (even if agent service fails)
+            # Deactivate all strategies in relational table (new source of truth)
+            from app.services.strategy_service import StrategyService
+            strategy_service = StrategyService(db)
+
+            active_strategies = await strategy_service.get_active_strategies(user_id)
+            logger.info(f"Found {len(active_strategies)} active strategies to deactivate")
+
+            for strategy in active_strategies:
+                try:
+                    await strategy_service.deactivate_strategy(
+                        user_id=user_id,
+                        strategy_code=strategy.strategy_code
+                    )
+                    logger.info(f"Deactivated strategy {strategy.strategy_code}")
+                except ValueError as e:
+                    logger.error(f"Failed to deactivate strategy {strategy.strategy_code}: {e}")
+
+            # Always update status (even if agent service fails)
             user.status = 'SUSPENDED'
             user.agent_status = 'stopped'
             user.agent_stopped_at = datetime.utcnow()
-
-            # CRITICAL: Create a brand new dict object (not reusing {})
-            # SQLAlchemy JSONB tracking needs a different object reference
-            user.active_strategies = dict()  # Use dict() constructor for new object
-            attributes.flag_modified(user, 'active_strategies')
             attributes.flag_modified(user, 'user_metadata')
 
-            logger.info(f"Active_strategies after clear (before flush): {user.active_strategies}")
-            logger.info(f"Active_strategies object id: {id(user.active_strategies)}")
-            logger.info(f"SQLAlchemy dirty check: is_modified={db.is_modified(user)}, dirty={user in db.dirty}")
+            # Sync to JSONB for backward compatibility
+            await strategy_service.sync_to_jsonb(user_id)
 
-            # Force flush to database before commit
-            await db.flush()
+            logger.info(f"All strategies deactivated for {user_id}")
 
             logger.info(f"Active_strategies after flush (before commit): {user.active_strategies}")
             logger.info(f"Active_strategies object id after flush: {id(user.active_strategies)}")
