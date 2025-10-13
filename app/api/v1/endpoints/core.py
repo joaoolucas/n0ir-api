@@ -423,12 +423,9 @@ async def deactivate_agent(
 
             await db.commit()
 
-            # Force expire and refresh to ensure changes persist
-            db.expire(user, ['active_strategies'])
-            await db.refresh(user)
-
             logger.info(f"Single strategy deactivation complete for {user_id}/{strategy_key}")
-            logger.info(f"Active_strategies after refresh: {user.active_strategies}")
+            logger.info(f"Active_strategies after commit: {user.active_strategies}")
+            # Don't refresh - avoids loading stale data from race conditions
 
             return DeactivateResponse(
                 user_id=user_id,
@@ -445,32 +442,34 @@ async def deactivate_agent(
             user.status = 'SUSPENDED'
             user.agent_status = 'stopped'
             user.agent_stopped_at = datetime.utcnow()
-            user.active_strategies = {}  # Assign empty dict to clear all strategies
+
+            # CRITICAL: Create a brand new dict object (not reusing {})
+            # SQLAlchemy JSONB tracking needs a different object reference
+            user.active_strategies = dict()  # Use dict() constructor for new object
             attributes.flag_modified(user, 'active_strategies')
             attributes.flag_modified(user, 'user_metadata')
 
             logger.info(f"Active_strategies after clear (before flush): {user.active_strategies}")
+            logger.info(f"Active_strategies object id: {id(user.active_strategies)}")
 
             # Force flush to database before commit
             await db.flush()
 
             logger.info(f"Active_strategies after flush (before commit): {user.active_strategies}")
+            logger.info(f"Active_strategies object id after flush: {id(user.active_strategies)}")
 
             # Commit DB changes first to ensure state is updated
             await db.commit()
 
-            # Force expire the attribute before refresh to ensure we get fresh data
-            db.expire(user, ['active_strategies'])
-            await db.refresh(user)
-
             logger.info(f"Deactivate commit completed for {user_id}")
-            logger.info(f"Active_strategies after refresh: {user.active_strategies}")
+            logger.info(f"Active_strategies after commit (should be empty): {user.active_strategies}")
 
-            # Verify the clear was successful
+            # Don't refresh - we just committed what we want, refreshing could load stale data from race conditions
+            # Verify the clear was successful in memory
             if user.active_strategies:
-                logger.error(f"ERROR: active_strategies not cleared! Still contains: {user.active_strategies}")
+                logger.error(f"ERROR: active_strategies not empty in memory after commit! Contains: {user.active_strategies}")
             else:
-                logger.info(f"SUCCESS: active_strategies cleared successfully")
+                logger.info(f"SUCCESS: active_strategies cleared successfully in memory")
 
             # Then send deactivate command to agent manager (always withdraws funds)
             agent_service = get_agent_service()
