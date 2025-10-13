@@ -172,100 +172,34 @@ class VaultStrategyService:
 
             # Case: 1 active position
             elif position_count == 1:
-                if balance >= MIN_POSITION_AMOUNT:
-                    # Open second position using the pool_address from strategy_config
-                    # This supports multi-strategy system (h1, h2, n1-n6, s1, s2)
-                    existing_pool = position_pools[0]
-                    logger.info(f"User {user_id} has 1 position in {existing_pool}, opening second in {pool_address}")
-                    return await self._generate_single_position_strategy(
-                        user_id=user_id,
-                        balance=balance,
-                        pool_address=pool_address,  # Use the pool from strategy_config, not hardcoded logic
-                        db=db,
-                        strategy_config=strategy_config
-                    )
-                else:
-                    logger.info(f"User {user_id} has 1 position but insufficient balance for second: ${balance:.2f}")
-                    return await self._generate_no_action_strategy(
-                        user_id=user_id,
-                        balance=balance,
-                        pool_address=pool_address,
-                        reason=f"Insufficient balance for second position. Minimum: {MIN_POSITION_AMOUNT} USDC, Current: {balance:.2f} USDC",
-                        db=db
-                    )
+                # Each strategy should have only ONE position
+                # If a position already exists for this strategy, return no_action
+                logger.info(f"User {user_id} already has 1 position for strategy {strategy_short_code} - no action needed")
+                return await self._generate_no_action_strategy(
+                    user_id=user_id,
+                    balance=balance,
+                    pool_address=pool_address,
+                    reason=f"Strategy already has an active position. Each strategy maintains only one position.",
+                    db=db
+                )
 
-            # Case: 2 active positions
-            elif position_count == 2:
-                # Check if both positions are in different pools
-                if len(set(p.lower() for p in position_pools)) == 1:
-                    # Both positions in same pool - violation!
-                    logger.error(f"User {user_id} has 2 positions in same pool {position_pools[0]} - must close one")
-                    violation_alerts = [
-                        PositionAlert(
-                            position_id=pos.nft_token_id,
-                            pool_address=pos.pool_address,
-                            reason="duplicate_pool_violation",
-                            suggested_action="close",
-                            current_in_range=True,
-                            current_neutral_ratio=None
-                        )
-                        for pos in active_positions
-                    ]
-                    monitoring_info = MonitoringInfo(alerts=violation_alerts)
-                    return await self._generate_monitoring_only_strategy(
-                        user_id=user_id,
-                        balance=balance,
-                        pool_address=pool_address,
-                        monitoring_info=monitoring_info
-                    )
-
-                # Check if we should rebalance with new capital
-                if balance >= MIN_POSITION_AMOUNT:
-                    logger.info(f"User {user_id} has 2 positions + ${balance:.2f} available - recommending rebalance")
-                    rebalance_alerts = [
-                        PositionAlert(
-                            position_id=pos.nft_token_id,
-                            pool_address=pos.pool_address,
-                            reason="rebalance_with_new_capital",
-                            suggested_action="close",
-                            current_in_range=True,
-                            current_neutral_ratio=None
-                        )
-                        for pos in active_positions
-                    ]
-                    monitoring_info = MonitoringInfo(alerts=rebalance_alerts)
-                    return await self._generate_monitoring_only_strategy(
-                        user_id=user_id,
-                        balance=balance,
-                        pool_address=pool_address,
-                        monitoring_info=monitoring_info
-                    )
-                else:
-                    # Max positions reached, capital fully deployed
-                    logger.info(f"User {user_id} has 2 positions, capital fully deployed")
-                    return await self._generate_no_action_strategy(
-                        user_id=user_id,
-                        balance=balance,
-                        pool_address=pool_address,
-                        reason=f"Maximum positions reached (2/2). Capital efficiently deployed.",
-                        db=db
-                    )
-
-            # Case: More than 2 positions (shouldn't happen, but handle it)
-            else:
-                logger.error(f"User {user_id} has {position_count} positions - exceeds maximum of 2")
-                excess_alerts = [
+            # Case: 2+ active positions
+            elif position_count >= 2:
+                # Each strategy should have only ONE position
+                # If 2+ positions exist for this strategy, this is a violation
+                logger.error(f"User {user_id} has {position_count} positions for strategy {strategy_short_code} - should only have 1")
+                violation_alerts = [
                     PositionAlert(
                         position_id=pos.nft_token_id,
                         pool_address=pos.pool_address,
-                        reason="exceeds_max_positions",
+                        reason="multiple_positions_violation",
                         suggested_action="close",
                         current_in_range=True,
                         current_neutral_ratio=None
                     )
-                    for pos in active_positions[2:]  # Alert for positions beyond first 2
+                    for pos in active_positions[1:]  # Mark all except first for closure
                 ]
-                monitoring_info = MonitoringInfo(alerts=excess_alerts)
+                monitoring_info = MonitoringInfo(alerts=violation_alerts)
                 return await self._generate_monitoring_only_strategy(
                     user_id=user_id,
                     balance=balance,
