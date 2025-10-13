@@ -451,6 +451,7 @@ async def deactivate_agent(
 
             logger.info(f"Active_strategies after clear (before flush): {user.active_strategies}")
             logger.info(f"Active_strategies object id: {id(user.active_strategies)}")
+            logger.info(f"SQLAlchemy dirty check: is_modified={db.is_modified(user)}, dirty={user in db.dirty}")
 
             # Force flush to database before commit
             await db.flush()
@@ -458,8 +459,16 @@ async def deactivate_agent(
             logger.info(f"Active_strategies after flush (before commit): {user.active_strategies}")
             logger.info(f"Active_strategies object id after flush: {id(user.active_strategies)}")
 
+            # Verify the update will happen
+            from sqlalchemy import inspect
+            state = inspect(user)
+            logger.info(f"User state after flush: pending={state.pending}, persistent={state.persistent}, detached={state.detached}")
+            logger.info(f"Modified attributes: {state.attrs.active_strategies.history}")
+
             # Commit DB changes first to ensure state is updated
             await db.commit()
+
+            logger.info(f"Commit completed - active_strategies should now be empty in DB")
 
             logger.info(f"Deactivate commit completed for {user_id}")
             logger.info(f"Active_strategies after commit (should be empty): {user.active_strategies}")
