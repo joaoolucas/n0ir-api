@@ -1471,11 +1471,26 @@ class UserService:
                 old_deployed = strategy_info.get('deployed_capital_usd', 0.0)
                 current_allocated = strategy_info.get('allocated_capital_usd', 0.0)
 
+                # Get last update timestamp for this strategy
+                last_update_str = strategy_info.get('updated_at')
+                if last_update_str:
+                    # Parse ISO format timestamp
+                    from dateutil import parser
+                    last_update = parser.isoparse(last_update_str).replace(tzinfo=None)
+                else:
+                    # If no update timestamp, use creation time or very old date
+                    created_str = strategy_info.get('created_at')
+                    if created_str:
+                        last_update = parser.isoparse(created_str).replace(tzinfo=None)
+                    else:
+                        # Use epoch as fallback (will catch all closed positions)
+                        last_update = datetime(1970, 1, 1)
+
                 if new_deployed != old_deployed:
                     # Check if deployed capital decreased (position(s) closed)
                     if new_deployed < old_deployed:
-                        # Capital was freed up - get PnL from recently closed positions
-                        pnl = await self._calculate_recently_closed_pnl(user_id, strategy_code)
+                        # Capital was freed up - get PnL from positions closed since last update
+                        pnl = await self._calculate_recently_closed_pnl(user_id, strategy_code, last_update)
 
                         if pnl != 0:
                             # Adjust allocated capital based on realized PnL
@@ -1502,51 +1517,57 @@ class UserService:
         except Exception as e:
             logger.error(f"Error recalculating deployed capital for {user_id}: {e}")
 
-    async def _calculate_recently_closed_pnl(self, user_id: str, strategy_code: str) -> Decimal:
+    async def _calculate_recently_closed_pnl(
+        self,
+        user_id: str,
+        strategy_code: str,
+        last_strategy_update: datetime
+    ) -> Decimal:
         """
-        Calculate total realized PnL from recently closed positions for a strategy.
+        Calculate total realized PnL from positions closed since last strategy update.
 
-        "Recently closed" means closed since the last sync (within last 5 minutes).
-        This ensures we only count PnL from positions that just closed in this sync cycle.
+        This ensures we only count PnL from positions that closed AFTER the last time
+        we updated the strategy's allocated capital.
 
         Args:
             user_id: User wallet address
             strategy_code: Strategy short code
+            last_strategy_update: Timestamp of last strategy update
 
         Returns:
-            Total realized PnL from recently closed positions
+            Total realized PnL from positions closed after last update
         """
-        from datetime import timedelta
-
         try:
-            # Get recently closed positions (last 5 minutes)
-            recent_cutoff = datetime.utcnow() - timedelta(minutes=5)
-
+            # Get positions closed AFTER the last strategy update
+            # This ensures we only count each position's PnL once
             stmt = select(Position).where(
                 and_(
                     Position.user_id == user_id,
                     Position.status == 'CLOSED',
                     Position.strategy_type == strategy_code,
-                    Position.exit_date >= recent_cutoff
+                    Position.exit_date > last_strategy_update
                 )
             )
 
             result = await self.db.execute(stmt)
-            recently_closed = result.scalars().all()
+            newly_closed = result.scalars().all()
 
             total_pnl = Decimal(0)
-            for position in recently_closed:
+            for position in newly_closed:
                 pnl = position.realized_pnl_usdc or Decimal(0)
                 total_pnl += pnl
-                logger.debug(
-                    f"Position {position.token_id} closed with PnL: ${float(pnl):+.2f}"
+                logger.info(
+                    f"Position {position.token_id} closed at {position.exit_date} "
+                    f"with PnL: ${float(pnl):+.2f} (strategy last updated: {last_strategy_update})"
                 )
 
             if total_pnl != 0:
                 logger.info(
-                    f"Total PnL from {len(recently_closed)} recently closed positions "
+                    f"Total PnL from {len(newly_closed)} positions closed since last update "
                     f"for {user_id}/{strategy_code}: ${float(total_pnl):+.2f}"
                 )
+            elif len(newly_closed) == 0:
+                logger.debug(f"No positions closed since {last_strategy_update} for {user_id}/{strategy_code}")
 
             return total_pnl
 
