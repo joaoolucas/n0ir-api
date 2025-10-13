@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 from sqlalchemy import text
 
-revision = '040_sync_jsonb_to_user_strategies'
+revision = '040_sync_jsonb_strategies'
 down_revision = '039_add_missing_strategy_columns'
 branch_labels = None
 depends_on = None
