@@ -426,6 +426,8 @@ class PositionResponse(BaseModel):
     token1: Optional[str] = Field(None, description="Token1 address")
     token0_amount: Optional[float] = Field(None, description="Amount of token0 in the position")
     token1_amount: Optional[float] = Field(None, description="Amount of token1 in the position")
+    unclaimed_fees_usd: Optional[Decimal] = Field(None, description="Unclaimed fees in USD")
+    unclaimed_rewards_aero: Optional[Decimal] = Field(None, description="Unclaimed AERO rewards")
 
 
 class PnLResponse(BaseModel):
