@@ -14,7 +14,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy import inspect, text
 
 revision = '038_add_capital_allocation'
-down_revision = '039_add_missing_strategy_columns'
+down_revision = '037_add_effective_apr_stable'
 branch_labels = None
 depends_on = None
 
