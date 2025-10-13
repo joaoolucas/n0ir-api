@@ -578,12 +578,8 @@ async def list_users(
             else:
                 total_pnl_percentage = Decimal(0)
 
-            # Update user table with latest PnL data
-            user.usdc_balance = wallet_balance
-            user.unrealized_pnl_usd = unrealized_pnl
-            user.unrealized_pnl_pct = round((unrealized_pnl / total_invested * 100), 2) if total_invested > 0 else Decimal(0)
-            user.realized_pnl_usd = realized_pnl
-            user.realized_pnl_pct = round((realized_pnl / total_invested * 100), 2) if total_invested > 0 else Decimal(0)
+            # NOTE: Don't update user object here to avoid race conditions with other endpoints
+            # that modify critical fields like active_strategies. This is a read-only endpoint.
 
             # Build response
             user_dict = {
@@ -617,8 +613,8 @@ async def list_users(
                 'active_strategies': user.active_strategies or {}
             })
 
-    # Commit updates to database
-    await db.commit()
+    # Don't commit - this is a read-only endpoint
+    # Committing here causes race conditions where stale active_strategies get written back
 
     return enriched_users
 
