@@ -117,54 +117,61 @@ class VaultStrategyService:
 
             # STRATEGY LOGIC BASED ON POSITION COUNT
 
-            # Case: 0 active positions
+            # Case: 0 active positions - Use ALLOCATED CAPITAL for deployment
             if position_count == 0:
-                if balance <= 0:
-                    logger.warning(f"User {user_id} has no positions and insufficient balance: ${balance:.2f}")
+                # Calculate available capital for this strategy
+                from app.services.capital_allocation_service import get_capital_allocation_service
+
+                amount_to_deploy = balance  # Default to wallet balance
+
+                # If we have a strategy code, use allocated capital
+                if strategy_short_code:
+                    try:
+                        capital_service = get_capital_allocation_service(db)
+                        allocated, deployed, available, wallet_balance = await capital_service.calculate_available_capital(
+                            user_id, strategy_short_code
+                        )
+
+                        # Use the MINIMUM of allocated capital and wallet balance
+                        # (can't deploy more than what's allocated OR what's in wallet)
+                        amount_to_deploy = min(float(available), float(wallet_balance))
+
+                        logger.info(
+                            f"Strategy {strategy_short_code} capital: "
+                            f"allocated=${allocated}, deployed=${deployed}, "
+                            f"available=${available}, wallet=${wallet_balance}, "
+                            f"will_deploy=${amount_to_deploy}"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Could not get capital allocation for {strategy_short_code}: {e}")
+                        # Fall back to wallet balance
+                        amount_to_deploy = balance
+
+                if amount_to_deploy <= 0:
+                    logger.warning(f"User {user_id} has no capital to deploy: ${amount_to_deploy:.2f}")
                     return await self._generate_no_action_strategy(
                         user_id=user_id,
                         balance=balance,
                         pool_address=pool_address,
-                        reason=f"No active positions. Deposit USDC to start earning.",
+                        reason=f"No capital available to deploy. Allocated capital already deployed or insufficient balance.",
                         db=db
                     )
 
-                if balance < MIN_POSITION_AMOUNT:
-                    logger.warning(f"User {user_id} balance ${balance:.2f} below minimum ${MIN_POSITION_AMOUNT}")
+                if amount_to_deploy < MIN_POSITION_AMOUNT:
+                    logger.warning(f"User {user_id} deployable amount ${amount_to_deploy:.2f} below minimum ${MIN_POSITION_AMOUNT}")
                     return await self._generate_no_action_strategy(
                         user_id=user_id,
                         balance=balance,
                         pool_address=pool_address,
-                        reason=f"Insufficient balance for new position. Minimum: {MIN_POSITION_AMOUNT} USDC, Current: {balance:.2f} USDC",
+                        reason=f"Insufficient capital for new position. Minimum: {MIN_POSITION_AMOUNT} USDC, Available: {amount_to_deploy:.2f} USDC",
                         db=db
                     )
 
-                # Check if user selected a blueprint strategy (50/50 dual positions)
-                is_blueprint = strategy_config and "blueprint" in strategy_config.strategy_type.value
-
-                if is_blueprint:
-                    # Blueprint strategies always do 50/50 split with same $40 minimum
-                    logger.info(f"User {user_id} selected blueprint strategy with ${balance:.2f} - opening dual positions")
-                    return await self._generate_dual_position_strategy(
-                        user_id=user_id,
-                        balance=balance,
-                        strategy_config=strategy_config
-                    )
-
-                # Non-blueprint strategies: balance-based logic
-                if balance >= DUAL_POSITION_THRESHOLD:
-                    logger.info(f"User {user_id} balance ${balance:.2f} >= ${DUAL_POSITION_THRESHOLD} - recommending dual positions")
-                    return await self._generate_dual_position_strategy(
-                        user_id=user_id,
-                        balance=balance,
-                        strategy_config=strategy_config
-                    )
-
-                # Single position for balance between $40-$999
-                logger.info(f"User {user_id} opening single position with ${balance:.2f}")
+                # Single position using allocated capital
+                logger.info(f"User {user_id} opening single position with ${amount_to_deploy:.2f} from strategy allocation")
                 return await self._generate_single_position_strategy(
                     user_id=user_id,
-                    balance=balance,
+                    balance=amount_to_deploy,  # Use allocated amount, not total wallet balance
                     pool_address=pool_address,
                     db=db,
                     strategy_config=strategy_config
