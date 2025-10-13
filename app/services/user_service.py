@@ -1421,6 +1421,9 @@ class UserService:
         This is called after blockchain sync to ensure capital tracking stays accurate.
         It infers which strategy owns each position based on pool address.
 
+        IMPORTANT: When positions close, this automatically adjusts allocated_capital_usd
+        based on realized PnL to reflect actual capital gains/losses.
+
         Args:
             user_id: User wallet address
         """
@@ -1462,12 +1465,29 @@ class UserService:
                     deployed_amount = position.entry_amount_usdc or Decimal(0)
                     deployed_by_strategy[strategy_code] = deployed_by_strategy.get(strategy_code, Decimal(0)) + deployed_amount
 
-            # Update deployed_capital_usd for each active strategy
+            # Update deployed_capital_usd and adjust allocated_capital_usd based on PnL
             for strategy_code, strategy_info in user.active_strategies.items():
                 new_deployed = float(deployed_by_strategy.get(strategy_code, Decimal(0)))
                 old_deployed = strategy_info.get('deployed_capital_usd', 0.0)
+                current_allocated = strategy_info.get('allocated_capital_usd', 0.0)
 
                 if new_deployed != old_deployed:
+                    # Check if deployed capital decreased (position(s) closed)
+                    if new_deployed < old_deployed:
+                        # Capital was freed up - get PnL from recently closed positions
+                        pnl = await self._calculate_recently_closed_pnl(user_id, strategy_code)
+
+                        if pnl != 0:
+                            # Adjust allocated capital based on realized PnL
+                            new_allocated = max(0, current_allocated + float(pnl))
+                            strategy_info['allocated_capital_usd'] = new_allocated
+
+                            logger.info(
+                                f"Adjusted allocation for {user_id}/{strategy_code} based on PnL: "
+                                f"allocated ${current_allocated:.2f} -> ${new_allocated:.2f} "
+                                f"(PnL: ${float(pnl):+.2f})"
+                            )
+
                     strategy_info['deployed_capital_usd'] = new_deployed
                     strategy_info['updated_at'] = datetime.utcnow().isoformat()
                     logger.info(
@@ -1481,3 +1501,55 @@ class UserService:
 
         except Exception as e:
             logger.error(f"Error recalculating deployed capital for {user_id}: {e}")
+
+    async def _calculate_recently_closed_pnl(self, user_id: str, strategy_code: str) -> Decimal:
+        """
+        Calculate total realized PnL from recently closed positions for a strategy.
+
+        "Recently closed" means closed since the last sync (within last 5 minutes).
+        This ensures we only count PnL from positions that just closed in this sync cycle.
+
+        Args:
+            user_id: User wallet address
+            strategy_code: Strategy short code
+
+        Returns:
+            Total realized PnL from recently closed positions
+        """
+        from datetime import timedelta
+
+        try:
+            # Get recently closed positions (last 5 minutes)
+            recent_cutoff = datetime.utcnow() - timedelta(minutes=5)
+
+            stmt = select(Position).where(
+                and_(
+                    Position.user_id == user_id,
+                    Position.status == 'CLOSED',
+                    Position.strategy_type == strategy_code,
+                    Position.exit_date >= recent_cutoff
+                )
+            )
+
+            result = await self.db.execute(stmt)
+            recently_closed = result.scalars().all()
+
+            total_pnl = Decimal(0)
+            for position in recently_closed:
+                pnl = position.realized_pnl_usdc or Decimal(0)
+                total_pnl += pnl
+                logger.debug(
+                    f"Position {position.token_id} closed with PnL: ${float(pnl):+.2f}"
+                )
+
+            if total_pnl != 0:
+                logger.info(
+                    f"Total PnL from {len(recently_closed)} recently closed positions "
+                    f"for {user_id}/{strategy_code}: ${float(total_pnl):+.2f}"
+                )
+
+            return total_pnl
+
+        except Exception as e:
+            logger.error(f"Error calculating recently closed PnL for {user_id}/{strategy_code}: {e}")
+            return Decimal(0)
