@@ -52,6 +52,10 @@ if db_url:
 
 alembic upgrade head || echo "⚠️ Migrations failed"
 
+# MANUAL FIX: Ensure user_strategies table exists (fix for migration 040)
+echo "🔧 Running manual fix for user_strategies table..."
+python manual_fix_user_strategies_table.py || echo "⚠️  Manual fix failed or already applied"
+
 # Start the application
 echo "✅ Starting server..."
 exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
