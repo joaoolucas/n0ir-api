@@ -1533,8 +1533,8 @@ class UserService:
         Update user's total_rewards_earned and points based on position rewards.
 
         Calculates total rewards from all positions (both active and closed) and updates:
-        - total_rewards_earned: Sum of unclaimed_fees_usd from all positions
-        - points: total_rewards_earned * 100 (1 cent = 1 point)
+        - total_rewards_earned: Sum of unclaimed_rewards_aero from all positions
+        - points: total_rewards_earned * 100 (0.01 AERO = 1 point)
 
         Args:
             user_id: User wallet address
@@ -1549,20 +1549,20 @@ class UserService:
             result = await self.db.execute(stmt)
             positions = result.scalars().all()
 
-            # Sum up all unclaimed fees from positions
-            total_rewards = Decimal(0)
+            # Sum up all unclaimed AERO rewards from positions
+            total_rewards_aero = Decimal(0)
             for position in positions:
-                if position.unclaimed_fees_usd:
-                    total_rewards += position.unclaimed_fees_usd
+                if position.unclaimed_rewards_aero:
+                    total_rewards_aero += position.unclaimed_rewards_aero
 
-            # Update user's total_rewards_earned and points
-            user.total_rewards_earned = total_rewards
-            # Convert to cents and then to integer points (1 cent = 1 point)
-            user.points = int(total_rewards * 100)
+            # Update user's total_rewards_earned (in AERO) and points
+            user.total_rewards_earned = total_rewards_aero
+            # Convert to points: 0.01 AERO = 1 point, so multiply by 100
+            user.points = int(total_rewards_aero * 100)
 
             await self.db.commit()
 
-            logger.debug(f"Updated points for {user_id}: ${float(total_rewards):.2f} = {user.points} points")
+            logger.debug(f"Updated points for {user_id}: {float(total_rewards_aero):.6f} AERO = {user.points} points")
 
         except Exception as e:
             logger.error(f"Error updating user points for {user_id}: {e}")
