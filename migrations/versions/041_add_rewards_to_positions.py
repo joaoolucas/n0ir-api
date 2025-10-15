@@ -1,7 +1,7 @@
 """Add rewards tracking to positions
 
-Revision ID: 041
-Revises: 040
+Revision ID: 041_add_rewards_to_positions
+Revises: 040_sync_jsonb_strategies
 Create Date: 2025-10-15
 
 """
@@ -10,8 +10,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision = '041'
-down_revision = '040'
+revision = '041_add_rewards_to_positions'
+down_revision = '040_sync_jsonb_strategies'
 branch_labels = None
 depends_on = None
 

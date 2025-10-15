@@ -1,7 +1,7 @@
 """Add points tracking to users
 
-Revision ID: 042
-Revises: 041
+Revision ID: 042_add_points_to_users
+Revises: 041_add_rewards_to_positions
 Create Date: 2025-10-15
 
 """
@@ -10,8 +10,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision = '042'
-down_revision = '041'
+revision = '042_add_points_to_users'
+down_revision = '041_add_rewards_to_positions'
 branch_labels = None
 depends_on = None
 
