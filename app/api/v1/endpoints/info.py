@@ -597,6 +597,7 @@ async def list_users(
                 'total_pnl_usdc': total_pnl_usdc,
                 'total_pnl_percentage': total_pnl_percentage,
                 'agent_active': user.agent_status == 'running' if hasattr(user, 'agent_status') and user.agent_status else False,
+                'points': user.points if hasattr(user, 'points') else 0,
                 'active_strategies': active_strategies
             }
 
@@ -622,6 +623,7 @@ async def list_users(
                 'total_pnl_usdc': Decimal(0),
                 'total_pnl_percentage': Decimal(0),
                 'agent_active': user.agent_status == 'running' if hasattr(user, 'agent_status') and user.agent_status else False,
+                'points': user.points if hasattr(user, 'points') else 0,
                 'active_strategies': active_strategies
             })
 

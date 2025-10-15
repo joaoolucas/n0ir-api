@@ -41,6 +41,10 @@ class User(Base):
     # Agent startup requirement tracking
     has_deposited_50_usdc = Column(Boolean, default=False, nullable=False)
 
+    # Points and rewards tracking
+    total_rewards_earned = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
+    points = Column(Integer, default=0, nullable=False)
+
     # Agent tracking timestamps
     agent_started_at = Column(DateTime(timezone=True), nullable=True)
     agent_stopped_at = Column(DateTime(timezone=True), nullable=True)
@@ -99,6 +103,7 @@ class User(Base):
         Index("idx_users_cdp_balance", "cdp_wallet_address", "usdc_balance"),
         Index("idx_users_balance", "usdc_balance"),
         Index("idx_users_last_scanned", "last_scanned_block"),
+        Index("idx_users_points", "points"),
     )
     
     @property

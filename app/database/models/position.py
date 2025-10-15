@@ -45,6 +45,10 @@ class Position(Base):
     current_value_usdc = Column(Numeric(precision=20, scale=6), nullable=True)
     fees_earned_usdc = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
     rewards_earned_usdc = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
+
+    # Unclaimed rewards (persisted from blockchain)
+    unclaimed_fees_usd = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
+    unclaimed_rewards_aero = Column(Numeric(precision=20, scale=6), default=0, nullable=False)
     
     # Staking information
     staked = Column(Boolean, default=False, nullable=False)

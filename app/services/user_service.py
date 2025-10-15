@@ -734,16 +734,18 @@ class UserService:
         current_value_usdc: Decimal,
         unrealized_pnl_usdc: Optional[Decimal] = None,
         fees_earned_usdc: Optional[Decimal] = None,
-        rewards_earned_usdc: Optional[Decimal] = None
+        rewards_earned_usdc: Optional[Decimal] = None,
+        unclaimed_fees_usd: Optional[Decimal] = None,
+        unclaimed_rewards_aero: Optional[Decimal] = None
     ) -> Optional[Position]:
         """Update position value and performance metrics."""
         stmt = select(Position).where(Position.token_id == nft_token_id)
         result = await self.db.execute(stmt)
         position = result.scalar_one_or_none()
-        
+
         if not position:
             return None
-        
+
         position.current_value_usdc = current_value_usdc
         if unrealized_pnl_usdc is not None:
             position.unrealized_pnl_usd = unrealized_pnl_usdc
@@ -751,6 +753,10 @@ class UserService:
             position.fees_earned_usdc = fees_earned_usdc
         if rewards_earned_usdc is not None:
             position.rewards_earned_usdc = rewards_earned_usdc
+        if unclaimed_fees_usd is not None:
+            position.unclaimed_fees_usd = unclaimed_fees_usd
+        if unclaimed_rewards_aero is not None:
+            position.unclaimed_rewards_aero = unclaimed_rewards_aero
 
         # updated_at will be set automatically by SQLAlchemy onupdate
 
@@ -1390,7 +1396,9 @@ class UserService:
                             current_value_usdc=Decimal(str(position_info.current_value_usd)),
                             unrealized_pnl_usdc=Decimal("0"),  # Not available in PositionInfo
                             fees_earned_usdc=Decimal(str(position_info.unclaimed_fees_usd or 0)),
-                            rewards_earned_usdc=Decimal("0")  # Rewards are in AERO, not USD
+                            rewards_earned_usdc=Decimal("0"),  # Rewards are in AERO, not USD
+                            unclaimed_fees_usd=Decimal(str(position_info.unclaimed_fees_usd or 0)),
+                            unclaimed_rewards_aero=Decimal(str(position_info.unclaimed_rewards_aero or 0))
                         )
                         positions_updated += 1
                 except Exception as e:
@@ -1401,6 +1409,9 @@ class UserService:
 
             # Recalculate deployed capital from active positions
             await self._recalculate_deployed_capital(user_id)
+
+            # Update user points based on position rewards
+            await self._update_user_points(user_id)
 
             # Mark sync as completed and cache the result
             await cache_manager.mark_sync_completed(user_id)
@@ -1516,6 +1527,45 @@ class UserService:
 
         except Exception as e:
             logger.error(f"Error recalculating deployed capital for {user_id}: {e}")
+
+    async def _update_user_points(self, user_id: str) -> None:
+        """
+        Update user's total_rewards_earned and points based on position rewards.
+
+        Calculates total rewards from all positions (both active and closed) and updates:
+        - total_rewards_earned: Sum of unclaimed_fees_usd from all positions
+        - points: total_rewards_earned * 100 (1 cent = 1 point)
+
+        Args:
+            user_id: User wallet address
+        """
+        try:
+            user = await self.get_user(user_id)
+            if not user:
+                return
+
+            # Get all positions for this user (both active and closed)
+            stmt = select(Position).where(Position.user_id == user_id)
+            result = await self.db.execute(stmt)
+            positions = result.scalars().all()
+
+            # Sum up all unclaimed fees from positions
+            total_rewards = Decimal(0)
+            for position in positions:
+                if position.unclaimed_fees_usd:
+                    total_rewards += position.unclaimed_fees_usd
+
+            # Update user's total_rewards_earned and points
+            user.total_rewards_earned = total_rewards
+            # Convert to cents and then to integer points (1 cent = 1 point)
+            user.points = int(total_rewards * 100)
+
+            await self.db.commit()
+
+            logger.debug(f"Updated points for {user_id}: ${float(total_rewards):.2f} = {user.points} points")
+
+        except Exception as e:
+            logger.error(f"Error updating user points for {user_id}: {e}")
 
     async def _calculate_recently_closed_pnl(
         self,
