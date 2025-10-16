@@ -1851,6 +1851,41 @@ class WalletTransactionService:
         except Exception as e:
             logger.error(f"Failed to update position {position_id} staking status: {e}")
 
+    def _determine_strategy_type_from_pool(self, pool_name: Optional[str]) -> Optional[str]:
+        """Determine strategy type based on pool name/tokens."""
+        if not pool_name:
+            return None
+
+        pool_name_lower = pool_name.lower()
+
+        # Stable pairs - USDC with stablecoins
+        if any(pair in pool_name_lower for pair in ['usdc/eurc', 'eurc/usdc']):
+            return 'stable_usdc_eurc'
+        if any(pair in pool_name_lower for pair in ['usdc/brz', 'brz/usdc']):
+            return 'stable_usdc_brz'
+        if any(pair in pool_name_lower for pair in ['usdc/msusd', 'msusd/usdc']):
+            return 'stable_usdc_msusd'
+
+        # Hedged pairs - typically involve USDC + volatile asset
+        # These use "hedged" strategies because they hedge the volatile side
+        if any(pair in pool_name_lower for pair in ['usdc/weth', 'weth/usdc']):
+            return 'hedged_weth_only'
+        if any(pair in pool_name_lower for pair in ['usdc/cbbtc', 'cbbtc/usdc']):
+            return 'hedged_cbbtc_only'
+
+        # Non-hedged volatile pairs - both sides are volatile
+        if any(pair in pool_name_lower for pair in ['cbltc/cbbtc', 'cbbtc/cbltc']):
+            return 'nonhedged_cbltc_cbbtc'
+        if any(pair in pool_name_lower for pair in ['cbada/cbbtc', 'cbbtc/cbada']):
+            return 'nonhedged_cbada_cbbtc'
+        if any(pair in pool_name_lower for pair in ['cbxrp/cbbtc', 'cbbtc/cbxrp']):
+            return 'nonhedged_cbxrp_cbbtc'
+        if any(pair in pool_name_lower for pair in ['cbdoge/cbbtc', 'cbbtc/cbdoge']):
+            return 'nonhedged_cbdoge_cbbtc'
+
+        # If we can't determine, return None
+        return None
+
     async def _create_position_if_needed(
         self,
         user_id: str,
@@ -1883,12 +1918,16 @@ class WalletTransactionService:
             if existing_position:
                 return
 
+            # Determine strategy type from pool name
+            strategy_type = self._determine_strategy_type_from_pool(pool_name)
+
             # Create new position
             new_position = Position(
                 user_id=user_id,
                 token_id=position_id,  # This is the NFT token ID (nft_token_id is a computed property)
                 pool_address=pool_address or "",  # Ensure not None
                 pool_name=pool_name,
+                strategy_type=strategy_type,  # Auto-assign based on pool
                 status='ACTIVE',
                 entry_date=datetime.utcnow(),
                 entry_tx_hash=tx_hash,
@@ -1902,6 +1941,9 @@ class WalletTransactionService:
                 token0_address="",  # Will be fetched from pool data
                 token1_address=""   # Will be fetched from pool data
             )
+
+            if strategy_type:
+                logger.info(f"Auto-assigned strategy '{strategy_type}' to position {position_id} based on pool {pool_name}")
 
             self.db.add(new_position)
 
