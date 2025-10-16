@@ -154,7 +154,12 @@ class VaultStrategyService:
                         balance=balance,
                         pool_address=pool_address,
                         reason=f"No capital available to deploy. Allocated capital already deployed or insufficient balance.",
-                        db=db
+                        db=db,
+                        strategy_type=strategy_config.strategy_type.value if strategy_config else None,
+                        allocated=allocated,
+                        deployed=deployed,
+                        available=available,
+                        wallet_balance=wallet_balance
                     )
 
                 if amount_to_deploy < MIN_POSITION_AMOUNT:
@@ -164,7 +169,12 @@ class VaultStrategyService:
                         balance=balance,
                         pool_address=pool_address,
                         reason=f"Insufficient capital for new position. Minimum: {MIN_POSITION_AMOUNT} USDC, Available: {amount_to_deploy:.2f} USDC",
-                        db=db
+                        db=db,
+                        strategy_type=strategy_config.strategy_type.value if strategy_config else None,
+                        allocated=allocated,
+                        deployed=deployed,
+                        available=available,
+                        wallet_balance=wallet_balance
                     )
 
                 # Single position using allocated capital
@@ -187,7 +197,8 @@ class VaultStrategyService:
                     balance=balance,
                     pool_address=pool_address,
                     reason=f"Strategy already has an active position. Each strategy maintains only one position.",
-                    db=db
+                    db=db,
+                    strategy_type=strategy_config.strategy_type.value if strategy_config else None
                 )
 
             # Case: 2+ active positions
@@ -415,7 +426,12 @@ class VaultStrategyService:
         balance: float,
         pool_address: str,
         reason: str,
-        db: AsyncSession
+        db: AsyncSession,
+        strategy_type: Optional[str] = None,
+        allocated: Optional[Decimal] = None,
+        deployed: Optional[Decimal] = None,
+        available: Optional[Decimal] = None,
+        wallet_balance: Optional[Decimal] = None
     ) -> VaultStrategyResponse:
         """
         Generate a no_action strategy response when balance is insufficient.
@@ -456,12 +472,22 @@ class VaultStrategyService:
                 pnl_pct=None
             )
 
+        # Build capital info with all required fields
+        capital_info = CapitalInfo(
+            total_usd=Decimal(str(min(available or 0, wallet_balance or balance))),
+            allocated_for_strategy=allocated or Decimal(str(balance)),
+            already_deployed=deployed or Decimal('0'),
+            available_to_deploy=available or Decimal(str(balance)),
+            wallet_balance=wallet_balance or Decimal(str(balance)),
+            reason=reason
+        )
+
         return VaultStrategyResponse(
             user_id=user_id,
-            strategy_type="delta_neutral",
+            strategy_type=strategy_type or "delta_neutral",  # Use provided strategy_type or fallback
             timestamp=datetime.utcnow().isoformat(),
             action="no_action",  # Insufficient balance for action
-            capital=CapitalInfo(total_usd=Decimal(str(balance))),
+            capital=capital_info,
             contract_params=None,
             simulation=None,
             aerodrome_pool=None,
@@ -569,7 +595,7 @@ class VaultStrategyService:
         # Build response
         return VaultStrategyResponse(
             user_id=user_id,
-            strategy_type="delta_neutral",
+            strategy_type=strategy_config.strategy_type.value if strategy_config else "delta_neutral",
             timestamp=datetime.utcnow().isoformat(),
             action="open",
             capital=CapitalInfo(
