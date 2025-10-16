@@ -259,6 +259,7 @@ class StrategyService:
         Sync user_strategies table to user.active_strategies JSONB.
 
         This is used during the migration period for backward compatibility.
+        If no active strategies exist, the JSONB will be set to an empty dict.
 
         Args:
             user_id: User wallet address
@@ -268,15 +269,17 @@ class StrategyService:
         """
         strategies_dict = await self.get_active_strategies_dict(user_id)
 
-        # Update user's JSONB column
+        # Update user's JSONB column - always update even if empty
         stmt = select(User).where(User.user_id == user_id).with_for_update()
         result = await self.db.execute(stmt)
         user = result.scalar_one_or_none()
 
         if user:
-            user.active_strategies = strategies_dict
+            # Always update the JSONB, even if empty dict (to clear closed strategies)
+            user.active_strategies = strategies_dict if strategies_dict else {}
             attributes.flag_modified(user, 'active_strategies')
             await self.db.flush()
+            logger.debug(f"Synced active_strategies JSONB for {user_id}: {strategies_dict}")
 
         return strategies_dict
 
