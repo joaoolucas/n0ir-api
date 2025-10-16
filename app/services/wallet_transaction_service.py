@@ -1930,6 +1930,7 @@ class WalletTransactionService:
     ) -> None:
         """Close a position when a POSITION_CLOSED transaction is detected."""
         from app.database.models import Position
+        from app.database.models.user_strategy import UserStrategy
         from sqlalchemy import select, and_
 
         try:
@@ -1955,6 +1956,34 @@ class WalletTransactionService:
                 position.realized_pnl_usdc = realized_pnl
                 position.current_value_usdc = final_value_usdc
                 # unrealized_pnl_usdc is a computed property, not a column
+
+                # Update strategy allocated capital to reflect PnL
+                if position.strategy_type:
+                    strategy_stmt = select(UserStrategy).where(
+                        and_(
+                            UserStrategy.user_id == user_id,
+                            UserStrategy.strategy_type == position.strategy_type,
+                            UserStrategy.status == 'active'
+                        )
+                    )
+                    strategy_result = await self.db.execute(strategy_stmt)
+                    strategy = strategy_result.scalar_one_or_none()
+
+                    if strategy:
+                        # Adjust allocated capital by the realized PnL
+                        # If position lost money, reduce allocated capital
+                        # If position made money, increase allocated capital
+                        new_allocated = strategy.allocated_capital_usd + realized_pnl
+                        logger.info(
+                            f"Updating strategy {position.strategy_type} allocated capital: "
+                            f"{strategy.allocated_capital_usd} + {realized_pnl} = {new_allocated}"
+                        )
+                        strategy.allocated_capital_usd = new_allocated
+                    else:
+                        logger.warning(
+                            f"Strategy {position.strategy_type} not found for user {user_id} "
+                            f"when closing position {nft_token_id}"
+                        )
             else:
                 logger.warning(f"Position {nft_token_id} not found or already closed for user {user_id}")
         except Exception as e:
