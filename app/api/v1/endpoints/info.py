@@ -483,6 +483,7 @@ async def batch_enrich_positions(positions: List, db: AsyncSession) -> List[dict
 async def list_users(
     request: Request,
     user_id: Optional[str] = Query(None, description="Filter by specific user_id (wallet address)"),
+    status: Optional[str] = Query(None, description="Filter by user status (ACTIVE, INACTIVE, SUSPENDED)"),
     authenticated_wallet: str = Depends(get_authenticated_wallet),
     db: AsyncSession = Depends(get_db)
 ):
@@ -491,10 +492,11 @@ async def list_users(
 
     Supports both JWT session tokens and API_BEARER_TOKEN.
     - JWT users can only see their own data
-    - API_BEARER_TOKEN can see all users or filter by user_id
+    - API_BEARER_TOKEN can see all users or filter by user_id/status
 
     Args:
         user_id: Optional filter to get a specific user by wallet address
+        status: Optional filter by user status (ACTIVE, INACTIVE, SUSPENDED)
 
     Returns:
     - User details with CDP wallet address
@@ -517,6 +519,10 @@ async def list_users(
     else:
         # API Bearer token without filter - return all users
         users = await service.list_all_users()
+
+    # Apply status filter if provided
+    if status:
+        users = [u for u in users if u.status.upper() == status.upper()]
 
     # Enrich with balance data
     from app.core.blockchain_service import blockchain_service
