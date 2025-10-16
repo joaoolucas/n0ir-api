@@ -1495,14 +1495,63 @@ class UserService:
                         if pnl != 0:
                             # Adjust allocated capital based on realized PnL
                             new_allocated = max(0, current_allocated + float(pnl))
-                            strategy_info['allocated_capital_usd'] = new_allocated
 
-                            logger.info(
-                                f"Adjusted allocation for {user_id}/{strategy_code} based on PnL: "
-                                f"allocated ${current_allocated:.2f} -> ${new_allocated:.2f} "
-                                f"(PnL: ${float(pnl):+.2f})"
+                            # Update in relational table
+                            from app.services.strategy_service import StrategyService
+                            strategy_service = StrategyService(self.db)
+                            strategy = await strategy_service.get_strategy_by_code(
+                                user_id,
+                                strategy_code,
+                                lock_for_update=True
                             )
 
+                            if strategy:
+                                strategy.allocated_capital_usd = Decimal(str(new_allocated))
+                                strategy.deployed_capital_usd = Decimal(str(new_deployed))
+                                strategy.updated_at = datetime.utcnow()
+                                await self.db.flush()
+
+                                logger.info(
+                                    f"Adjusted allocation for {user_id}/{strategy_code} based on PnL: "
+                                    f"allocated ${current_allocated:.2f} -> ${new_allocated:.2f} "
+                                    f"deployed ${old_deployed:.2f} -> ${new_deployed:.2f} "
+                                    f"(PnL: ${float(pnl):+.2f})"
+                                )
+                            else:
+                                logger.warning(f"Strategy {strategy_code} not found in relational table for {user_id}")
+
+                            # Update JSONB for backward compatibility
+                            strategy_info['allocated_capital_usd'] = new_allocated
+                        else:
+                            # No PnL, just update deployed capital
+                            from app.services.strategy_service import StrategyService
+                            strategy_service = StrategyService(self.db)
+                            strategy = await strategy_service.get_strategy_by_code(
+                                user_id,
+                                strategy_code,
+                                lock_for_update=True
+                            )
+
+                            if strategy:
+                                strategy.deployed_capital_usd = Decimal(str(new_deployed))
+                                strategy.updated_at = datetime.utcnow()
+                                await self.db.flush()
+                    else:
+                        # Deployed capital increased - just update deployed
+                        from app.services.strategy_service import StrategyService
+                        strategy_service = StrategyService(self.db)
+                        strategy = await strategy_service.get_strategy_by_code(
+                            user_id,
+                            strategy_code,
+                            lock_for_update=True
+                        )
+
+                        if strategy:
+                            strategy.deployed_capital_usd = Decimal(str(new_deployed))
+                            strategy.updated_at = datetime.utcnow()
+                            await self.db.flush()
+
+                    # Update JSONB for backward compatibility
                     strategy_info['deployed_capital_usd'] = new_deployed
                     strategy_info['updated_at'] = datetime.utcnow().isoformat()
                     logger.info(
