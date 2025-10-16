@@ -124,6 +124,12 @@ class VaultStrategyService:
 
                 amount_to_deploy = balance  # Default to wallet balance
 
+                # Initialize capital allocation variables
+                allocated = None
+                deployed = None
+                available = None
+                wallet_balance = None
+
                 # If we have a strategy code, use allocated capital
                 if strategy_short_code:
                     try:
