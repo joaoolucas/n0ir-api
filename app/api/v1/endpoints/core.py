@@ -374,6 +374,28 @@ async def deactivate_agent(
             from app.services.strategy_service import StrategyService
             strategy_service = StrategyService(db)
 
+            # First, get the strategy to check allocated vs deployed capital
+            strategy = await strategy_service.get_strategy_by_code(
+                user_id=user_id,
+                strategy_code=strategy_key
+            )
+
+            if not strategy:
+                return DeactivateResponse(
+                    user_id=user_id,
+                    status="error",
+                    message=f"Strategy {strategy_type} not found"
+                )
+
+            # Calculate idle capital that should be returned to user
+            idle_capital = strategy.allocated_capital_usd - strategy.deployed_capital_usd
+            logger.info(
+                f"Strategy {strategy_key} for {user_id}: "
+                f"allocated=${float(strategy.allocated_capital_usd):.2f}, "
+                f"deployed=${float(strategy.deployed_capital_usd):.2f}, "
+                f"idle=${float(idle_capital):.2f}"
+            )
+
             try:
                 success = await strategy_service.deactivate_strategy(
                     user_id=user_id,
@@ -399,6 +421,17 @@ async def deactivate_agent(
             )
             logger.info(f"Deactivate strategy command sent for {user_id}/{strategy_key}: {strategy_result}")
 
+            # If there's idle capital (allocated but not deployed), withdraw it
+            withdrawal_result = None
+            if idle_capital > 0:
+                logger.info(f"Withdrawing ${float(idle_capital):.2f} idle capital from CDP wallet for {user_id}")
+                withdrawal_result = await agent_service.withdraw_usdc(
+                    user_id=user_id,
+                    amount=float(idle_capital),
+                    withdraw_all=False
+                )
+                logger.info(f"Idle capital withdrawal result: {withdrawal_result}")
+
             # Check if there are any remaining active strategies
             remaining_strategies = await strategy_service.get_active_strategies(user_id)
 
@@ -419,10 +452,24 @@ async def deactivate_agent(
 
             logger.info(f"Single strategy deactivation complete for {user_id}/{strategy_key}")
 
+            # Build response with withdrawal info
+            response_message = f"Strategy {strategy_type} deactivated successfully"
+            withdrawn_amount = None
+            tx_hash = None
+
+            if withdrawal_result and withdrawal_result.get('success'):
+                withdrawn_amount = Decimal(str(withdrawal_result.get('amount', 0)))
+                tx_hash = withdrawal_result.get('tx_hash')
+                response_message += f". ${float(idle_capital):.2f} withdrawn."
+            elif idle_capital > 0:
+                response_message += f". Withdrawal of ${float(idle_capital):.2f} initiated."
+
             return DeactivateResponse(
                 user_id=user_id,
                 status="deactivated",
-                message=f"Strategy {strategy_type} deactivated successfully"
+                message=response_message,
+                withdrawn_amount=withdrawn_amount,
+                tx_hash=tx_hash
             )
 
         # Case 2: Deactivate all strategies and stop agent
