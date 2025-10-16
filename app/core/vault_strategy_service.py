@@ -253,7 +253,7 @@ class VaultStrategyService:
         ]
 
         if pool_address in CBBTC_ALTCOIN_POOLS:
-            return 20  # ±10% (20% total range) for volatile altcoin pairs
+            return 15  # ±7.5% (15% total range) for volatile altcoin pairs
 
         turnover = volume_24h / tvl if tvl > 0 else 0
 
