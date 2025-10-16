@@ -1904,6 +1904,21 @@ class WalletTransactionService:
             )
 
             self.db.add(new_position)
+
+            # Update user's USDC balance - subtract the capital deployed to position
+            from app.database.models import User
+            user_stmt = select(User).where(User.user_id == user_id)
+            user_result = await self.db.execute(user_stmt)
+            user = user_result.scalar_one_or_none()
+
+            if user:
+                old_balance = user.usdc_balance or Decimal('0')
+                user.usdc_balance = old_balance - amount_usdc
+                logger.info(
+                    f"Updated user {user_id} USDC balance after opening position: "
+                    f"{old_balance} - {amount_usdc} = {user.usdc_balance}"
+                )
+
             # Don't commit here - let the caller handle the commit
             # This ensures all operations happen in the same transaction
 
@@ -1956,6 +1971,20 @@ class WalletTransactionService:
                 position.realized_pnl_usdc = realized_pnl
                 position.current_value_usdc = final_value_usdc
                 # unrealized_pnl_usdc is a computed property, not a column
+
+                # Update user's USDC balance to reflect returned capital
+                user_stmt = select(User).where(User.user_id == user_id)
+                user_result = await self.db.execute(user_stmt)
+                user = user_result.scalar_one_or_none()
+
+                if user:
+                    # Update usdc_balance by adding back the final value
+                    old_balance = user.usdc_balance or Decimal('0')
+                    user.usdc_balance = old_balance + final_value_usdc
+                    logger.info(
+                        f"Updated user {user_id} USDC balance: "
+                        f"{old_balance} + {final_value_usdc} = {user.usdc_balance}"
+                    )
 
                 # Update strategy allocated capital to reflect PnL
                 if position.strategy_type:
