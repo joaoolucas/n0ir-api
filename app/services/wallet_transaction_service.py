@@ -1919,6 +1919,28 @@ class WalletTransactionService:
                     f"{old_balance} - {amount_usdc} = {user.usdc_balance}"
                 )
 
+            # Update strategy deployed_capital_usd immediately
+            # This prevents the "grey area" where balance is 0 but position isn't showing yet
+            if new_position.strategy_type:
+                from app.database.models.user_strategy import UserStrategy
+                strategy_stmt = select(UserStrategy).where(
+                    and_(
+                        UserStrategy.user_id == user_id,
+                        UserStrategy.strategy_type == new_position.strategy_type,
+                        UserStrategy.status == 'active'
+                    )
+                )
+                strategy_result = await self.db.execute(strategy_stmt)
+                strategy = strategy_result.scalar_one_or_none()
+
+                if strategy:
+                    old_deployed = strategy.deployed_capital_usd or Decimal('0')
+                    strategy.deployed_capital_usd = old_deployed + amount_usdc
+                    logger.info(
+                        f"Updated strategy {new_position.strategy_type} deployed capital: "
+                        f"{old_deployed} + {amount_usdc} = {strategy.deployed_capital_usd}"
+                    )
+
             # Don't commit here - let the caller handle the commit
             # This ensures all operations happen in the same transaction
 
@@ -2008,6 +2030,14 @@ class WalletTransactionService:
                             f"{strategy.allocated_capital_usd} + {realized_pnl} = {new_allocated}"
                         )
                         strategy.allocated_capital_usd = new_allocated
+
+                        # Decrement deployed_capital_usd since position is now closed
+                        old_deployed = strategy.deployed_capital_usd or Decimal('0')
+                        strategy.deployed_capital_usd = max(Decimal('0'), old_deployed - position.entry_amount_usdc)
+                        logger.info(
+                            f"Updating strategy {position.strategy_type} deployed capital: "
+                            f"{old_deployed} - {position.entry_amount_usdc} = {strategy.deployed_capital_usd}"
+                        )
                     else:
                         logger.warning(
                             f"Strategy {position.strategy_type} not found for user {user_id} "
